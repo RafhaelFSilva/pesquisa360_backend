@@ -1,7 +1,94 @@
-# .gitignore
-
+# ---- Arquivos Python ----
 __pycache__/
 *.pyc
+*.py[codz]
+*$py.class
+
+# ---- Ambientes virtuais ----
 .env
+.envrc
 .venv/
 venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# ---- Build / Distribuição ----
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+MANIFEST
+wheels/
+share/python-wheels/
+
+# ---- PyInstaller ----
+*.manifest
+*.spec
+
+# ---- Logs ----
+*.log
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ---- Testes / Coverage ----
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+pytest_cache/
+nosetests.xml
+coverage.xml
+
+# ---- Notebooks ----
+.ipynb_checkpoints
+
+# ---- Django / Flask ----
+instance/
+.scrapy/
+
+# ---- Sphinx docs ----
+docs/_build/
+
+# ---- pyenv ----
+.python-version
+
+# ---- pipenv / poetry / pdm ----
+Pipfile.lock
+poetry.lock
+pdm.lock
+.pdm-python
+.pdm-build/
+
+# ---- PEP 582 ----
+__pypackages__/
+
+# ---- IDEs ----
+# JetBrains
+.idea/
+# VSCode
+.vscode/
+
+# ---- MyPy ----
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ---- Type Checkers ----
+.pyre/
+.pytype/
+
+# ---- Cython debug ----
+cython_debug/
+
+# ---- Misc ----
+.ruff_cache/
+.cursorignore
+.cursorindexingignore
+marimo/_static/
+marimo/_lsp/
+__marimo__/

@@ -1,0 +1,68 @@
+time="2025-08-06T19:54:29-03:00" level=warning msg="c:\\Dev\\pesquisa360_backend\\docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+#1 [internal] load local bake definitions
+#1 reading from stdin 363B 0.0s done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 1.04kB 0.0s done
+#2 WARN: FromAsCasing: 'as' and 'FROM' keywords' casing do not match (line 4)
+#2 DONE 0.0s
+
+#3 [auth] library/python:pull token for registry-1.docker.io
+#3 DONE 0.0s
+
+#4 [internal] load metadata for docker.io/library/python:3.13-slim
+#4 DONE 3.5s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 2B done
+#5 DONE 0.0s
+
+#6 [internal] load build context
+#6 transferring context: 336B 0.0s done
+#6 DONE 0.0s
+
+#7 [builder 1/6] FROM docker.io/library/python:3.13-slim@sha256:4c2cf9917bd1cbacc5e9b07320025bdb7cdf2df7b0ceaccb55e9dd7e30987419
+#7 resolve docker.io/library/python:3.13-slim@sha256:4c2cf9917bd1cbacc5e9b07320025bdb7cdf2df7b0ceaccb55e9dd7e30987419 0.1s done
+#7 DONE 0.1s
+
+#8 [builder 2/6] WORKDIR /app
+#8 CACHED
+
+#9 [builder 3/6] RUN pip install poetry
+#9 CACHED
+
+#10 [builder 5/6] RUN poetry install --no-root
+#10 CACHED
+
+#11 [stage-1 3/4] COPY --from=builder /app/.venv /.venv
+#11 CACHED
+
+#12 [builder 4/6] COPY pyproject.toml poetry.lock ./
+#12 CACHED
+
+#13 [builder 6/6] RUN ls -la # <--- MUDANÇA 2 (DEPURAÇÃO)
+#13 CACHED
+
+#14 [stage-1 4/4] COPY ./pesquisa360 ./pesquisa360
+#14 CACHED
+
+#15 exporting to image
+#15 exporting layers done
+#15 exporting manifest sha256:9f1fd4fceac933a8f626042c8c3f30d6cfd55ab8680570a7c347d0641674f9f8 done
+#15 exporting config sha256:902f3d48fef8c76f6e39820f8088b999e59bb9bcda9aa0c7d96b6e9c4d790f79 done
+#15 exporting attestation manifest sha256:3835fd78cd4bb6066ad5d65bdf22552ae9416c63be42a79b199293c9c45c8078 0.0s done
+#15 exporting manifest list sha256:bd23c6996126fb15a3421206f44e1bed52b35a66b97a3f1ff74c188b09475873 0.0s done
+#15 naming to docker.io/library/pesquisa360_backend-api:latest done
+#15 unpacking to docker.io/library/pesquisa360_backend-api:latest 0.0s done
+#15 DONE 0.1s
+
+#16 resolving provenance for metadata file
+#16 DONE 0.0s
+ api  Built
+ Container pesquisa360_db  Running
+ Container pesquisa360_api  Recreate
+ Container pesquisa360_api  Recreated
+Attaching to pesquisa360_api, pesquisa360_db
+Gracefully stopping... (press Ctrl+C again to force)
+Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: error during container init: exec: "/app/.venv/bin/python": stat /app/.venv/bin/python: no such file or directory: unknown

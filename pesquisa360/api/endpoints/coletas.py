@@ -27,20 +27,15 @@ def submit_coleta(
         raise HTTPException(status_code=404, detail="Pesquisa não encontrada ou acesso negado")
 
     # Garante que a coleta seja salva com o ID do usuário logado (Agente)
-    agente_id = current_user.id
-
     db_coleta = crud.create_coleta(
-        db=db, 
-        coleta_in=coleta_in, # Ajustado nome do parametro conforme crud.py novo
-        # Nota: create_coleta no crud novo extrai pesquisa_id de coleta_in, 
-        # mas se precisar passar explícito, ajustamos o CRUD.
-        # Aqui assumimos que create_coleta usa coleta_in.pesquisa_id
+        db=db,
+        coleta_in=coleta_in,
+        pesquisa_id=pesquisa_id,
+        agente_id=current_user.id
     )
-    
-    # Se o create_coleta não vincular o agente automaticamente, 
-    # você deve garantir isso no CRUD ou passar aqui.
-    # No crud.py anterior, ele fixava agente_id=1 (TODO). 
-    # O ideal é atualizar o CRUD para receber agente_id=current_user.id
+
+    # A associação do agente vem do token do usuário autenticado,
+    # não do payload de coleta.
 
     return {"msg": "Coleta recebida com sucesso", "id": db_coleta.id}
 

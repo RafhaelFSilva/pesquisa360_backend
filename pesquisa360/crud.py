@@ -249,7 +249,7 @@ def delete_projeto(db: Session, *, db_obj: models.Projeto) -> models.Projeto:
 # COLETAS E RESPOSTAS
 # ==============================================================================
 
-def create_coleta(db: Session, coleta_in: schemas.ColetaCreate):
+def create_coleta(db: Session, coleta_in: schemas.ColetaCreate, pesquisa_id: int, agente_id: int):
     # Coletas vêm do App Mobile. A validação de empresa geralmente é feita
     # garantindo que o Agente só baixou pesquisas da empresa dele.
     
@@ -263,12 +263,12 @@ def create_coleta(db: Session, coleta_in: schemas.ColetaCreate):
         ponto_fim = from_shape(Point(coleta_in.localizacao_fim.lon, coleta_in.localizacao_fim.lat), srid=4326)
 
     db_coleta = models.Coleta(
-        data_inicio=coleta_in.data_inicio_coleta,
-        data_fim=coleta_in.data_fim_coleta,
+        data_inicio_coleta=coleta_in.data_inicio_coleta,
+        data_fim_coleta=coleta_in.data_fim_coleta,
         localizacao_inicio=ponto_inicio,
         localizacao_fim=ponto_fim,
-        pesquisa_id=coleta_in.pesquisa_id, # Assumindo que vem na URL ou corpo
-        agente_id=1, # TODO: Pegar do token do agente
+        pesquisa_id=pesquisa_id,
+        agente_id=agente_id,
         foi_offline=coleta_in.foi_offline
     )
     db.add(db_coleta)

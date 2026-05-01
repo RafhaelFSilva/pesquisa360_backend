@@ -31,6 +31,7 @@ class ColetaBase(BaseModel):
     # Adicionamos aqui para que a API saiba que pode receber datas!
     data_inicio_coleta: Optional[datetime] = None 
     data_fim_coleta: Optional[datetime] = None
+    foi_offline: bool = False
 
 class ColetaCreate(ColetaBase):
     respostas: List[RespostaCreate]
@@ -42,9 +43,28 @@ class Coleta(BaseModel):
     id: int
     pesquisa_id: int
     agente_id: int
+    status_sincronizacao: str
     data_inicio_coleta: datetime
     data_fim_coleta: Optional[datetime] = None
+    endereco_estimado: Optional[str] = None
+    agente_nome: Optional[str] = None
     respostas: List[Resposta] = []
+
+    class Config:
+        from_attributes = True
+
+class ColetaMonitoramento(BaseModel):
+    id: int
+    agente_id: int
+    agente_nome: Optional[str] = None
+    data_inicio_coleta: datetime
+    data_fim_coleta: Optional[datetime]
+    localizacao_inicio: Optional[Point]
+    localizacao_fim: Optional[Point]
+    inconformidade_localizacao: bool
+    endereco_estimado: Optional[str] = None
+    foi_offline: bool = False
+    status_sincronizacao: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -120,7 +140,7 @@ class ProjetoBase(BaseModel):
     data_fim: Optional[date] = None
 
 class ProjetoCreate(ProjetoBase):
-    pass
+    coordenador_id: int
 
 class PerfilBase(BaseModel):
     nome: str
@@ -283,23 +303,6 @@ class GeofenceUpdate(BaseModel):
     cerca_eletronica: List[Coordenada]
     tolerancia_metros: int
 
-class ColetaMonitoramento(BaseModel):
-    """
-    Schema otimizado para retornar dados de coletas para o painel de monitoramento.
-    Inclui apenas os campos necessários para a visualização no mapa e na tabela.
-    """
-    id: int
-    agente_id: int
-    agente_nome: str
-    data_inicio_coleta: datetime
-    data_fim_coleta: Optional[datetime] = None
-    localizacao_inicio: Optional[Point] = None
-    localizacao_fim: Optional[Point] = None
-    inconformidade_localizacao: bool
-
-    class Config:
-        from_attributes = True
-
 # --- NOVOS SCHEMAS PARA APURAÇÃO DE RELATÓRIOS ---
 
 # Schema para uma análise individual ao criar uma apuração
@@ -331,6 +334,27 @@ class Apuracao(BaseModel):
     pesquisa_id: int
     analises: List[AnaliseSalva] = []
 
+    class Config:
+        from_attributes = True
+
+# Adicione ao pesquisa360/schemas.py
+
+class LocalVotacaoBase(BaseModel):
+    nome: str
+    zona: int
+    municipio: str
+    bairro: str
+    endereco: str
+
+class LocalVotacaoCreate(LocalVotacaoBase):
+    latitude: float
+    longitude: float
+    secoes_json: List[dict]
+
+class LocalVotacao(LocalVotacaoBase):
+    id: int
+    company_id: int
+    # No retorno, podemos simplificar a geometria para o front
     class Config:
         from_attributes = True
 

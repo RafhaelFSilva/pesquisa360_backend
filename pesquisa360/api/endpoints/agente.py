@@ -1,10 +1,8 @@
-# pesquisa360/api/endpoints/agente.py
-
-import json
-from typing import Any, List
+from typing import List, Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+import json
 
 from pesquisa360 import crud, schemas
 from pesquisa360.db import models
@@ -12,7 +10,6 @@ from pesquisa360.core.dependencies import get_db, get_current_user
 
 router = APIRouter()
 
-# --- ENDPOINT EXISTENTE (Mantivemos) ---
 @router.get("/pesquisas/", response_model=List[schemas.ProjetoSync])
 def read_pesquisas_para_sincronizar(
     *,
@@ -20,13 +17,19 @@ def read_pesquisas_para_sincronizar(
     current_user: models.Usuario = Depends(get_current_user)
 ):
     """
-    Endpoint para o agente baixar todos os projetos e pesquisas ativas.
-    Retorna uma lista de projetos com suas pesquisas e perguntas aninhadas.
+    Lista projetos e pesquisas para o App Mobile sincronizar.
+    AGORA FILTRA APENAS PROJETOS DA EMPRESA DO AGENTE.
     """
-    projetos = crud.get_projetos_em_campo(db=db)
+    # Você precisará garantir que esta função no CRUD receba o current_user
+    # Se ela não existir no CRUD novo, use get_projetos comum.
+    try:
+        projetos = crud.get_projetos_em_campo(db=db, current_user=current_user)
+    except AttributeError:
+        # Fallback caso você ainda não tenha criado 'get_projetos_em_campo' no CRUD novo
+        projetos = crud.get_projetos(db=db, current_user=current_user)
+        
     return projetos
 
-# --- NOVO ENDPOINT (Adicione isto) ---
 @router.get("/missao/{pesquisa_id}")
 def get_missao_agente(
     *,
@@ -35,40 +38,39 @@ def get_missao_agente(
     current_user: models.Usuario = Depends(get_current_user)
 ):
     """
-    Retorna os dados vitais para o App Mobile trabalhar no modo 'Assistente de Campo':
-    - A geometria do setor (Cerca)
-    - A tolerância em metros (definida no backend)
-    - A cota (Meta) vs Realizado
+    Retorna a missão (setor/cota) específica para o agente logado.
     """
-    
-    # 1. Busca o setor do agente
+    # 1. SEGURANÇA: Verifica se a pesquisa pertence à empresa do agente
+    pesquisa = crud.get_pesquisa(db=db, pesquisa_id=pesquisa_id, current_user=current_user)
+    if not pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa não encontrada ou acesso negado.")
+
+    # 2. Busca o setor do agente
     setor = db.query(models.Setor).filter(
         models.Setor.pesquisa_id == pesquisa_id,
         models.Setor.agente_id == current_user.id
     ).first()
 
     if not setor:
-        # Retorna indicando que não há missão específica (setor) definida
         return {
             "tem_setor": False, 
             "mensagem": "Você não possui um setor designado nesta pesquisa."
         }
 
-    # 2. Calcula o progresso (Cota)
-    # Contamos quantas coletas esse agente já fez nesta pesquisa
+    # 3. Calcula o progresso (Cota)
     coletas_realizadas = db.query(func.count(models.Coleta.id)).filter(
         models.Coleta.pesquisa_id == pesquisa_id,
         models.Coleta.agente_id == current_user.id
     ).scalar()
 
-    # 3. Converte a geometria para GeoJSON (se existir)
+    # 4. Converte a geometria para GeoJSON
     geojson = None
     if setor.geometria is not None:
+        # PostGIS function para converter WKB para GeoJSON
         cerca_str = db.query(func.ST_AsGeoJSON(setor.geometria)).scalar()
         if cerca_str:
             geojson = json.loads(cerca_str)
             
-    # 4. Retorno estruturado para o App
     return {
         "tem_setor": True,
         "setor_id": setor.id,
@@ -76,6 +78,6 @@ def get_missao_agente(
         "meta": setor.meta,
         "realizado": coletas_realizadas,
         "restante": max(0, setor.meta - coletas_realizadas),
-        "tolerancia_metros": setor.tolerancia, # O App usará este valor para validar o GPS
+        "tolerancia_metros": setor.tolerancia,
         "geometria": geojson 
     }

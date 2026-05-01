@@ -1,11 +1,69 @@
 # pesquisa360/db/models.py
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_, Float
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.dialects.postgresql import JSONB
 from geoalchemy2 import Geometry
 from sqlalchemy.sql import func
 
 Base = declarative_base()
+
+class Company(Base):
+    __tablename__ = "companies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    cnpj = Column(String, nullable=True)
+    logo_url = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relacionamentos
+    users = relationship("Usuario", back_populates="company")
+    projects = relationship("Projeto", back_populates="company")
+
+# Adicione ao final do arquivo pesquisa360/db/models.py
+
+class LocalVotacao(Base):
+    __tablename__ = "locais_votacao"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nome = Column(String, nullable=False)
+    zona = Column(Integer, index=True)
+    secoes = Column(JSONB)  # Estrutura: [{"secao": 98, "votos": 241}, ...]
+    municipio = Column(String)
+    bairro = Column(String)
+    endereco = Column(String)
+    
+    # Georreferenciamento (PostGIS)
+    # Armazenamos como POINT(longitude latitude)
+    localizacao = Column(Geometry("POINT", srid=4326), nullable=True)
+    
+    # Multitenancia: Cada local pertence a uma empresa/cliente
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    
+    # Relacionamento
+    company = relationship("Company")
+
+class Bairro(Base):
+    __tablename__ = "bairros"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nome = Column(String, nullable=False, index=True)
+    
+    # Dados demográficos extras que vieram no seu GeoJSON
+    area_ha = Column(Float, nullable=True)
+    populacao = Column(Integer, nullable=True)
+    eleitores = Column(Integer, nullable=True)
+    
+    # Georreferenciamento do Polígono (PostGIS)
+    # Usamos MULTIPOLYGON porque alguns bairros podem ter ilhas/áreas separadas
+    geometria = Column(Geometry("MULTIPOLYGON", srid=4326), nullable=False)
+    
+    # Multitenancia: Cada mapa pertence a uma empresa/cliente
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    
+    # Relacionamento
+    company = relationship("Company")
 
 class Usuario(Base):
     __tablename__ = "usuarios"
@@ -18,6 +76,8 @@ class Usuario(Base):
     perfil = relationship("Perfil")
     projetos = relationship("Projeto", back_populates="coordenador")
     coletas = relationship("Coleta", back_populates="agente")
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False) # Note: nullable=False
+    company = relationship("Company", back_populates="users")
 
 class Perfil(Base):
     __tablename__ = "perfis"
@@ -41,6 +101,9 @@ class Projeto(Base):
         back_populates="projeto", 
         cascade="all, delete-orphan"
     )
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    company = relationship("Company", back_populates="projects")
+
 
 class Pesquisa(Base):
     __tablename__ = "pesquisas"
@@ -106,6 +169,12 @@ class Coleta(Base):
     id = Column(Integer, primary_key=True, index=True)
     pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False)
     agente_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+
+    # --- NOVOS CAMPOS DE AUDITORIA ---
+    foi_offline = Column(Boolean, default=False)  # Indica se o app estava offline
+    endereco_estimado = Column(String, nullable=True) # Endereço reverso (GPS -> Rua)
+    status_sincronizacao = Column(String)
+    # ---------------------------------
 
     data_inicio_coleta = Column(DateTime(timezone=True), nullable=False)
     data_fim_coleta = Column(DateTime(timezone=True), nullable=True)

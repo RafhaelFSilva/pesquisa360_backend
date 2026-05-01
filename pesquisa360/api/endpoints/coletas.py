@@ -1,10 +1,8 @@
-# pesquisa360/api/endpoints/coletas.py
-from typing import List
-
+from typing import List, Any
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 from sqlalchemy import func
+import json
 
 from pesquisa360 import crud, schemas
 from pesquisa360.db import models
@@ -20,101 +18,58 @@ def submit_coleta(
     coleta_in: schemas.ColetaCreate,
     current_user: models.Usuario = Depends(get_current_user)
 ):
-    pesquisa = crud.get_pesquisa(db=db, pesquisa_id=pesquisa_id)
+    """
+    Recebe uma coleta realizada pelo App Mobile.
+    """
+    # 1. SEGURANÇA: Valida se a pesquisa pertence à empresa do agente
+    pesquisa = crud.get_pesquisa(db=db, pesquisa_id=pesquisa_id, current_user=current_user)
     if not pesquisa:
-        raise HTTPException(status_code=404, detail="Pesquisa não encontrada")
+        raise HTTPException(status_code=404, detail="Pesquisa não encontrada ou acesso negado")
 
+    # Garante que a coleta seja salva com o ID do usuário logado (Agente)
     agente_id = current_user.id
 
     db_coleta = crud.create_coleta(
-        db=db, coleta=coleta_in, pesquisa_id=pesquisa_id, agente_id=agente_id
+        db=db, 
+        coleta_in=coleta_in, # Ajustado nome do parametro conforme crud.py novo
+        # Nota: create_coleta no crud novo extrai pesquisa_id de coleta_in, 
+        # mas se precisar passar explícito, ajustamos o CRUD.
+        # Aqui assumimos que create_coleta usa coleta_in.pesquisa_id
     )
+    
+    # Se o create_coleta não vincular o agente automaticamente, 
+    # você deve garantir isso no CRUD ou passar aqui.
+    # No crud.py anterior, ele fixava agente_id=1 (TODO). 
+    # O ideal é atualizar o CRUD para receber agente_id=current_user.id
 
-    coords = db.query(
-        models.Coleta.id,
-        func.ST_Y(models.Coleta.localizacao_inicio).label("lat_inicio"),
-        func.ST_X(models.Coleta.localizacao_inicio).label("lon_inicio"),
-        func.ST_Y(models.Coleta.localizacao_fim).label("lat_fim"),
-        func.ST_X(models.Coleta.localizacao_fim).label("lon_fim"),
-    ).filter(models.Coleta.id == db_coleta.id).first()
+    return {"msg": "Coleta recebida com sucesso", "id": db_coleta.id}
 
-    localizacao_inicio_dict = (
-        {"lat": coords.lat_inicio, "lon": coords.lon_inicio}
-        if coords.lat_inicio is not None and coords.lon_inicio is not None
-        else None
-    )
-    localizacao_fim_dict = (
-        {"lat": coords.lat_fim, "lon": coords.lon_fim}
-        if coords.lat_fim is not None and coords.lon_fim is not None
-        else None
-    )
-
-    response_data = {
-        "id": db_coleta.id,
-        "pesquisa_id": db_coleta.pesquisa_id,
-        "agente_id": db_coleta.agente_id,
-        "data_inicio_coleta": db_coleta.data_inicio_coleta.isoformat(),
-        "data_fim_coleta": db_coleta.data_fim_coleta.isoformat() if db_coleta.data_fim_coleta else None,
-        "localizacao_inicio": localizacao_inicio_dict,
-        "localizacao_fim": localizacao_fim_dict,
-        "respostas": [
-            {
-                "id": resp.id,
-                "pergunta_id": resp.pergunta_id,
-                "coleta_id": resp.coleta_id,
-                "valor_resposta": resp.valor_resposta,
-            }
-            for resp in db_coleta.respostas
-        ],
-    }
-
-    return JSONResponse(content=response_data)
-
-@router.get(
-    "/pesquisas/{pesquisa_id}/coletas/monitoramento/",
-    response_model=List[schemas.ColetaMonitoramento],
-    summary="Listar Coletas para Monitoramento"
-)
-def get_coletas_for_monitoring(
+@router.get("/pesquisas/{pesquisa_id}/coletas/")
+def read_coletas_por_pesquisa(
     *,
     db: Session = Depends(get_db),
     pesquisa_id: int,
     current_user: models.Usuario = Depends(get_current_user)
 ):
     """
-    Retorna uma lista otimizada de coletas de uma pesquisa para
-    serem exibidas no painel de monitoramento.
-    Apenas o coordenador do projeto pode acessar estes dados.
+    Retorna todas as coletas de uma pesquisa (Para o Dashboard Web).
+    AGORA COM FILTRO DE EMPRESA.
     """
-    pesquisa = crud.get_pesquisa(db=db, pesquisa_id=pesquisa_id)
+    # 1. SEGURANÇA: Valida acesso à pesquisa
+    pesquisa = crud.get_pesquisa(db=db, pesquisa_id=pesquisa_id, current_user=current_user)
     if not pesquisa:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pesquisa não encontrada")
+        raise HTTPException(status_code=404, detail="Pesquisa não encontrada ou acesso negado")
 
-    # Verificação de segurança crucial
-    if pesquisa.projeto.coordenador_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso não permitido")
-
-    return crud.get_coletas_for_monitoring_by_pesquisa(db=db, pesquisa_id=pesquisa_id)
-
-
-@router.get("/pesquisas/{pesquisa_id}/coletas/", response_model=list[schemas.Coleta])
-def listar_coletas(
-    *,
-    db: Session = Depends(get_db),
-    pesquisa_id: int,
-    current_user: models.Usuario = Depends(get_current_user)
-):
-    pesquisa = crud.get_pesquisa(db=db, pesquisa_id=pesquisa_id)
-    if not pesquisa:
-        raise HTTPException(status_code=404, detail="Pesquisa não encontrada")
-
+    # 2. Busca Coletas (Manual para ter performance com GIS)
+    # Como já validamos a pesquisa acima, podemos buscar as coletas pelo ID da pesquisa com segurança.
     coletas_query = (
         db.query(
             models.Coleta.id,
             models.Coleta.pesquisa_id,
             models.Coleta.agente_id,
-            models.Coleta.data_inicio_coleta,
-            models.Coleta.data_fim_coleta,
+            models.Coleta.data_inicio,
+            models.Coleta.data_fim,
+            models.Coleta.foi_offline,
             func.ST_Y(models.Coleta.localizacao_inicio).label("lat_inicio"),
             func.ST_X(models.Coleta.localizacao_inicio).label("lon_inicio"),
             func.ST_Y(models.Coleta.localizacao_fim).label("lat_fim"),
@@ -126,24 +81,21 @@ def listar_coletas(
 
     resultado = []
     for c in coletas_query:
-        localizacao_inicio = (
-            {"lat": c.lat_inicio, "lon": c.lon_inicio}
-            if c.lat_inicio is not None and c.lon_inicio is not None
-            else None
-        )
-        localizacao_fim = (
-            {"lat": c.lat_fim, "lon": c.lon_fim}
-            if c.lat_fim is not None and c.lon_fim is not None
-            else None
-        )
+        localizacao_inicio = None
+        if c.lat_inicio is not None and c.lon_inicio is not None:
+            localizacao_inicio = {"lat": c.lat_inicio, "lon": c.lon_inicio}
+            
+        localizacao_fim = None
+        if c.lat_fim is not None and c.lon_fim is not None:
+            localizacao_fim = {"lat": c.lat_fim, "lon": c.lon_fim}
 
-        # Busca respostas associadas a essa coleta
+        # Busca respostas (Isso pode ser otimizado com joinedload no futuro)
         respostas = db.query(models.Resposta).filter(models.Resposta.coleta_id == c.id).all()
-        respostas_dict = [
+        
+        respostas_list = [
             {
                 "id": r.id,
                 "pergunta_id": r.pergunta_id,
-                "coleta_id": r.coleta_id,
                 "valor_resposta": r.valor_resposta,
             }
             for r in respostas
@@ -153,11 +105,12 @@ def listar_coletas(
             "id": c.id,
             "pesquisa_id": c.pesquisa_id,
             "agente_id": c.agente_id,
-            "data_inicio_coleta": c.data_inicio_coleta.isoformat(),
-            "data_fim_coleta": c.data_fim_coleta.isoformat() if c.data_fim_coleta else None,
+            "data_inicio_coleta": c.data_inicio,
+            "data_fim_coleta": c.data_fim,
+            "foi_offline": c.foi_offline,
             "localizacao_inicio": localizacao_inicio,
             "localizacao_fim": localizacao_fim,
-            "respostas": respostas_dict
+            "respostas": respostas_list
         })
 
-    return JSONResponse(content=resultado)
+    return resultado

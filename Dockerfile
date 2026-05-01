@@ -12,7 +12,7 @@ ENV POETRY_VIRTUALENVS_CREATE=false
 RUN pip install poetry
 
 # Copia os arquivos de dependência
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml poetry.lock* ./
 
 # Instala as dependências diretamente no sistema.
 # O --no-root é importante para não instalar o próprio projeto, apenas as dependências.

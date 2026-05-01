@@ -1,4 +1,3 @@
-# pesquisa360/api/endpoints/login.py
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -15,7 +14,10 @@ def login_for_access_token(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Session = Depends(get_db)
 ):
+    # crud.get_user_by_email continua funcionando globalmente para login
     user = crud.get_user_by_email(db, email=form_data.username)
+    
+    # Validação de senha usando o novo security.verify_password (Bcrypt)
     if not user or not security.verify_password(form_data.password, user.senha_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -23,5 +25,6 @@ def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Criação do token
     access_token = security.create_access_token(data={"sub": user.email})
     return {"access_token": access_token, "token_type": "bearer"}

@@ -111,6 +111,16 @@ def get_pesquisas(db: Session, projeto_id: int, current_user: models.Usuario):
         
     return db.query(models.Pesquisa).filter(models.Pesquisa.projeto_id == projeto_id).all()
 
+def get_pesquisa(db: Session, pesquisa_id: int, current_user: models.Usuario):
+    """
+    Busca uma pesquisa específica validando se pertence à empresa do usuário.
+    Retorna a pesquisa se o usuário tiver acesso, None caso contrário.
+    """
+    return db.query(models.Pesquisa).join(models.Projeto).filter(
+        models.Pesquisa.id == pesquisa_id,
+        models.Projeto.company_id == current_user.company_id
+    ).first()
+
 def create_pesquisa(db: Session, pesquisa: schemas.PesquisaCreate, projeto_id: int, current_user: models.Usuario):
     # 1. Validação de Segurança Correta: Verifica se o projeto existe e pertence à empresa do usuário
     projeto = db.query(models.Projeto).filter(
@@ -269,7 +279,8 @@ def create_coleta(db: Session, coleta_in: schemas.ColetaCreate, pesquisa_id: int
         localizacao_fim=ponto_fim,
         pesquisa_id=pesquisa_id,
         agente_id=agente_id,
-        foi_offline=coleta_in.foi_offline
+        foi_offline=coleta_in.foi_offline,
+        status_sincronizacao="sincronizado"  # Sempre "sincronizado" quando chega via POST
     )
     db.add(db_coleta)
     db.commit()

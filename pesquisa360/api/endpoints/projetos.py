@@ -198,23 +198,6 @@ def update_pergunta(
     return crud.update_pergunta(db=db, pergunta_id=pergunta_id, pergunta_in=pergunta_in)
 
 @router.delete("/pesquisas/{pesquisa_id}/perguntas/{pergunta_id}")
-def delete_pergunta(
-    pesquisa_id: int,
-    pergunta_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.Usuario = Depends(get_current_user)
-):
-    """Exclui uma pergunta."""
-    check_pesquisa_access(db, pesquisa_id, current_user)
-    crud.delete_pergunta(db=db, pergunta_id=pergunta_id)
-    return {"detail": "Pergunta excluída com sucesso"}
-
-
-# --- Soft Delete ---
-
-# In pesquisa360/api/endpoints/projetos.py
-
-@router.delete("/pesquisas/{pesquisa_id}/perguntas/{pergunta_id}")
 def delete_pergunta_endpoint(
     pesquisa_id: int,
     pergunta_id: int,

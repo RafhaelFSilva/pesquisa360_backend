@@ -146,6 +146,38 @@ def create_pesquisa(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.patch("/projetos/{projeto_id}/pesquisas/{pesquisa_id}", response_model=schemas.Pesquisa)
+def update_pesquisa(
+    projeto_id: int,
+    pesquisa_id: int,
+    pesquisa_update: schemas.PesquisaUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """Atualiza uma pesquisa (título, tipo, ativo)."""
+    # 1. Valida se o projeto pertence à empresa do usuário
+    projeto = crud.get_projeto(db=db, projeto_id=projeto_id, current_user=current_user)
+    if not projeto:
+        raise HTTPException(status_code=404, detail="Projeto não encontrado.")
+
+    # 2. Busca a pesquisa para garantir que pertence ao projeto informado
+    db_pesquisa = db.query(models.Pesquisa).filter(
+        models.Pesquisa.id == pesquisa_id,
+        models.Pesquisa.projeto_id == projeto_id
+    ).first()
+
+    if not db_pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa não encontrada.")
+
+    # 3. Atualiza apenas os campos enviados
+    update_data = pesquisa_update.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_pesquisa, key, value)
+
+    db.commit()
+    db.refresh(db_pesquisa)
+    return db_pesquisa
+
 @router.get("/pesquisas/{pesquisa_id}")
 def read_pesquisa_detail(
     pesquisa_id: int,

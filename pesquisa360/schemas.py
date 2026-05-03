@@ -202,12 +202,20 @@ class Setor(SetorBase):
     class Config:
         from_attributes = True
 
+class PesquisaResumo(PesquisaBase):
+    id: int
+    projeto_id: int
+    ativo: bool
+    perguntas: List[Pergunta] = []
+    class Config:
+        from_attributes = True
+
 class Projeto(ProjetoBase):
     id: int
     coordenador_id: int
     status: str
     coordenador: UsuarioParaProjeto
-    pesquisas: List[Pesquisa] = []
+    pesquisas: List[PesquisaResumo] = [] # Usa resumo sem cerca_eletronica para evitar WKBElement
     class Config:
         from_attributes = True
 

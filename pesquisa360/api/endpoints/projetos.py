@@ -53,12 +53,10 @@ def pesquisa_to_dict(p: models.Pesquisa, db: Session) -> dict:
     return {
         "id": p.id,
         "titulo": p.titulo,
-        "descricao": p.descricao,
-        "data_inicio": p.data_inicio.isoformat() if p.data_inicio else None,
-        "data_fim": p.data_fim.isoformat() if p.data_fim else None,
         "ativo": p.ativo,
         "projeto_id": p.projeto_id,
         "tipo_pesquisa": p.tipo_pesquisa,
+        "tolerancia_metros": p.tolerancia_metros,
         "cerca_eletronica_geojson": cerca_geojson,
         "perguntas": perguntas_list
     }
@@ -111,6 +109,28 @@ def read_projeto(
     db_projeto = crud.get_projeto(db, projeto_id=projeto_id, current_user=current_user)
     if db_projeto is None:
         raise HTTPException(status_code=404, detail="Projeto não encontrado")
+    return db_projeto
+
+@router.patch("/projetos/{projeto_id}", response_model=schemas.Projeto)
+def update_projeto(
+    projeto_id: int,
+    projeto_update: schemas.ProjetoUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """Atualiza um projeto específico (com validação de empresa)."""
+    db_projeto = crud.get_projeto(db=db, projeto_id=projeto_id, current_user=current_user)
+    if db_projeto is None:
+        raise HTTPException(status_code=404, detail="Projeto não encontrado")
+
+    update_data = projeto_update.model_dump(exclude_unset=True)
+    update_data.pop("company_id", None)
+
+    for key, value in update_data.items():
+        setattr(db_projeto, key, value)
+
+    db.commit()
+    db.refresh(db_projeto)
     return db_projeto
 
 # --- Rotas de Pesquisas ---
@@ -177,6 +197,62 @@ def update_pesquisa(
     db.commit()
     db.refresh(db_pesquisa)
     return db_pesquisa
+
+@router.patch("/projetos/{projeto_id}/pesquisas/{pesquisa_id}/geofence")
+def update_pesquisa_geofence(
+    projeto_id: int,
+    pesquisa_id: int,
+    geofence: schemas.GeofenceUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """Atualiza a cerca eletrônica e tolerância de uma pesquisa."""
+    projeto = crud.get_projeto(db=db, projeto_id=projeto_id, current_user=current_user)
+    if not projeto:
+        raise HTTPException(status_code=404, detail="Projeto não encontrado.")
+
+    db_pesquisa = db.query(models.Pesquisa).filter(
+        models.Pesquisa.id == pesquisa_id,
+        models.Pesquisa.projeto_id == projeto_id
+    ).first()
+    if not db_pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa não encontrada.")
+
+    if not geofence.cerca_eletronica or len(geofence.cerca_eletronica) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="A cerca eletrônica precisa de pelo menos 3 pontos."
+        )
+
+    coords = [coord for coord in geofence.cerca_eletronica]
+    if coords[0] != coords[-1]:
+        coords.append(coords[0])
+
+    coords_str = ", ".join([f"{point.lng} {point.lat}" for point in coords])
+    wkt = f"POLYGON(({coords_str}))"
+
+    db_pesquisa.cerca_eletronica = func.ST_GeomFromText(wkt, 4326)
+    db_pesquisa.tolerancia_metros = geofence.tolerancia_metros
+
+    db.commit()
+    db.refresh(db_pesquisa)
+    
+    # Serializar cerca como lista de {lat, lng}
+    cerca_list = []
+    if db_pesquisa.cerca_eletronica:
+        cerca_str = db.query(func.ST_AsGeoJSON(db_pesquisa.cerca_eletronica)).scalar()
+        if cerca_str:
+            geojson = json.loads(cerca_str)
+            coords = geojson.get("coordinates", [[]])[0]  # Primeiro ring do Polygon
+            cerca_list = [{"lat": point[1], "lng": point[0]} for point in coords[:-1]]  # Excluir último ponto se fechado
+    
+    return {
+        "id": db_pesquisa.id,
+        "projeto_id": db_pesquisa.projeto_id,
+        "cerca_eletronica": cerca_list,
+        "tolerancia_metros": db_pesquisa.tolerancia_metros,
+        "message": "Cerca eletrônica atualizada com sucesso"
+    }
 
 @router.get("/pesquisas/{pesquisa_id}")
 def read_pesquisa_detail(

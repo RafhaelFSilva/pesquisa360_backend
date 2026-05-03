@@ -24,6 +24,7 @@ def check_access(db: Session, pesquisa_id: int, current_user: models.Usuario):
         )
     return pesquisa
 
+@router.get("/relatorios/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa)
 @router.get("/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa)
 def read_relatorio_simples(
     *,
@@ -47,6 +48,7 @@ def read_relatorio_simples(
          
     return relatorio
 
+@router.post("/relatorios/pesquisas/{pesquisa_id}/crosstab/", response_model=schemas.CrosstabResponse)
 @router.post("/pesquisas/{pesquisa_id}/crosstab/", response_model=schemas.CrosstabResponse)
 def read_relatorio_crosstab(
     *,
@@ -62,6 +64,21 @@ def read_relatorio_crosstab(
     # 1. Validação de Segurança
     check_access(db, pesquisa_id, current_user)
 
+    perguntas = db.query(models.Pergunta).filter(
+        models.Pergunta.pesquisa_id == pesquisa_id,
+        models.Pergunta.id.in_([
+            crosstab_in.pergunta_linha_id,
+            crosstab_in.pergunta_coluna_id
+        ]),
+        models.Pergunta.ativo.is_(True)
+    ).all()
+    perguntas_por_id = {pergunta.id: pergunta.texto_pergunta for pergunta in perguntas}
+    pergunta_linha = perguntas_por_id.get(crosstab_in.pergunta_linha_id)
+    pergunta_coluna = perguntas_por_id.get(crosstab_in.pergunta_coluna_id)
+
+    if pergunta_linha is None or pergunta_coluna is None:
+        raise HTTPException(status_code=404, detail="Pergunta nao encontrada.")
+
     # 2. Geração do Relatório
     # Nota: Atualizamos a chamada do CRUD para passar o current_user se necessário,
     # ou confiamos na validação acima. O CRUD enviado anteriormente recebia current_user.
@@ -75,10 +92,38 @@ def read_relatorio_crosstab(
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-        
+
+    linhas = {}
+    totais_linha = {}
+    for item in dados_crosstab:
+        valor_linha = "" if item.get("linha") is None else str(item.get("linha"))
+        valor_coluna = "" if item.get("coluna") is None else str(item.get("coluna"))
+        contagem = int(item.get("valor") or 0)
+
+        linhas.setdefault(valor_linha, [])
+        linhas[valor_linha].append({
+            "valor_coluna": valor_coluna,
+            "contagem": contagem,
+        })
+        totais_linha[valor_linha] = totais_linha.get(valor_linha, 0) + contagem
+
+    dados = []
+    for valor_linha, celulas in linhas.items():
+        total_linha = totais_linha.get(valor_linha, 0)
+        dados.append({
+            "valor_linha": valor_linha,
+            "celulas": [
+                {
+                    "valor_coluna": celula["valor_coluna"],
+                    "contagem": celula["contagem"],
+                    "percentual": round((celula["contagem"] / total_linha) * 100, 2) if total_linha else 0.0,
+                }
+                for celula in celulas
+            ]
+        })
+
     return {
-        "pesquisa_id": pesquisa_id,
-        "pergunta_linha_id": crosstab_in.pergunta_linha_id,
-        "pergunta_coluna_id": crosstab_in.pergunta_coluna_id,
-        "data": dados_crosstab
+        "pergunta_linha": str(pergunta_linha),
+        "pergunta_coluna": str(pergunta_coluna),
+        "dados": dados
     }

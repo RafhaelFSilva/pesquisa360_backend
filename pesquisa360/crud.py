@@ -383,6 +383,82 @@ def get_dashboard_stats(db: Session, pesquisa_id: int, current_user: models.Usua
         # Adicione mais stats conforme necessário
     }
 
+def get_relatorio_pesquisa(db: Session, pesquisa_id: int):
+    """
+    Gera o relatÃ³rio simples de frequÃªncia por pergunta.
+    A validaÃ§Ã£o multitenant Ã© feita no endpoint antes desta chamada.
+    """
+    pesquisa = db.query(models.Pesquisa).filter(models.Pesquisa.id == pesquisa_id).first()
+    if not pesquisa:
+        return None
+
+    perguntas = db.query(models.Pergunta)\
+        .filter(
+            models.Pergunta.pesquisa_id == pesquisa_id,
+            models.Pergunta.ativo.is_(True)
+        )\
+        .order_by(models.Pergunta.ordem, models.Pergunta.id)\
+        .all()
+
+    total_coletas = db.query(func.count(models.Coleta.id))\
+        .filter(models.Coleta.pesquisa_id == pesquisa_id)\
+        .scalar() or 0
+
+    resultados = []
+    for pergunta in perguntas:
+        rows = db.query(
+            models.Resposta.valor_resposta,
+            func.count(models.Resposta.id).label("contagem")
+        )\
+            .join(models.Coleta, models.Coleta.id == models.Resposta.coleta_id)\
+            .filter(
+                models.Coleta.pesquisa_id == pesquisa_id,
+                models.Resposta.pergunta_id == pergunta.id
+            )\
+            .group_by(models.Resposta.valor_resposta)\
+            .order_by(models.Resposta.valor_resposta)\
+            .all()
+
+        total_pergunta = sum(int(contagem or 0) for _, contagem in rows)
+        dados = []
+        opcoes_resposta = {}
+        resultados_opcoes = []
+
+        for valor_resposta, contagem in rows:
+            valor = "" if valor_resposta is None else str(valor_resposta)
+            quantidade = int(contagem or 0)
+            percentual = round((quantidade / total_pergunta) * 100, 2) if total_pergunta else 0.0
+
+            opcoes_resposta[valor] = quantidade
+            dados.append({
+                "valor_resposta": valor,
+                "contagem": quantidade,
+                "percentual": percentual,
+            })
+            resultados_opcoes.append({
+                "opcao": valor,
+                "contagem": quantidade,
+                "percentual": percentual,
+            })
+
+        resultados.append({
+            "pergunta_id": pergunta.id,
+            "texto_pergunta": pergunta.texto_pergunta,
+            "tipo_pergunta": pergunta.tipo_pergunta,
+            "total": total_pergunta,
+            "opcoes_resposta": opcoes_resposta,
+            "dados": dados,
+            "resultados": resultados_opcoes,
+        })
+
+    return {
+        "pesquisa_id": pesquisa.id,
+        "titulo_pesquisa": pesquisa.titulo,
+        "total_coletas": int(total_coletas),
+        "resultados": resultados,
+        "resultados_por_pergunta": resultados,
+    }
+
 def get_report_crosstab(db: Session, pesquisa_id: int, pergunta_linha_id: int, pergunta_coluna_id: int, current_user: models.Usuario):
     """
     Gera dados para tabulação cruzada (Crosstab).

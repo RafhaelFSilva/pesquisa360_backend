@@ -1,7 +1,7 @@
 # pesquisa360/schemas.py (versão final simplificada)
 
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List, Any, Union
+from typing import Optional, List, Any, Union, Dict
 from datetime import date, datetime
 #from geoalchemy2.elements import WKBElement # <-- NOVA IMPORTAÇÃO
 #from shapely.wkb import loads # <-- NOVA IMPORTAÇÃO
@@ -193,6 +193,31 @@ class SetorCreate(SetorBase):
     # Receberemos a geometria como uma lista de coordenadas [[lat, lon], ...]
     geometria_coords: List[List[float]] 
 
+class SetorGeofenceCreate(BaseModel):
+    nome: str
+    meta: int
+    agente_id: Optional[int] = None
+    tolerancia_metros: Optional[int] = 50
+    geometria: Optional[List[dict]] = None
+    poligono: Optional[List[dict]] = None
+
+    def get_coords(self) -> List[List[float]]:
+        coords = self.geometria or self.poligono
+        if not coords:
+            raise ValueError("geometria ou poligono é obrigatório")
+        parsed = []
+        for item in coords:
+            if isinstance(item, dict):
+                if "lat" in item and "lng" in item:
+                    parsed.append([float(item["lat"]), float(item["lng"])])
+                elif 0 in item and 1 in item:
+                    parsed.append([float(item[0]), float(item[1])])
+                else:
+                    raise ValueError("Coordenada inválida: espere {lat, lng} ou [lat, lng].")
+            else:
+                parsed.append([float(item[0]), float(item[1])])
+        return parsed
+
 class Setor(SetorBase):
     id: int
     pesquisa_id: int
@@ -230,12 +255,16 @@ class ResultadoOpcao(BaseModel):
     """Representa o resultado para uma única opção de resposta."""
     opcao: str
     contagem: int
+    percentual: Optional[float] = None
 
 class ResultadoPergunta(BaseModel):
     """Representa os resultados agregados para uma única pergunta."""
     pergunta_id: int
     texto_pergunta: str
     tipo_pergunta: str
+    total: int = 0
+    opcoes_resposta: Dict[str, int] = {}
+    dados: List[Any] = []
     resultados: List[ResultadoOpcao]
 
 class RelatorioPesquisa(BaseModel):
@@ -243,6 +272,7 @@ class RelatorioPesquisa(BaseModel):
     pesquisa_id: int
     titulo_pesquisa: str
     total_coletas: int
+    resultados: List[ResultadoPergunta]
     resultados_por_pergunta: List[ResultadoPergunta]
 # --- NOVOS SCHEMAS OTIMIZADOS PARA SINCRONIZAÇÃO (Fase B App) ---
 

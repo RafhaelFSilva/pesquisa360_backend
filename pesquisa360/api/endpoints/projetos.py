@@ -254,6 +254,41 @@ def update_pesquisa_geofence(
         "message": "Cerca eletrônica atualizada com sucesso"
     }
 
+@router.get("/projetos/{projeto_id}/pesquisas/{pesquisa_id}/geofence")
+def get_pesquisa_geofence(
+    projeto_id: int,
+    pesquisa_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """Retorna a cerca eletrônica de uma pesquisa."""
+    projeto = crud.get_projeto(db=db, projeto_id=projeto_id, current_user=current_user)
+    if not projeto:
+        raise HTTPException(status_code=404, detail="Projeto não encontrado.")
+
+    db_pesquisa = db.query(models.Pesquisa).filter(
+        models.Pesquisa.id == pesquisa_id,
+        models.Pesquisa.projeto_id == projeto_id
+    ).first()
+    if not db_pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa não encontrada.")
+
+    # Serializar cerca como lista de {lat, lng}
+    cerca_list = []
+    if db_pesquisa.cerca_eletronica:
+        cerca_str = db.query(func.ST_AsGeoJSON(db_pesquisa.cerca_eletronica)).scalar()
+        if cerca_str:
+            geojson = json.loads(cerca_str)
+            coords = geojson.get("coordinates", [[]])[0]  # Primeiro ring do Polygon
+            cerca_list = [{"lat": point[1], "lng": point[0]} for point in coords[:-1]]  # Excluir último ponto se fechado
+
+    return {
+        "id": db_pesquisa.id,
+        "projeto_id": db_pesquisa.projeto_id,
+        "cerca_eletronica": cerca_list,
+        "tolerancia_metros": db_pesquisa.tolerancia_metros
+    }
+
 @router.get("/pesquisas/{pesquisa_id}")
 def read_pesquisa_detail(
     pesquisa_id: int,

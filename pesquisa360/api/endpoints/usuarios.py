@@ -53,3 +53,18 @@ def read_users(
     Lista todos os usuários DA MESMA EMPRESA.
     """
     return crud.get_users(db, current_user=current_user, skip=skip, limit=limit)
+
+@router.get("/agentes/", response_model=List[schemas.Usuario])
+def read_agentes(
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """
+    Lista agentes ativos da mesma empresa.
+    """
+    return db.query(models.Usuario)\
+             .join(models.Perfil)\
+             .filter(models.Usuario.company_id == current_user.company_id)\
+             .filter(models.Usuario.ativo == True)\
+             .filter(models.Perfil.nome.ilike('%agente%'))\
+             .all()

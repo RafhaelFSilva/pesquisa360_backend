@@ -39,6 +39,73 @@ def submit_coleta(
 
     return {"msg": "Coleta recebida com sucesso", "id": db_coleta.id}
 
+@router.get("/pesquisas/{pesquisa_id}/coletas/monitoramento/")
+def read_coletas_monitoramento(
+    *,
+    db: Session = Depends(get_db),
+    pesquisa_id: int,
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    pesquisa = crud.get_pesquisa(db=db, pesquisa_id=pesquisa_id, current_user=current_user)
+    if not pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa nao encontrada ou acesso negado")
+
+    coletas_query = (
+        db.query(
+            models.Coleta.id,
+            models.Coleta.pesquisa_id,
+            models.Coleta.agente_id,
+            models.Usuario.nome.label("agente_nome"),
+            models.Coleta.data_inicio_coleta,
+            models.Coleta.data_fim_coleta,
+            models.Coleta.endereco_estimado,
+            models.Coleta.inconformidade_localizacao,
+            models.Coleta.status_sincronizacao,
+            models.Coleta.foi_offline,
+            func.ST_Y(models.Coleta.localizacao_inicio).label("lat_inicio"),
+            func.ST_X(models.Coleta.localizacao_inicio).label("lng_inicio"),
+            func.ST_Y(models.Coleta.localizacao_fim).label("lat_fim"),
+            func.ST_X(models.Coleta.localizacao_fim).label("lng_fim"),
+        )
+        .outerjoin(models.Usuario, models.Coleta.agente_id == models.Usuario.id)
+        .filter(models.Coleta.pesquisa_id == pesquisa_id)
+        .order_by(models.Coleta.data_inicio_coleta.desc())
+        .all()
+    )
+
+    resultado = []
+    for coleta in coletas_query:
+        localizacao_inicio = None
+        if coleta.lat_inicio is not None and coleta.lng_inicio is not None:
+            localizacao_inicio = {
+                "lat": float(coleta.lat_inicio),
+                "lng": float(coleta.lng_inicio),
+            }
+
+        localizacao_fim = None
+        if coleta.lat_fim is not None and coleta.lng_fim is not None:
+            localizacao_fim = {
+                "lat": float(coleta.lat_fim),
+                "lng": float(coleta.lng_fim),
+            }
+
+        resultado.append({
+            "id": coleta.id,
+            "pesquisa_id": coleta.pesquisa_id,
+            "agente_id": coleta.agente_id,
+            "agente_nome": coleta.agente_nome,
+            "data_inicio_coleta": coleta.data_inicio_coleta.isoformat() if coleta.data_inicio_coleta else None,
+            "data_fim_coleta": coleta.data_fim_coleta.isoformat() if coleta.data_fim_coleta else None,
+            "endereco_estimado": coleta.endereco_estimado,
+            "localizacao_inicio": localizacao_inicio,
+            "localizacao_fim": localizacao_fim,
+            "inconformidade_localizacao": coleta.inconformidade_localizacao,
+            "status_sincronizacao": coleta.status_sincronizacao,
+            "foi_offline": coleta.foi_offline,
+        })
+
+    return resultado
+
 @router.get("/pesquisas/{pesquisa_id}/coletas/")
 def read_coletas_por_pesquisa(
     *,

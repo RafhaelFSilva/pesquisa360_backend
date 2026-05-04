@@ -450,3 +450,135 @@ def list_setores_endpoint(
             "geometria": geojson
         })
     return resultado
+
+@router.post("/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores")
+def create_setor_by_projeto_pesquisa(
+    projeto_id: int,
+    pesquisa_id: int,
+    setor_payload: schemas.SetorGeofenceCreate,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """Cria um setor para uma pesquisa dentro de um projeto."""
+    projeto = crud.get_projeto(db=db, projeto_id=projeto_id, current_user=current_user)
+    if not projeto:
+        raise HTTPException(status_code=404, detail="Projeto não encontrado.")
+
+    db_pesquisa = db.query(models.Pesquisa).filter(
+        models.Pesquisa.id == pesquisa_id,
+        models.Pesquisa.projeto_id == projeto_id
+    ).first()
+    if not db_pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa não encontrada.")
+
+    try:
+        coords = setor_payload.get_coords()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    setor_in = schemas.SetorCreate(
+        nome=setor_payload.nome,
+        meta=setor_payload.meta,
+        agente_id=setor_payload.agente_id,
+        tolerancia=setor_payload.tolerancia_metros or 50,
+        geometria_coords=coords
+    )
+
+    db_setor = crud.create_setor(
+        db=db,
+        setor_in=setor_in,
+        pesquisa_id=pesquisa_id,
+        current_user=current_user
+    )
+
+    geojson = None
+    if db_setor.geometria is not None:
+        geojson_str = db.query(func.ST_AsGeoJSON(db_setor.geometria)).scalar()
+        if geojson_str:
+            geojson = json.loads(geojson_str)
+            coords_geo = geojson.get("coordinates", [[]])[0]
+            if coords_geo and coords_geo[0] == coords_geo[-1]:
+                coords_geo = coords_geo[:-1]
+            poligono = [{"lat": p[1], "lng": p[0]} for p in coords_geo]
+        else:
+            poligono = []
+    else:
+        poligono = []
+
+    return {
+        "id": db_setor.id,
+        "pesquisa_id": db_setor.pesquisa_id,
+        "nome": db_setor.nome,
+        "meta": db_setor.meta,
+        "tolerancia_metros": db_setor.tolerancia,
+        "agente_id": db_setor.agente_id,
+        "poligono": poligono
+    }
+
+@router.delete("/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores/{setor_id}")
+def delete_setor_by_projeto_pesquisa(
+    projeto_id: int,
+    pesquisa_id: int,
+    setor_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """Exclui um setor de uma pesquisa dentro de um projeto."""
+    projeto = crud.get_projeto(db=db, projeto_id=projeto_id, current_user=current_user)
+    if not projeto:
+        raise HTTPException(status_code=404, detail="Projeto não encontrado.")
+
+    db_pesquisa = db.query(models.Pesquisa).filter(
+        models.Pesquisa.id == pesquisa_id,
+        models.Pesquisa.projeto_id == projeto_id
+    ).first()
+    if not db_pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa não encontrada.")
+
+    db_setor = db.query(models.Setor).filter(
+        models.Setor.id == setor_id,
+        models.Setor.pesquisa_id == pesquisa_id
+    ).first()
+    if not db_setor:
+        raise HTTPException(status_code=404, detail="Setor não encontrado.")
+
+    db.delete(db_setor)
+    db.commit()
+    return {"message": "Setor excluído com sucesso"}
+
+@router.get("/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores")
+def list_setores_by_projeto_pesquisa(
+    projeto_id: int,
+    pesquisa_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """Lista setores de uma pesquisa aninhada em projeto."""
+    # 1. Valida projeto
+    projeto = crud.get_projeto(db=db, projeto_id=projeto_id, current_user=current_user)
+    if not projeto:
+        raise HTTPException(status_code=404, detail="Projeto não encontrado.")
+
+    # 2. Valida pesquisa pertence ao projeto
+    db_pesquisa = db.query(models.Pesquisa).filter(
+        models.Pesquisa.id == pesquisa_id,
+        models.Pesquisa.projeto_id == projeto_id
+    ).first()
+    if not db_pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa não encontrada.")
+
+    # 3. Busca setores
+    setores_raw = crud.get_setores_by_pesquisa(db=db, pesquisa_id=pesquisa_id)
+    
+    # 4. Processa retorno
+    resultado = []
+    for s in setores_raw:
+        geojson = json.loads(s.geojson) if s.geojson else None
+        resultado.append({
+            "id": s.id,
+            "nome": s.nome,
+            "meta": s.meta,
+            "tolerancia": s.tolerancia,
+            "geometria": geojson
+        })
+    return resultado

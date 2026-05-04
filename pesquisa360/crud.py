@@ -272,11 +272,23 @@ def create_coleta(db: Session, coleta_in: schemas.ColetaCreate, pesquisa_id: int
     if coleta_in.localizacao_fim:
         ponto_fim = from_shape(Point(coleta_in.localizacao_fim.lon, coleta_in.localizacao_fim.lat), srid=4326)
 
+    ponto_endereco = coleta_in.localizacao_fim or coleta_in.localizacao_inicio
+    endereco_estimado = None
+    if ponto_endereco:
+        try:
+            endereco_estimado = geocoding.obter_endereco_por_coords(
+                ponto_endereco.lat,
+                ponto_endereco.lon
+            )
+        except Exception:
+            endereco_estimado = "Endereço não identificado"
+
     db_coleta = models.Coleta(
         data_inicio_coleta=coleta_in.data_inicio_coleta,
         data_fim_coleta=coleta_in.data_fim_coleta,
         localizacao_inicio=ponto_inicio,
         localizacao_fim=ponto_fim,
+        endereco_estimado=endereco_estimado,
         pesquisa_id=pesquisa_id,
         agente_id=agente_id,
         foi_offline=coleta_in.foi_offline,

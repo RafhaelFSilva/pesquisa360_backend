@@ -79,6 +79,10 @@ class Usuario(Base):
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False) # Note: nullable=False
     company = relationship("Company", back_populates="users")
 
+    @property
+    def perfil_nome(self):
+        return self.perfil.nome if self.perfil else None
+
 class Perfil(Base):
     __tablename__ = "perfis"
     id = Column(Integer, primary_key=True, index=True)

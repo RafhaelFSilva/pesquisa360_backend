@@ -165,6 +165,16 @@ class UsuarioBase(BaseModel):
 class UsuarioCreate(UsuarioBase):
     senha: str
 
+class UsuarioAdminCreate(UsuarioCreate):
+    company_id: int
+
+class UsuarioAdminUpdate(BaseModel):
+    nome: Optional[str] = None
+    ativo: Optional[bool] = None
+    perfil_id: Optional[int] = None
+    company_id: Optional[int] = None
+    senha: Optional[str] = None
+
 class Perfil(PerfilBase):
     id: int
     class Config:
@@ -184,7 +194,30 @@ class UsuarioParaProjeto(UsuarioBase):
 class Usuario(UsuarioBase):
     id: int
     company_id: int
+    perfil_nome: Optional[str] = None
     
+    class Config:
+        from_attributes = True
+
+class CompanyBase(BaseModel):
+    name: str
+    cnpj: Optional[str] = None
+    logo_url: Optional[str] = None
+    is_active: bool = True
+
+class CompanyCreate(CompanyBase):
+    pass
+
+class CompanyUpdate(BaseModel):
+    name: Optional[str] = None
+    cnpj: Optional[str] = None
+    logo_url: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class CompanyRead(CompanyBase):
+    id: int
+    created_at: Optional[datetime] = None
+
     class Config:
         from_attributes = True
 

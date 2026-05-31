@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .db import models
 from .db.session import engine
-from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais
+from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais, empresas
 
 app = FastAPI(
     title="Pesquisa360 API",
@@ -64,6 +64,10 @@ app.include_router(login.router, prefix="/login", tags=["Login"])
 
 # Usuários (prefixo /usuarios + rota / = /usuarios/)
 app.include_router(usuarios.router, prefix="/usuarios", tags=["Usuarios"])
+app.include_router(usuarios.admin_router)
+
+# Empresas / tenants
+app.include_router(empresas.router, prefix="/empresas", tags=["Empresas"])
 
 # Projetos
 # CORREÇÃO AQUI: Removemos o prefixo porque as rotas dentro de projetos.py já começam com /projetos

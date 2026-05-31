@@ -27,6 +27,9 @@ def get_user_by_email(db: Session, email: str):
     """
     return db.query(models.Usuario).filter(models.Usuario.email == email).first()
 
+def get_user_by_id(db: Session, usuario_id: int):
+    return db.query(models.Usuario).filter(models.Usuario.id == usuario_id).first()
+
 def create_user(db: Session, user: schemas.UsuarioCreate, current_user: models.Usuario):
     """
     Cria um novo usuário VINCULADO à empresa do administrador logado.
@@ -52,9 +55,23 @@ def get_users(db: Session, current_user: models.Usuario, skip: int = 0, limit: i
              .filter(models.Usuario.company_id == current_user.company_id)\
              .offset(skip).limit(limit).all()
 
+def get_admin_users(
+    db: Session,
+    company_id: Optional[int] = None,
+    skip: int = 0,
+    limit: int = 100,
+):
+    query = db.query(models.Usuario)
+    if company_id is not None:
+        query = query.filter(models.Usuario.company_id == company_id)
+    return query.offset(skip).limit(limit).all()
+
 def get_perfil_by_name(db: Session, nome: str):
     """Busca um perfil pelo nome (ex: 'Agente')."""
     return db.query(models.Perfil).filter(models.Perfil.nome == nome).first()
+
+def get_perfil(db: Session, perfil_id: int):
+    return db.query(models.Perfil).filter(models.Perfil.id == perfil_id).first()
 
 def create_perfil(db: Session, perfil: schemas.PerfilCreate):
     """Cria um novo perfil no banco."""
@@ -64,6 +81,71 @@ def create_perfil(db: Session, perfil: schemas.PerfilCreate):
     db.commit()
     db.refresh(db_perfil)
     return db_perfil
+
+def create_admin_user(db: Session, user: schemas.UsuarioAdminCreate):
+    hashed_password = security.get_password_hash(user.senha)
+    db_user = models.Usuario(
+        email=user.email,
+        nome=user.nome,
+        senha_hash=hashed_password,
+        perfil_id=user.perfil_id,
+        ativo=user.ativo if user.ativo is not None else True,
+        company_id=user.company_id,
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+def update_admin_user(
+    db: Session,
+    db_user: models.Usuario,
+    user_update: schemas.UsuarioAdminUpdate,
+):
+    update_data = user_update.model_dump(exclude_unset=True)
+    senha = update_data.pop("senha", None)
+
+    for field, value in update_data.items():
+        setattr(db_user, field, value)
+
+    if senha:
+        db_user.senha_hash = security.get_password_hash(senha)
+
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+# ==============================================================================
+# EMPRESAS / TENANTS (Admin SaaS)
+# ==============================================================================
+
+def get_companies(db: Session, skip: int = 0, limit: int = 100):
+    return db.query(models.Company).offset(skip).limit(limit).all()
+
+def get_company(db: Session, company_id: int):
+    return db.query(models.Company).filter(models.Company.id == company_id).first()
+
+def create_company(db: Session, company: schemas.CompanyCreate):
+    db_company = models.Company(**company.model_dump())
+    db.add(db_company)
+    db.commit()
+    db.refresh(db_company)
+    return db_company
+
+def update_company(
+    db: Session,
+    db_company: models.Company,
+    company_update: schemas.CompanyUpdate,
+):
+    update_data = company_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_company, field, value)
+
+    db.add(db_company)
+    db.commit()
+    db.refresh(db_company)
+    return db_company
 
 # ==============================================================================
 # PROJETOS (Multitenancy)

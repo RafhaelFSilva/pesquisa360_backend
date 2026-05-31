@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from typing import List, Optional
 from .utils import geocoding
 from geopy.geocoders import Nominatim
-from sqlalchemy.orm import Session, joinedload 
+from sqlalchemy.orm import Session, aliased, joinedload 
 from sqlalchemy import func, Text, and_
 from sqlalchemy.sql import text, bindparam
 from geoalchemy2.shape import from_shape
@@ -147,6 +147,12 @@ def create_pergunta(db: Session, pergunta: schemas.PerguntaCreate, pesquisa_id: 
     # 1. Extrair as opções do payload
     pergunta_data = pergunta.dict(exclude_unset=True)
     opcoes_data = pergunta_data.pop('opcoes', []) 
+    if pergunta_data.get("ordem") is None:
+        ultima_ordem = db.query(func.max(models.Pergunta.ordem)).filter(
+            models.Pergunta.pesquisa_id == pesquisa_id,
+            models.Pergunta.ativo.is_(True)
+        ).scalar()
+        pergunta_data["ordem"] = (ultima_ordem or 0) + 1
 
     # 2. Criar a instância principal da Pergunta
     db_pergunta = models.Pergunta(**pergunta_data, pesquisa_id=pesquisa_id)
@@ -167,8 +173,11 @@ def create_pergunta(db: Session, pergunta: schemas.PerguntaCreate, pesquisa_id: 
 
 def get_perguntas(db: Session, pesquisa_id: int):
     return db.query(models.Pergunta)\
-             .filter(models.Pergunta.pesquisa_id == pesquisa_id)\
-             .order_by(models.Pergunta.ordem)\
+             .filter(
+                 models.Pergunta.pesquisa_id == pesquisa_id,
+                 models.Pergunta.ativo.is_(True)
+             )\
+             .order_by(models.Pergunta.ordem, models.Pergunta.id)\
              .all()
 
 def update_pergunta(db: Session, pergunta_id: int, pergunta_in: schemas.PerguntaUpdate):
@@ -179,6 +188,7 @@ def update_pergunta(db: Session, pergunta_id: int, pergunta_in: schemas.Pergunta
 
     # 2. Transforma os dados que vieram do React em dicionário
     update_data = pergunta_in.dict(exclude_unset=True)
+    update_data.pop("ordem", None)
 
     # 3. EXTRAI as opções para não quebrar o banco (Igual fizemos no Create)
     opcoes_data = None
@@ -212,6 +222,36 @@ def update_pergunta(db: Session, pergunta_id: int, pergunta_in: schemas.Pergunta
         db.refresh(db_pergunta)
 
     return db_pergunta
+
+def reordenar_perguntas(db: Session, pesquisa_id: int, itens: List[schemas.PerguntaReordenarItem]):
+    perguntas = get_perguntas(db, pesquisa_id=pesquisa_id)
+    perguntas_por_id = {pergunta.id: pergunta for pergunta in perguntas}
+    ids_enviados = [item.id for item in itens]
+    ids_invalidos = [pergunta_id for pergunta_id in ids_enviados if pergunta_id not in perguntas_por_id]
+
+    if ids_invalidos:
+        raise HTTPException(
+            status_code=400,
+            detail="Todas as perguntas devem pertencer à pesquisa informada."
+        )
+
+    nova_ordem = [pergunta for pergunta in perguntas if pergunta.id not in ids_enviados]
+    itens_ordenados = sorted(enumerate(itens), key=lambda item: (item[1].ordem, item[0]))
+
+    for _, item in itens_ordenados:
+        pergunta = perguntas_por_id[item.id]
+        posicao = min(item.ordem - 1, len(nova_ordem))
+        nova_ordem.insert(posicao, pergunta)
+
+    try:
+        for ordem, pergunta in enumerate(nova_ordem, start=1):
+            pergunta.ordem = ordem
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return get_perguntas(db, pesquisa_id=pesquisa_id)
 
 # ==============================================================================
 # SOFT DELETE
@@ -395,14 +435,116 @@ def get_dashboard_stats(db: Session, pesquisa_id: int, current_user: models.Usua
         # Adicione mais stats conforme necessário
     }
 
-def get_relatorio_pesquisa(db: Session, pesquisa_id: int):
+def _validar_pesquisa_relatorio(db: Session, pesquisa_id: int, current_user: models.Usuario):
+    pesquisa = db.query(models.Pesquisa).join(models.Projeto).filter(
+        models.Pesquisa.id == pesquisa_id,
+        models.Projeto.company_id == current_user.company_id
+    ).first()
+    if not pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa não encontrada.")
+    return pesquisa
+
+def _validar_setores_relatorio(db: Session, pesquisa_id: int, setor_ids: Optional[List[int]], current_user: models.Usuario):
+    if not setor_ids:
+        return
+
+    ids_unicos = set(setor_ids)
+    setores = db.query(models.Setor.id).join(models.Pesquisa).join(models.Projeto).filter(
+        models.Setor.id.in_(ids_unicos),
+        models.Setor.pesquisa_id == pesquisa_id,
+        models.Projeto.company_id == current_user.company_id
+    ).all()
+    ids_validos = {setor.id for setor in setores}
+
+    if ids_validos != ids_unicos:
+        raise HTTPException(status_code=404, detail="Setor não encontrado para esta pesquisa.")
+
+def _aplicar_filtros_coletas(query, db: Session, current_user: models.Usuario, agente_ids=None, setor_ids=None):
+    if agente_ids:
+        query = query.filter(models.Coleta.agente_id.in_(agente_ids))
+
+    if setor_ids:
+        setor_match = db.query(models.Setor.id).join(models.Pesquisa).join(models.Projeto).filter(
+            models.Setor.id.in_(setor_ids),
+            models.Setor.pesquisa_id == models.Coleta.pesquisa_id,
+            models.Projeto.company_id == current_user.company_id,
+            models.Setor.geometria.isnot(None),
+            models.Coleta.localizacao_inicio.isnot(None),
+            func.ST_Intersects(models.Setor.geometria, models.Coleta.localizacao_inicio)
+        ).exists()
+        query = query.filter(setor_match)
+
+    return query
+
+def get_relatorio_filtros(db: Session, pesquisa_id: int, current_user: models.Usuario):
+    _validar_pesquisa_relatorio(db, pesquisa_id, current_user)
+
+    agentes_rows = db.query(
+        models.Usuario.id,
+        models.Usuario.nome,
+        func.count(models.Coleta.id).label("total_coletas")
+    )\
+    .join(models.Coleta, models.Coleta.agente_id == models.Usuario.id)\
+    .filter(
+        models.Coleta.pesquisa_id == pesquisa_id,
+        models.Usuario.company_id == current_user.company_id
+    )\
+    .group_by(models.Usuario.id, models.Usuario.nome)\
+    .order_by(models.Usuario.nome)\
+    .all()
+
+    setores_rows = db.query(
+        models.Setor.id,
+        models.Setor.nome,
+        func.count(models.Coleta.id).label("total_coletas")
+    )\
+    .select_from(models.Setor)\
+    .join(
+        models.Coleta,
+        and_(
+            models.Coleta.pesquisa_id == models.Setor.pesquisa_id,
+            models.Coleta.localizacao_inicio.isnot(None),
+            models.Setor.geometria.isnot(None),
+            func.ST_Intersects(models.Setor.geometria, models.Coleta.localizacao_inicio)
+        )
+    )\
+    .filter(models.Setor.pesquisa_id == pesquisa_id)\
+    .group_by(models.Setor.id, models.Setor.nome)\
+    .order_by(models.Setor.nome)\
+    .all()
+
+    return {
+        "agentes": [
+            {
+                "id": row.id,
+                "nome": row.nome,
+                "total_coletas": int(row.total_coletas or 0),
+            }
+            for row in agentes_rows
+        ],
+        "setores": [
+            {
+                "id": row.id,
+                "nome": row.nome,
+                "total_coletas": int(row.total_coletas or 0),
+            }
+            for row in setores_rows
+        ],
+    }
+
+def get_relatorio_pesquisa(
+    db: Session,
+    pesquisa_id: int,
+    current_user: models.Usuario,
+    agente_ids: Optional[List[int]] = None,
+    setor_ids: Optional[List[int]] = None
+):
     """
     Gera o relatÃ³rio simples de frequÃªncia por pergunta.
     A validaÃ§Ã£o multitenant Ã© feita no endpoint antes desta chamada.
     """
-    pesquisa = db.query(models.Pesquisa).filter(models.Pesquisa.id == pesquisa_id).first()
-    if not pesquisa:
-        return None
+    pesquisa = _validar_pesquisa_relatorio(db, pesquisa_id, current_user)
+    _validar_setores_relatorio(db, pesquisa_id, setor_ids, current_user)
 
     perguntas = db.query(models.Pergunta)\
         .filter(
@@ -412,13 +554,15 @@ def get_relatorio_pesquisa(db: Session, pesquisa_id: int):
         .order_by(models.Pergunta.ordem, models.Pergunta.id)\
         .all()
 
-    total_coletas = db.query(func.count(models.Coleta.id))\
-        .filter(models.Coleta.pesquisa_id == pesquisa_id)\
-        .scalar() or 0
+    total_query = db.query(func.count(models.Coleta.id))\
+        .filter(models.Coleta.pesquisa_id == pesquisa_id)
+    total_coletas = _aplicar_filtros_coletas(
+        total_query, db, current_user, agente_ids, setor_ids
+    ).scalar() or 0
 
     resultados = []
     for pergunta in perguntas:
-        rows = db.query(
+        rows_query = db.query(
             models.Resposta.valor_resposta,
             func.count(models.Resposta.id).label("contagem")
         )\
@@ -426,10 +570,13 @@ def get_relatorio_pesquisa(db: Session, pesquisa_id: int):
             .filter(
                 models.Coleta.pesquisa_id == pesquisa_id,
                 models.Resposta.pergunta_id == pergunta.id
-            )\
-            .group_by(models.Resposta.valor_resposta)\
-            .order_by(models.Resposta.valor_resposta)\
-            .all()
+            )
+        rows = _aplicar_filtros_coletas(
+            rows_query, db, current_user, agente_ids, setor_ids
+        )\
+        .group_by(models.Resposta.valor_resposta)\
+        .order_by(models.Resposta.valor_resposta)\
+        .all()
 
         total_pergunta = sum(int(contagem or 0) for _, contagem in rows)
         dados = []
@@ -471,35 +618,44 @@ def get_relatorio_pesquisa(db: Session, pesquisa_id: int):
         "resultados_por_pergunta": resultados,
     }
 
-def get_report_crosstab(db: Session, pesquisa_id: int, pergunta_linha_id: int, pergunta_coluna_id: int, current_user: models.Usuario):
+def get_report_crosstab(
+    db: Session,
+    pesquisa_id: int,
+    pergunta_linha_id: int,
+    pergunta_coluna_id: int,
+    current_user: models.Usuario,
+    agente_ids: Optional[List[int]] = None,
+    setor_ids: Optional[List[int]] = None
+):
     """
     Gera dados para tabulação cruzada (Crosstab).
     Valida se a pesquisa pertence à empresa do usuário.
     """
-    # 1. Validação de Segurança
-    pesquisa_valida = db.query(models.Pesquisa).join(models.Projeto)\
-        .filter(models.Pesquisa.id == pesquisa_id, models.Projeto.company_id == current_user.company_id)\
-        .first()
-    if not pesquisa_valida:
-        raise Exception("Acesso negado.")
+    _validar_pesquisa_relatorio(db, pesquisa_id, current_user)
+    _validar_setores_relatorio(db, pesquisa_id, setor_ids, current_user)
 
-    # 2. Busca os dados brutos
-    # (Mantive a lógica original simplificada, mas agora segura)
-    sql = text("""
-        SELECT 
-            r1.valor_resposta as linha,
-            r2.valor_resposta as coluna,
-            COUNT(*) as total
-        FROM coletas c
-        JOIN respostas r1 ON c.id = r1.coleta_id
-        JOIN respostas r2 ON c.id = r2.coleta_id
-        WHERE c.pesquisa_id = :pid
-          AND r1.pergunta_id = :p1
-          AND r2.pergunta_id = :p2
-        GROUP BY r1.valor_resposta, r2.valor_resposta
-    """)
-    
-    result = db.execute(sql, {"pid": pesquisa_id, "p1": pergunta_linha_id, "p2": pergunta_coluna_id}).fetchall()
+    resposta_linha = aliased(models.Resposta)
+    resposta_coluna = aliased(models.Resposta)
+
+    query = db.query(
+        resposta_linha.valor_resposta.label("linha"),
+        resposta_coluna.valor_resposta.label("coluna"),
+        func.count().label("total")
+    ).select_from(models.Coleta)\
+        .join(resposta_linha, models.Coleta.id == resposta_linha.coleta_id)\
+        .join(resposta_coluna, models.Coleta.id == resposta_coluna.coleta_id)\
+        .filter(
+            models.Coleta.pesquisa_id == pesquisa_id,
+            resposta_linha.pergunta_id == pergunta_linha_id,
+            resposta_coluna.pergunta_id == pergunta_coluna_id
+        )
+
+    result = _aplicar_filtros_coletas(
+        query, db, current_user, agente_ids, setor_ids
+    )\
+    .group_by(resposta_linha.valor_resposta, resposta_coluna.valor_resposta)\
+    .order_by(resposta_linha.valor_resposta, resposta_coluna.valor_resposta)\
+    .all()
     
     # Formata para JSON amigável ao Frontend
     data = []

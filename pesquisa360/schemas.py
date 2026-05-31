@@ -1,6 +1,6 @@
 # pesquisa360/schemas.py (versão final simplificada)
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Any, Union, Dict
 from datetime import date, datetime
 #from geoalchemy2.elements import WKBElement # <-- NOVA IMPORTAÇÃO
@@ -92,7 +92,7 @@ class PerguntaBase(BaseModel):
     opcoes: Optional[List[OpcaoCreate]] = None # <--- Alterado para OpcaoCreate
 
 class PerguntaCreate(PerguntaBase):
-    pass
+    ordem: Optional[int] = None
 
 class PerguntaUpdate(BaseModel):
     texto_pergunta: Optional[str] = None
@@ -101,6 +101,13 @@ class PerguntaUpdate(BaseModel):
     eh_obrigatoria: Optional[bool] = None
     opcoes: Optional[List[Any]] = None
     ativo: Optional[bool] = None
+
+class PerguntaReordenarItem(BaseModel):
+    id: int
+    ordem: int = Field(..., ge=1)
+
+class PerguntasReordenarPayload(BaseModel):
+    perguntas: List[PerguntaReordenarItem]
 
 class Pergunta(PerguntaBase):
     id: int

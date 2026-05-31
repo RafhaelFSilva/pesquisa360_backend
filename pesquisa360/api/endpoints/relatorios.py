@@ -19,10 +19,35 @@ def check_access(db: Session, pesquisa_id: int, current_user: models.Usuario):
     
     if not pesquisa:
         raise HTTPException(
-            status_code=403, 
+            status_code=404,
             detail="Pesquisa não encontrada ou você não tem permissão para visualizar este relatório."
         )
     return pesquisa
+
+def parse_csv_ids(value: str | None) -> list[int] | None:
+    if value is None or value.strip() == "":
+        return None
+    try:
+        ids = [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as exc:
+        raise ValueError("IDs devem ser inteiros separados por vírgula.") from exc
+    return ids or None
+
+@router.get("/relatorios/pesquisas/{pesquisa_id}/filtros/")
+def read_relatorio_filtros(
+    *,
+    db: Session = Depends(get_db),
+    pesquisa_id: int,
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """
+    Retorna opcoes de filtros disponiveis para a pesquisa do tenant.
+    """
+    return crud.get_relatorio_filtros(
+        db=db,
+        pesquisa_id=pesquisa_id,
+        current_user=current_user
+    )
 
 @router.get("/relatorios/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa)
 @router.get("/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa)
@@ -30,6 +55,8 @@ def read_relatorio_simples(
     *,
     db: Session = Depends(get_db),
     pesquisa_id: int,
+    agente_ids: str | None = None,
+    setor_ids: str | None = None,
     current_user: models.Usuario = Depends(get_current_user)
 ):
     """
@@ -38,10 +65,21 @@ def read_relatorio_simples(
     """
     # 1. Validação de Segurança (Empresa)
     check_access(db, pesquisa_id, current_user)
+    try:
+        agente_id_list = parse_csv_ids(agente_ids)
+        setor_id_list = parse_csv_ids(setor_ids)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     # 2. Geração do Relatório
     # (O crud.get_relatorio_pesquisa lê dados brutos, mas já validamos o acesso acima)
-    relatorio = crud.get_relatorio_pesquisa(db=db, pesquisa_id=pesquisa_id)
+    relatorio = crud.get_relatorio_pesquisa(
+        db=db,
+        pesquisa_id=pesquisa_id,
+        current_user=current_user,
+        agente_ids=agente_id_list,
+        setor_ids=setor_id_list
+    )
     
     if not relatorio:
          raise HTTPException(status_code=404, detail="Não foi possível gerar o relatório (sem dados ou erro interno)")
@@ -55,6 +93,8 @@ def read_relatorio_crosstab(
     db: Session = Depends(get_db),
     pesquisa_id: int,
     crosstab_in: schemas.CrosstabRequest,
+    agente_ids: str | None = None,
+    setor_ids: str | None = None,
     current_user: models.Usuario = Depends(get_current_user)
 ):
     """
@@ -63,6 +103,11 @@ def read_relatorio_crosstab(
     """
     # 1. Validação de Segurança
     check_access(db, pesquisa_id, current_user)
+    try:
+        agente_id_list = parse_csv_ids(agente_ids)
+        setor_id_list = parse_csv_ids(setor_ids)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     perguntas = db.query(models.Pergunta).filter(
         models.Pergunta.pesquisa_id == pesquisa_id,
@@ -88,8 +133,12 @@ def read_relatorio_crosstab(
             pesquisa_id=pesquisa_id,
             pergunta_linha_id=crosstab_in.pergunta_linha_id,
             pergunta_coluna_id=crosstab_in.pergunta_coluna_id,
-            current_user=current_user
+            current_user=current_user,
+            agente_ids=agente_id_list,
+            setor_ids=setor_id_list
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

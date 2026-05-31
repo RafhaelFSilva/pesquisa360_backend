@@ -1,7 +1,7 @@
 from typing import List, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, and_
 import json
 
 from pesquisa360 import crud, schemas
@@ -9,6 +9,43 @@ from pesquisa360.db import models
 from pesquisa360.core.dependencies import get_db, get_current_user
 
 router = APIRouter()
+
+def parse_csv_ids(value: str | None) -> list[int] | None:
+    if value is None or value.strip() == "":
+        return None
+    try:
+        ids = [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="IDs devem ser inteiros separados por virgula.") from exc
+    return ids or None
+
+def validar_agentes_monitoramento(db: Session, agente_ids: list[int] | None, current_user: models.Usuario):
+    if not agente_ids:
+        return
+
+    ids_unicos = set(agente_ids)
+    agentes = db.query(models.Usuario.id).filter(
+        models.Usuario.id.in_(ids_unicos),
+        models.Usuario.company_id == current_user.company_id
+    ).all()
+    ids_validos = {agente.id for agente in agentes}
+
+    if ids_validos != ids_unicos:
+        raise HTTPException(status_code=404, detail="Agente nao encontrado para este tenant.")
+
+def validar_setores_monitoramento(db: Session, pesquisa_id: int, setor_ids: list[int] | None):
+    if not setor_ids:
+        return
+
+    ids_unicos = set(setor_ids)
+    setores = db.query(models.Setor.id).filter(
+        models.Setor.id.in_(ids_unicos),
+        models.Setor.pesquisa_id == pesquisa_id
+    ).all()
+    ids_validos = {setor.id for setor in setores}
+
+    if ids_validos != ids_unicos:
+        raise HTTPException(status_code=404, detail="Setor nao encontrado para esta pesquisa.")
 
 @router.post("/pesquisas/{pesquisa_id}/coletas/", status_code=status.HTTP_201_CREATED)
 def submit_coleta(
@@ -44,34 +81,52 @@ def read_coletas_monitoramento(
     *,
     db: Session = Depends(get_db),
     pesquisa_id: int,
+    agente_ids: str | None = None,
+    setor_ids: str | None = None,
     current_user: models.Usuario = Depends(get_current_user)
 ):
     pesquisa = crud.get_pesquisa(db=db, pesquisa_id=pesquisa_id, current_user=current_user)
     if not pesquisa:
         raise HTTPException(status_code=404, detail="Pesquisa nao encontrada ou acesso negado")
 
-    coletas_query = (
-        db.query(
-            models.Coleta.id,
-            models.Coleta.pesquisa_id,
-            models.Coleta.agente_id,
-            models.Usuario.nome.label("agente_nome"),
-            models.Coleta.data_inicio_coleta,
-            models.Coleta.data_fim_coleta,
-            models.Coleta.endereco_estimado,
-            models.Coleta.inconformidade_localizacao,
-            models.Coleta.status_sincronizacao,
-            models.Coleta.foi_offline,
-            func.ST_Y(models.Coleta.localizacao_inicio).label("lat_inicio"),
-            func.ST_X(models.Coleta.localizacao_inicio).label("lng_inicio"),
-            func.ST_Y(models.Coleta.localizacao_fim).label("lat_fim"),
-            func.ST_X(models.Coleta.localizacao_fim).label("lng_fim"),
-        )
-        .outerjoin(models.Usuario, models.Coleta.agente_id == models.Usuario.id)
-        .filter(models.Coleta.pesquisa_id == pesquisa_id)
-        .order_by(models.Coleta.data_inicio_coleta.desc())
-        .all()
+    agente_id_list = parse_csv_ids(agente_ids)
+    setor_id_list = parse_csv_ids(setor_ids)
+    validar_agentes_monitoramento(db, agente_id_list, current_user)
+    validar_setores_monitoramento(db, pesquisa_id, setor_id_list)
+
+    coletas_query = db.query(
+        models.Coleta.id,
+        models.Coleta.pesquisa_id,
+        models.Coleta.agente_id,
+        models.Usuario.nome.label("agente_nome"),
+        models.Coleta.data_inicio_coleta,
+        models.Coleta.data_fim_coleta,
+        models.Coleta.endereco_estimado,
+        models.Coleta.inconformidade_localizacao,
+        models.Coleta.status_sincronizacao,
+        models.Coleta.foi_offline,
+        func.ST_Y(models.Coleta.localizacao_inicio).label("lat_inicio"),
+        func.ST_X(models.Coleta.localizacao_inicio).label("lng_inicio"),
+        func.ST_Y(models.Coleta.localizacao_fim).label("lat_fim"),
+        func.ST_X(models.Coleta.localizacao_fim).label("lng_fim"),
     )
+    coletas_query = coletas_query.outerjoin(models.Usuario, models.Coleta.agente_id == models.Usuario.id)
+    coletas_query = coletas_query.filter(models.Coleta.pesquisa_id == pesquisa_id)
+
+    if agente_id_list:
+        coletas_query = coletas_query.filter(models.Coleta.agente_id.in_(agente_id_list))
+
+    if setor_id_list:
+        setor_match = db.query(models.Setor.id).filter(
+            models.Setor.id.in_(setor_id_list),
+            models.Setor.pesquisa_id == pesquisa_id,
+            models.Setor.geometria.isnot(None),
+            models.Coleta.localizacao_inicio.isnot(None),
+            func.ST_Intersects(models.Setor.geometria, models.Coleta.localizacao_inicio)
+        ).exists()
+        coletas_query = coletas_query.filter(setor_match)
+
+    coletas_query = coletas_query.order_by(models.Coleta.data_inicio_coleta.desc()).all()
 
     resultado = []
     for coleta in coletas_query:
@@ -105,6 +160,70 @@ def read_coletas_monitoramento(
         })
 
     return resultado
+
+@router.get("/pesquisas/{pesquisa_id}/coletas/monitoramento/filtros/")
+def read_coletas_monitoramento_filtros(
+    *,
+    db: Session = Depends(get_db),
+    pesquisa_id: int,
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    pesquisa = crud.get_pesquisa(db=db, pesquisa_id=pesquisa_id, current_user=current_user)
+    if not pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa nao encontrada ou acesso negado")
+
+    agentes_rows = db.query(
+        models.Usuario.id,
+        models.Usuario.nome,
+        func.count(models.Coleta.id).label("total_coletas")
+    )\
+    .join(models.Coleta, models.Coleta.agente_id == models.Usuario.id)\
+    .filter(
+        models.Coleta.pesquisa_id == pesquisa_id,
+        models.Usuario.company_id == current_user.company_id
+    )\
+    .group_by(models.Usuario.id, models.Usuario.nome)\
+    .order_by(models.Usuario.nome)\
+    .all()
+
+    setores_rows = db.query(
+        models.Setor.id,
+        models.Setor.nome,
+        func.count(models.Coleta.id).label("total_coletas")
+    )\
+    .select_from(models.Setor)\
+    .join(
+        models.Coleta,
+        and_(
+            models.Coleta.pesquisa_id == models.Setor.pesquisa_id,
+            models.Coleta.localizacao_inicio.isnot(None),
+            models.Setor.geometria.isnot(None),
+            func.ST_Intersects(models.Setor.geometria, models.Coleta.localizacao_inicio)
+        )
+    )\
+    .filter(models.Setor.pesquisa_id == pesquisa_id)\
+    .group_by(models.Setor.id, models.Setor.nome)\
+    .order_by(models.Setor.nome)\
+    .all()
+
+    return {
+        "agentes": [
+            {
+                "id": row.id,
+                "nome": row.nome,
+                "total_coletas": int(row.total_coletas or 0),
+            }
+            for row in agentes_rows
+        ],
+        "setores": [
+            {
+                "id": row.id,
+                "nome": row.nome,
+                "total_coletas": int(row.total_coletas or 0),
+            }
+            for row in setores_rows
+        ],
+    }
 
 @router.get("/pesquisas/{pesquisa_id}/coletas/")
 def read_coletas_por_pesquisa(

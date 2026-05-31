@@ -10,6 +10,14 @@ from pesquisa360.core.dependencies import get_db, get_current_user
 
 router = APIRouter()
 
+def ordenar_perguntas_para_sync(projetos):
+    for projeto in projetos or []:
+        for pesquisa in getattr(projeto, "pesquisas", []) or []:
+            perguntas = getattr(pesquisa, "perguntas", None)
+            if perguntas:
+                perguntas.sort(key=lambda pergunta: (pergunta.ordem, pergunta.id))
+    return projetos
+
 @router.get("/pesquisas/", response_model=List[schemas.ProjetoSync])
 def read_pesquisas_para_sincronizar(
     *,
@@ -28,7 +36,7 @@ def read_pesquisas_para_sincronizar(
         # Fallback caso você ainda não tenha criado 'get_projetos_em_campo' no CRUD novo
         projetos = crud.get_projetos(db=db, current_user=current_user)
         
-    return projetos
+    return ordenar_perguntas_para_sync(projetos)
 
 @router.get("/missao/{pesquisa_id}")
 def get_missao_agente(

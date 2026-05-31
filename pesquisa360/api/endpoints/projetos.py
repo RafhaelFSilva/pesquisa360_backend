@@ -14,6 +14,17 @@ router = APIRouter()
 
 # --- Helpers ---
 
+def ordenar_perguntas_da_pesquisa(pesquisa: models.Pesquisa) -> models.Pesquisa:
+    perguntas = getattr(pesquisa, "perguntas", None)
+    if perguntas:
+        perguntas.sort(key=lambda pergunta: (pergunta.ordem, pergunta.id))
+    return pesquisa
+
+def ordenar_perguntas_das_pesquisas(pesquisas):
+    for pesquisa in pesquisas or []:
+        ordenar_perguntas_da_pesquisa(pesquisa)
+    return pesquisas
+
 def pesquisa_to_dict(p: models.Pesquisa, db: Session) -> dict:
     """Converte Pesquisa para dict, tratando GeoJSON e Perguntas."""
     # 1. Trata a Cerca Eletrônica (GeoJSON)
@@ -28,7 +39,10 @@ def pesquisa_to_dict(p: models.Pesquisa, db: Session) -> dict:
 
     # 2. Trata as Perguntas e Opções
     perguntas_list = []
-    lista_perguntas = getattr(p, "perguntas", []) or []
+    lista_perguntas = sorted(
+        getattr(p, "perguntas", []) or [],
+        key=lambda pergunta: (pergunta.ordem, pergunta.id)
+    )
     
     for pergunta in lista_perguntas:
         opcoes_list = None
@@ -109,6 +123,7 @@ def read_projeto(
     db_projeto = crud.get_projeto(db, projeto_id=projeto_id, current_user=current_user)
     if db_projeto is None:
         raise HTTPException(status_code=404, detail="Projeto não encontrado")
+    ordenar_perguntas_das_pesquisas(getattr(db_projeto, "pesquisas", []))
     return db_projeto
 
 @router.patch("/projetos/{projeto_id}", response_model=schemas.Projeto)
@@ -146,7 +161,7 @@ def read_pesquisas(
     pesquisas = crud.get_pesquisas(db, projeto_id=projeto_id, current_user=current_user)
     # Se retornou vazio, pode ser que o projeto não exista ou não tenha pesquisas.
     # O CRUD cuida da segurança.
-    return pesquisas
+    return ordenar_perguntas_das_pesquisas(pesquisas)
 
 @router.post("/projetos/{projeto_id}/pesquisas/", response_model=schemas.Pesquisa)
 def create_pesquisa(
@@ -327,6 +342,39 @@ def read_perguntas(
     """Lista perguntas de uma pesquisa."""
     check_pesquisa_access(db, pesquisa_id, current_user)
     return crud.get_perguntas(db, pesquisa_id=pesquisa_id)
+
+@router.patch("/projetos/{projeto_id}/pesquisas/{pesquisa_id}/perguntas/reordenar", response_model=List[schemas.Pergunta])
+def reordenar_perguntas(
+    projeto_id: int,
+    pesquisa_id: int,
+    payload: schemas.PerguntasReordenarPayload,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """Reordena perguntas de uma pesquisa em lote."""
+    projeto = crud.get_projeto(db=db, projeto_id=projeto_id, current_user=current_user)
+    if not projeto:
+        raise HTTPException(status_code=404, detail="Projeto não encontrado.")
+
+    pesquisa = db.query(models.Pesquisa).filter(
+        models.Pesquisa.id == pesquisa_id,
+        models.Pesquisa.projeto_id == projeto_id
+    ).first()
+    if not pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa não encontrada.")
+
+    ids = [item.id for item in payload.perguntas]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="IDs de perguntas duplicados no payload."
+        )
+
+    return crud.reordenar_perguntas(
+        db=db,
+        pesquisa_id=pesquisa_id,
+        itens=payload.perguntas
+    )
 
 @router.patch("/pesquisas/{pesquisa_id}/perguntas/{pergunta_id}", response_model=schemas.Pergunta)
 def update_pergunta(

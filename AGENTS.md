@@ -21,6 +21,19 @@ A multitenância já foi implementada na API. O backend é a fonte de verdade pa
 - Não usar SHA1 para senha. Usar bcrypt ou Argon2.
 - Não misturar refatoração ampla com correção de bug.
 
+## Política de economia de tokens
+
+- Priorizar patches mínimos e localizados.
+- Não inspecionar migrations, Dockerfile ou pyproject.toml salvo se o erro envolver esses arquivos.
+- Para erro de rota FastAPI, verificar apenas:
+  - endpoint
+  - schema
+  - CRUD chamado
+  - model envolvido
+- Evitar respostas longas.
+- Não repetir código inteiro; mostrar apenas trechos alterados.
+- Não criar documentação extensa durante correção de bug.
+
 ## Antes de finalizar
 
 - Informar endpoints afetados.
@@ -28,3 +41,4 @@ A multitenância já foi implementada na API. O backend é a fonte de verdade pa
 - Informar impacto no Mobile offline-first.
 - Rodar testes relevantes, se disponíveis.
 - Mostrar riscos restantes.
+

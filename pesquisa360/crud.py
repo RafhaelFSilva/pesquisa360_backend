@@ -490,7 +490,21 @@ def get_setores_by_pesquisa(db: Session, pesquisa_id: int):
         models.Setor.nome,
         models.Setor.meta,
         models.Setor.tolerancia,
+        models.Usuario.id.label("agente_id"),
+        models.Usuario.nome.label("agente_nome"),
         func.ST_AsGeoJSON(models.Setor.geometria).label("geojson")
+    ).join(
+        models.Pesquisa,
+        models.Pesquisa.id == models.Setor.pesquisa_id
+    ).join(
+        models.Projeto,
+        models.Projeto.id == models.Pesquisa.projeto_id
+    ).outerjoin(
+        models.Usuario,
+        and_(
+            models.Usuario.id == models.Setor.agente_id,
+            models.Usuario.company_id == models.Projeto.company_id,
+        )
     ).filter(models.Setor.pesquisa_id == pesquisa_id).all()
 
 # ==============================================================================

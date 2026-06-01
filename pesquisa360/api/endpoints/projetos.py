@@ -92,6 +92,19 @@ def check_pesquisa_access(db: Session, pesquisa_id: int, current_user: models.Us
         )
     return pesquisa
 
+def setor_to_dict(s) -> dict:
+    geojson = json.loads(s.geojson) if s.geojson else None
+    return {
+        "id": s.id,
+        "nome": s.nome,
+        "meta": s.meta,
+        "tolerancia": s.tolerancia,
+        "tolerancia_metros": s.tolerancia,
+        "agente_id": s.agente_id,
+        "agente_nome": s.agente_nome,
+        "geometria": geojson
+    }
+
 # --- Rotas de Projetos ---
 
 @router.get("/projetos/", response_model=List[schemas.Projeto])
@@ -487,17 +500,7 @@ def list_setores_endpoint(
     setores_raw = crud.get_setores_by_pesquisa(db=db, pesquisa_id=pesquisa_id)
     
     # 3. Processa retorno
-    resultado = []
-    for s in setores_raw:
-        geojson = json.loads(s.geojson) if s.geojson else None
-        resultado.append({
-            "id": s.id,
-            "nome": s.nome,
-            "meta": s.meta,
-            "tolerancia": s.tolerancia,
-            "geometria": geojson
-        })
-    return resultado
+    return [setor_to_dict(s) for s in setores_raw]
 
 @router.post("/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores")
 def create_setor_by_projeto_pesquisa(
@@ -619,14 +622,4 @@ def list_setores_by_projeto_pesquisa(
     setores_raw = crud.get_setores_by_pesquisa(db=db, pesquisa_id=pesquisa_id)
     
     # 4. Processa retorno
-    resultado = []
-    for s in setores_raw:
-        geojson = json.loads(s.geojson) if s.geojson else None
-        resultado.append({
-            "id": s.id,
-            "nome": s.nome,
-            "meta": s.meta,
-            "tolerancia": s.tolerancia,
-            "geometria": geojson
-        })
-    return resultado
+    return [setor_to_dict(s) for s in setores_raw]

@@ -138,8 +138,9 @@ GLOBAL_GEOFENCE_WKT = (
 SECTORS = [
     {
         "name": "Setor QA A1",
-        "agent": "agente.qa.a1@pesquisa360.com",
+        "agent_email": "agente.qa.a1@pesquisa360.com",
         "meta": 5,
+        "tolerancia": 50,
         "wkt": (
             "POLYGON(("
             "-51.1290 0.0440, "
@@ -152,8 +153,9 @@ SECTORS = [
     },
     {
         "name": "Setor QA A2",
-        "agent": "agente.qa.a2@pesquisa360.com",
+        "agent_email": "agente.qa.a2@pesquisa360.com",
         "meta": 5,
+        "tolerancia": 50,
         "wkt": (
             "POLYGON(("
             "-51.1245 0.0395, "
@@ -343,9 +345,15 @@ def upsert_questions(db, survey):
     return result
 
 
-def upsert_sectors(db, survey, users_by_email: dict):
+def upsert_sectors(db, survey, users_by_email: dict, qa_company):
     result = []
     for data in SECTORS:
+        agent = users_by_email[data["agent_email"]]
+        if agent.company_id != qa_company.id:
+            raise RuntimeError(
+                f"Agente {agent.email} nao pertence a {qa_company.name}."
+            )
+
         sector = (
             db.query(models.Setor)
             .filter(
@@ -359,10 +367,17 @@ def upsert_sectors(db, survey, users_by_email: dict):
             db.add(sector)
 
         sector.meta = data["meta"]
-        sector.tolerancia = 50
-        sector.agente_id = users_by_email[data["agent"]].id
+        sector.tolerancia = data["tolerancia"]
+        sector.agente_id = agent.id
+        sector.agente = agent
         sector.geometria = func.ST_GeomFromText(data["wkt"], 4326)
         db.flush()
+
+        if sector.agente_id != agent.id:
+            raise RuntimeError(f"Setor {sector.nome} ficou sem agente QA esperado.")
+        if sector.tolerancia != data["tolerancia"]:
+            raise RuntimeError(f"Setor {sector.nome} ficou sem tolerancia esperada.")
+
         result.append(sector)
 
     return result
@@ -397,7 +412,12 @@ def main() -> int:
             )
             survey = upsert_survey(db, project)
             questions = upsert_questions(db, survey)
-            sectors = upsert_sectors(db, survey, users_by_email)
+            sectors = upsert_sectors(
+                db,
+                survey,
+                users_by_email,
+                companies["Empresa QA A"],
+            )
 
             db.commit()
 
@@ -418,7 +438,11 @@ def main() -> int:
                 print(f"- {question.texto_pergunta}")
             print("Setores criados/atualizados:")
             for sector in sectors:
-                print(f"- {sector.nome}")
+                agent_email = sector.agente.email if sector.agente else "N/A"
+                print(
+                    f"- {sector.nome}: agente {agent_email}, "
+                    f"tolerancia {sector.tolerancia}m"
+                )
             return 0
         except Exception:
             db.rollback()

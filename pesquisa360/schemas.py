@@ -165,8 +165,13 @@ class UsuarioBase(BaseModel):
 class UsuarioCreate(UsuarioBase):
     senha: str
 
-class UsuarioAdminCreate(UsuarioCreate):
+class UsuarioAdminCreate(BaseModel):
+    email: EmailStr
+    nome: Optional[str] = None
+    senha: str
+    perfil_id: int
     company_id: int
+    ativo: Optional[bool] = True
 
 class UsuarioAdminUpdate(BaseModel):
     nome: Optional[str] = None

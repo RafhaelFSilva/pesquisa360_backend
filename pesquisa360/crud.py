@@ -83,16 +83,24 @@ def create_perfil(db: Session, perfil: schemas.PerfilCreate):
     return db_perfil
 
 def create_admin_user(db: Session, user: schemas.UsuarioAdminCreate):
+    perfil_id = user.perfil_id
     hashed_password = security.get_password_hash(user.senha)
     db_user = models.Usuario(
         email=user.email,
         nome=user.nome,
         senha_hash=hashed_password,
-        perfil_id=user.perfil_id,
+        perfil_id=perfil_id,
         ativo=user.ativo if user.ativo is not None else True,
         company_id=user.company_id,
     )
     db.add(db_user)
+    db.flush()
+    if db_user.perfil_id != perfil_id:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Perfil informado nao foi persistido corretamente.",
+        )
     db.commit()
     db.refresh(db_user)
     return db_user
@@ -102,6 +110,7 @@ def update_admin_user(
     db_user: models.Usuario,
     user_update: schemas.UsuarioAdminUpdate,
 ):
+    perfil_id = user_update.perfil_id
     update_data = user_update.model_dump(exclude_unset=True)
     senha = update_data.pop("senha", None)
 
@@ -112,6 +121,13 @@ def update_admin_user(
         db_user.senha_hash = security.get_password_hash(senha)
 
     db.add(db_user)
+    db.flush()
+    if perfil_id is not None and db_user.perfil_id != perfil_id:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Perfil informado nao foi persistido corretamente.",
+        )
     db.commit()
     db.refresh(db_user)
     return db_user

@@ -94,3 +94,6 @@ marimo/_lsp/
 __marimo__/
 .env.*
 !.env.example
+
+# Local window/project markers
+Api.txt

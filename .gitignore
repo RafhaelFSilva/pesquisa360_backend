@@ -100,3 +100,6 @@ Api.txt
 
 # Local window/project markers
 Api.txt
+
+# Runtime uploads
+static/uploads/

@@ -9,6 +9,7 @@ from sqlalchemy import func
 from pesquisa360 import crud, schemas
 from pesquisa360.db import models
 from pesquisa360.core.dependencies import get_db, get_current_user
+from pesquisa360.question_types import normalize_question_type
 
 router = APIRouter()
 
@@ -58,7 +59,7 @@ def pesquisa_to_dict(p: models.Pesquisa, db: Session) -> dict:
         perguntas_list.append({
             "id": pergunta.id,
             "texto_pergunta": pergunta.texto_pergunta,
-            "tipo_pergunta": pergunta.tipo_pergunta,
+            "tipo_pergunta": normalize_question_type(pergunta.tipo_pergunta),
             "opcoes": opcoes_list,
             "eh_obrigatoria": pergunta.eh_obrigatoria,
             "ordem": pergunta.ordem

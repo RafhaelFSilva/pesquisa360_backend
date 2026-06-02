@@ -1,10 +1,12 @@
 # pesquisa360/schemas.py (versão final simplificada)
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, List, Any, Union, Dict
 from datetime import date, datetime
 #from geoalchemy2.elements import WKBElement # <-- NOVA IMPORTAÇÃO
 #from shapely.wkb import loads # <-- NOVA IMPORTAÇÃO
+
+from .question_types import normalize_question_type
 
 # --- Esquemas para Respostas e Coletas ---
 class RespostaBase(BaseModel):
@@ -91,6 +93,11 @@ class PerguntaBase(BaseModel):
     eh_obrigatoria: bool = True
     opcoes: Optional[List[OpcaoCreate]] = None # <--- Alterado para OpcaoCreate
 
+    @field_validator("tipo_pergunta")
+    @classmethod
+    def normalize_tipo_pergunta(cls, value: str) -> str:
+        return normalize_question_type(value)
+
 class PerguntaCreate(PerguntaBase):
     ordem: Optional[int] = None
 
@@ -101,6 +108,13 @@ class PerguntaUpdate(BaseModel):
     eh_obrigatoria: Optional[bool] = None
     opcoes: Optional[List[Any]] = None
     ativo: Optional[bool] = None
+
+    @field_validator("tipo_pergunta")
+    @classmethod
+    def normalize_tipo_pergunta(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return normalize_question_type(value)
 
 class PerguntaReordenarItem(BaseModel):
     id: int

@@ -123,6 +123,12 @@ QUESTIONS = [
         "required": False,
         "options": ["Satisfeito", "Neutro", "Insatisfeito"],
     },
+    {
+        "text": "QA 09 - Avaliacao geral",
+        "type": "ESCALA",
+        "required": False,
+        "options": ["0", "1", "2", "3", "4", "5"],
+    },
 ]
 
 GLOBAL_GEOFENCE_WKT = (

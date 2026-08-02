@@ -9,6 +9,7 @@ from .utils import geocoding
 from geopy.geocoders import Nominatim
 from sqlalchemy.orm import Session, aliased, joinedload 
 from sqlalchemy import func, Text, and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import text, bindparam
 from geoalchemy2.shape import from_shape
 from shapely.geometry import Point
@@ -30,7 +31,12 @@ def get_user_by_email(db: Session, email: str):
 def get_user_by_id(db: Session, usuario_id: int):
     return db.query(models.Usuario).filter(models.Usuario.id == usuario_id).first()
 
-def create_user(db: Session, user: schemas.UsuarioCreate, current_user: models.Usuario):
+def create_user(
+    db: Session,
+    user: schemas.UsuarioCreate,
+    current_user: models.Usuario,
+    company_id: Optional[int] = None,
+):
     """
     Cria um novo usuário VINCULADO à empresa do administrador logado.
     """
@@ -40,7 +46,7 @@ def create_user(db: Session, user: schemas.UsuarioCreate, current_user: models.U
         nome=user.nome,
         senha_hash=hashed_password, 
         perfil_id=user.perfil_id,
-        company_id=current_user.company_id  # <--- VÍNCULO AUTOMÁTICO DE EMPRESA
+        company_id=company_id if company_id is not None else current_user.company_id
     )
     db.add(db_user)
     db.commit()
@@ -142,10 +148,22 @@ def get_companies(db: Session, skip: int = 0, limit: int = 100):
 def get_company(db: Session, company_id: int):
     return db.query(models.Company).filter(models.Company.id == company_id).first()
 
+def get_company_by_cnpj(db: Session, cnpj: str, exclude_company_id: Optional[int] = None):
+    query = db.query(models.Company).filter(models.Company.cnpj == cnpj)
+    if exclude_company_id is not None:
+        query = query.filter(models.Company.id != exclude_company_id)
+    return query.first()
+
 def create_company(db: Session, company: schemas.CompanyCreate):
+    if company.cnpj and get_company_by_cnpj(db, company.cnpj):
+        raise HTTPException(status_code=409, detail="CNPJ ja cadastrado.")
     db_company = models.Company(**company.model_dump())
     db.add(db_company)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="CNPJ ja cadastrado.") from exc
     db.refresh(db_company)
     return db_company
 
@@ -155,11 +173,18 @@ def update_company(
     company_update: schemas.CompanyUpdate,
 ):
     update_data = company_update.model_dump(exclude_unset=True)
+    cnpj = update_data.get("cnpj")
+    if cnpj and get_company_by_cnpj(db, cnpj, exclude_company_id=db_company.id):
+        raise HTTPException(status_code=409, detail="CNPJ ja cadastrado.")
     for field, value in update_data.items():
         setattr(db_company, field, value)
 
     db.add(db_company)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="CNPJ ja cadastrado.") from exc
     db.refresh(db_company)
     return db_company
 
@@ -173,13 +198,44 @@ def get_projetos(db: Session, current_user: models.Usuario, skip: int = 0, limit
              .filter(models.Projeto.company_id == current_user.company_id)\
              .offset(skip).limit(limit).all()
 
-def create_projeto(db: Session, projeto: schemas.ProjetoCreate, current_user: models.Usuario):
-    # O backend assume o controlo: pega nos dados do frontend e injeta o company_id real
-    
-    # Nota: se estiver a usar uma versão antiga do Pydantic, use projeto.dict() em vez de model_dump()
+def validate_project_coordinator(
+    db: Session,
+    coordenador_id: int,
+    company_id: int,
+) -> models.Usuario:
+    coordenador = db.query(models.Usuario).filter(
+        models.Usuario.id == coordenador_id,
+        models.Usuario.company_id == company_id,
+    ).first()
+    if not coordenador:
+        raise HTTPException(status_code=404, detail="Coordenador nao encontrado.")
+    if coordenador.ativo is not True:
+        raise HTTPException(status_code=400, detail="Coordenador deve estar ativo.")
+
+    perfil_nome = (
+        getattr(getattr(coordenador, "perfil", None), "nome", None) or ""
+    ).strip().casefold()
+    if perfil_nome not in {"gerente", "superadmin"}:
+        raise HTTPException(status_code=400, detail="Perfil nao permitido para coordenacao.")
+    return coordenador
+
+
+def create_projeto(
+    db: Session,
+    projeto: schemas.ProjetoCreate,
+    current_user: models.Usuario,
+    company_id: Optional[int] = None,
+):
+    project_company_id = company_id if company_id is not None else current_user.company_id
+    validate_project_coordinator(
+        db=db,
+        coordenador_id=projeto.coordenador_id,
+        company_id=project_company_id,
+    )
+    projeto_data = projeto.model_dump(exclude={"company_id"})
     db_projeto = models.Projeto(
-        **projeto.model_dump(), 
-        company_id=current_user.company_id
+        **projeto_data,
+        company_id=project_company_id,
     )
     
     db.add(db_projeto)
@@ -187,12 +243,41 @@ def create_projeto(db: Session, projeto: schemas.ProjetoCreate, current_user: mo
     db.refresh(db_projeto)
     return db_projeto
 
-def get_projeto(db: Session, projeto_id: int, current_user: models.Usuario):
+def get_projeto(
+    db: Session,
+    projeto_id: int,
+    current_user: models.Usuario,
+    allow_global: bool = False,
+):
     """Busca um projeto específico validando a empresa."""
-    return db.query(models.Projeto).filter(
-        models.Projeto.id == projeto_id,
-        models.Projeto.company_id == current_user.company_id
-    ).first()
+    query = db.query(models.Projeto).filter(models.Projeto.id == projeto_id)
+    if not allow_global:
+        query = query.filter(models.Projeto.company_id == current_user.company_id)
+    return query.first()
+
+
+def update_projeto(
+    db: Session,
+    db_projeto: models.Projeto,
+    projeto_update: schemas.ProjetoUpdate,
+) -> models.Projeto:
+    update_data = projeto_update.model_dump(exclude_unset=True)
+    update_data.pop("company_id", None)
+
+    coordenador_id = update_data.get("coordenador_id")
+    if coordenador_id is not None:
+        validate_project_coordinator(
+            db=db,
+            coordenador_id=coordenador_id,
+            company_id=db_projeto.company_id,
+        )
+
+    for key, value in update_data.items():
+        setattr(db_projeto, key, value)
+
+    db.commit()
+    db.refresh(db_projeto)
+    return db_projeto
 
 # ==============================================================================
 # PESQUISAS E PERGUNTAS
@@ -241,10 +326,13 @@ def create_pesquisa(db: Session, pesquisa: schemas.PesquisaCreate, projeto_id: i
     return db_pesquisa
 
 def create_pergunta(db: Session, pergunta: schemas.PerguntaCreate, pesquisa_id: int):
-    
-    # 1. Extrair as opções do payload
-    pergunta_data = pergunta.dict(exclude_unset=True)
-    opcoes_data = pergunta_data.pop('opcoes', []) 
+    pergunta_data = pergunta.model_dump(exclude_unset=True)
+    opcoes_data = _validate_question_options(
+        db,
+        pesquisa_id=pesquisa_id,
+        pergunta_id=None,
+        opcoes=pergunta_data.pop("opcoes", []) or [],
+    )
     if pergunta_data.get("ordem") is None:
         ultima_ordem = db.query(func.max(models.Pergunta.ordem)).filter(
             models.Pergunta.pesquisa_id == pesquisa_id,
@@ -252,20 +340,21 @@ def create_pergunta(db: Session, pergunta: schemas.PerguntaCreate, pesquisa_id: 
         ).scalar()
         pergunta_data["ordem"] = (ultima_ordem or 0) + 1
 
-    # 2. Criar a instância principal da Pergunta
     db_pergunta = models.Pergunta(**pergunta_data, pesquisa_id=pesquisa_id)
-    db.add(db_pergunta)
-    db.commit()
-    db.refresh(db_pergunta)
+    try:
+        db.add(db_pergunta)
+        db.flush()
 
-    # 3. Se houver opções, mapeá-las para models.Opcao e associá-las
-    if opcoes_data:
         for opt in opcoes_data:
             nova_opcao = models.Opcao(**opt, pergunta_id=db_pergunta.id)
             db.add(nova_opcao)
-        
+            db.flush()
+
         db.commit()
         db.refresh(db_pergunta)
+    except Exception:
+        db.rollback()
+        raise
 
     return db_pergunta
 
@@ -278,46 +367,127 @@ def get_perguntas(db: Session, pesquisa_id: int):
              .order_by(models.Pergunta.ordem, models.Pergunta.id)\
              .all()
 
-def update_pergunta(db: Session, pergunta_id: int, pergunta_in: schemas.PerguntaUpdate):
+def get_pergunta(db: Session, pesquisa_id: int, pergunta_id: int):
+    return db.query(models.Pergunta).filter(
+        models.Pergunta.id == pergunta_id,
+        models.Pergunta.pesquisa_id == pesquisa_id,
+    ).first()
+
+
+def _opcao_to_dict(opcao):
+    if hasattr(opcao, "model_dump"):
+        return opcao.model_dump()
+    return opcao.copy()
+
+
+def _normalize_option_text(texto) -> str:
+    return " ".join(str(texto or "").split())
+
+
+def _validate_question_options(
+    db: Session,
+    pesquisa_id: int,
+    pergunta_id: Optional[int],
+    opcoes,
+) -> List[dict]:
+    opcoes_data = [_opcao_to_dict(opcao) for opcao in opcoes or []]
+    textos_normalizados = []
+    opcao_ids = set()
+
+    for opcao_data in opcoes_data:
+        texto_normalizado = _normalize_option_text(opcao_data.get("texto"))
+        if not texto_normalizado:
+            raise HTTPException(status_code=422, detail="Texto da opcao e obrigatorio.")
+        textos_normalizados.append(texto_normalizado.casefold())
+
+        opcao_id = opcao_data.get("id")
+        if opcao_id is not None:
+            opcao_ids.add(opcao_id)
+
+    if len(textos_normalizados) != len(set(textos_normalizados)):
+        raise HTTPException(status_code=422, detail="Opcoes duplicadas no payload.")
+
+    if opcao_ids:
+        ids_validos = {
+            opcao_id
+            for opcao_id, in db.query(models.Opcao.id).filter(
+                models.Opcao.id.in_(opcao_ids),
+                models.Opcao.pergunta_id == pergunta_id,
+            ).all()
+        }
+        if ids_validos != opcao_ids:
+            raise HTTPException(status_code=404, detail="Opcao nao encontrada.")
+
+    _validate_proximas_perguntas(db, pesquisa_id, opcoes_data)
+
+    resultado = []
+    for opcao_data in opcoes_data:
+        opcao_limpa = opcao_data.copy()
+        opcao_limpa.pop("id", None)
+        opcao_limpa.pop("pergunta_id", None)
+        opcao_limpa["texto"] = _normalize_option_text(opcao_limpa["texto"])
+        resultado.append(opcao_limpa)
+    return resultado
+
+
+def _validate_proximas_perguntas(db: Session, pesquisa_id: int, opcoes) -> None:
+    proximas_ids = {
+        opcao_data.get("proxima_pergunta_id")
+        for opcao_data in (_opcao_to_dict(opcao) for opcao in opcoes or [])
+        if opcao_data.get("proxima_pergunta_id") is not None
+    }
+    if not proximas_ids:
+        return
+
+    ids_validos = {
+        pergunta_id
+        for pergunta_id, in db.query(models.Pergunta.id).filter(
+            models.Pergunta.pesquisa_id == pesquisa_id,
+            models.Pergunta.id.in_(proximas_ids),
+        ).all()
+    }
+    if ids_validos != proximas_ids:
+        raise HTTPException(status_code=404, detail="Pergunta não encontrada.")
+
+
+def update_pergunta(db: Session, pesquisa_id: int, pergunta_id: int, pergunta_in: schemas.PerguntaUpdate):
     # 1. Busca a pergunta existente
-    db_pergunta = db.query(models.Pergunta).filter(models.Pergunta.id == pergunta_id).first()
+    db_pergunta = get_pergunta(db, pesquisa_id=pesquisa_id, pergunta_id=pergunta_id)
     if not db_pergunta:
         return None
 
     # 2. Transforma os dados que vieram do React em dicionário
-    update_data = pergunta_in.dict(exclude_unset=True)
+    update_data = pergunta_in.model_dump(exclude_unset=True)
     update_data.pop("ordem", None)
 
     # 3. EXTRAI as opções para não quebrar o banco (Igual fizemos no Create)
     opcoes_data = None
     if 'opcoes' in update_data:
-        opcoes_data = update_data.pop('opcoes')
+        opcoes_data = _validate_question_options(
+            db,
+            pesquisa_id=pesquisa_id,
+            pergunta_id=pergunta_id,
+            opcoes=update_data.pop('opcoes') or [],
+        )
 
-    # 4. Atualiza apenas os dados de texto, tipo e obrigatoriedade
-    for key, value in update_data.items():
-        setattr(db_pergunta, key, value)
+    try:
+        for key, value in update_data.items():
+            setattr(db_pergunta, key, value)
 
-    db.commit()
-    db.refresh(db_pergunta)
+        if opcoes_data is not None:
+            db.query(models.Opcao).filter(
+                models.Opcao.pergunta_id == pergunta_id
+            ).delete(synchronize_session=False)
 
-    # 5. Atualiza as opções (Estratégia segura: apaga as antigas e recria as novas)
-    if opcoes_data is not None:
-        # Deleta as opções vinculadas a esta pergunta
-        db.query(models.Opcao).filter(models.Opcao.pergunta_id == pergunta_id).delete()
-        
-        # Cria as novas opções que vieram da edição
-        # Cria as novas opções que vieram da edição
-        for opt in opcoes_data:
-            opt_copy = opt.copy()
-            opt_copy.pop('id', None) # Já tínhamos feito isso
-            opt_copy.pop('pergunta_id', None) # <--- ADICIONE ESTA LINHA PARA SALVAR O DIA
-            
-            # Agora ele desempacota limpo e adiciona o pergunta_id apenas 1 vez
-            nova_opcao = models.Opcao(**opt_copy, pergunta_id=db_pergunta.id)
-            db.add(nova_opcao)
-            
+            for opt in opcoes_data:
+                db.add(models.Opcao(**opt, pergunta_id=db_pergunta.id))
+                db.flush()
+
         db.commit()
         db.refresh(db_pergunta)
+    except Exception:
+        db.rollback()
+        raise
 
     return db_pergunta
 
@@ -329,8 +499,8 @@ def reordenar_perguntas(db: Session, pesquisa_id: int, itens: List[schemas.Pergu
 
     if ids_invalidos:
         raise HTTPException(
-            status_code=400,
-            detail="Todas as perguntas devem pertencer à pesquisa informada."
+            status_code=404,
+            detail="Pergunta não encontrada."
         )
 
     nova_ordem = [pergunta for pergunta in perguntas if pergunta.id not in ids_enviados]
@@ -397,26 +567,92 @@ def delete_projeto(db: Session, *, db_obj: models.Projeto) -> models.Projeto:
 # COLETAS E RESPOSTAS
 # ==============================================================================
 
-def create_coleta(db: Session, coleta_in: schemas.ColetaCreate, pesquisa_id: int, agente_id: int):
+def _get_coleta_by_client_uuid(db: Session, company_id: int, client_uuid: str):
+    return db.query(models.Coleta).filter(
+        models.Coleta.company_id == company_id,
+        models.Coleta.client_uuid == client_uuid,
+    ).first()
+
+
+def _return_idempotent_coleta_or_reject(db_coleta, agente_id: int):
+    if db_coleta.agente_id != agente_id:
+        raise HTTPException(status_code=409, detail="Operacao de coleta em conflito.")
+    return db_coleta
+
+
+def _validate_collection_answers(
+    db: Session,
+    respostas,
+    pesquisa_id: int,
+    company_id: int,
+) -> None:
+    pergunta_ids = [resposta.pergunta_id for resposta in respostas]
+    if len(pergunta_ids) != len(set(pergunta_ids)):
+        raise HTTPException(status_code=422, detail="Pergunta duplicada no payload.")
+    if not pergunta_ids:
+        return
+
+    perguntas_validas = db.query(models.Pergunta.id).join(
+        models.Pesquisa,
+        models.Pesquisa.id == models.Pergunta.pesquisa_id,
+    ).join(
+        models.Projeto,
+        models.Projeto.id == models.Pesquisa.projeto_id,
+    ).filter(
+        models.Pergunta.id.in_(pergunta_ids),
+        models.Pergunta.pesquisa_id == pesquisa_id,
+        models.Pergunta.ativo.is_(True),
+        models.Projeto.company_id == company_id,
+    ).all()
+    ids_validos = {pergunta_id for pergunta_id, in perguntas_validas}
+    if ids_validos != set(pergunta_ids):
+        raise HTTPException(status_code=404, detail="Pergunta nao encontrada.")
+
+
+def create_coleta(
+    db: Session,
+    coleta_in: schemas.ColetaCreate,
+    pesquisa_id: int,
+    agente_id: int,
+    company_id: int,
+):
     # Coletas vêm do App Mobile. A validação de empresa geralmente é feita
     # garantindo que o Agente só baixou pesquisas da empresa dele.
     
+    client_uuid = str(coleta_in.client_uuid)
+    existing_coleta = _get_coleta_by_client_uuid(db, company_id, client_uuid)
+    if existing_coleta:
+        return _return_idempotent_coleta_or_reject(existing_coleta, agente_id)
+
+    _validate_collection_answers(
+        db=db,
+        respostas=coleta_in.respostas,
+        pesquisa_id=pesquisa_id,
+        company_id=company_id,
+    )
+
     # Converte lat/lon para GeoAlchemy Element
     ponto_inicio = None
     if coleta_in.localizacao_inicio:
-        ponto_inicio = from_shape(Point(coleta_in.localizacao_inicio.lon, coleta_in.localizacao_inicio.lat), srid=4326)
+        latitude_inicio = coleta_in.localizacao_inicio.lat
+        longitude_inicio = coleta_in.localizacao_inicio.lon
+        ponto_inicio = from_shape(Point(longitude_inicio, latitude_inicio), srid=4326)
         
     ponto_fim = None
     if coleta_in.localizacao_fim:
-        ponto_fim = from_shape(Point(coleta_in.localizacao_fim.lon, coleta_in.localizacao_fim.lat), srid=4326)
+        latitude_fim = coleta_in.localizacao_fim.lat
+        longitude_fim = coleta_in.localizacao_fim.lon
+        ponto_fim = from_shape(Point(longitude_fim, latitude_fim), srid=4326)
 
     ponto_endereco = coleta_in.localizacao_fim or coleta_in.localizacao_inicio
     endereco_estimado = None
     if ponto_endereco:
+        latitude_endereco = ponto_endereco.lat
+        longitude_endereco = ponto_endereco.lon
         try:
             endereco_estimado = geocoding.obter_endereco_por_coords(
-                ponto_endereco.lat,
-                ponto_endereco.lon
+                latitude_endereco,
+                longitude_endereco,
             )
         except Exception:
             endereco_estimado = "Endereço não identificado"
@@ -429,23 +665,34 @@ def create_coleta(db: Session, coleta_in: schemas.ColetaCreate, pesquisa_id: int
         endereco_estimado=endereco_estimado,
         pesquisa_id=pesquisa_id,
         agente_id=agente_id,
+        company_id=company_id,
+        client_uuid=client_uuid,
         foi_offline=coleta_in.foi_offline,
         status_sincronizacao="sincronizado"  # Sempre "sincronizado" quando chega via POST
     )
     db.add(db_coleta)
-    db.commit()
+    try:
+        db.flush()
+
+        for resp in coleta_in.respostas:
+            db.add(models.Resposta(
+                coleta_id=db_coleta.id,
+                pergunta_id=resp.pergunta_id,
+                valor_resposta=resp.valor_resposta,
+            ))
+
+        db.flush()
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing_coleta = _get_coleta_by_client_uuid(db, company_id, client_uuid)
+        if existing_coleta:
+            return _return_idempotent_coleta_or_reject(existing_coleta, agente_id)
+        raise
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(db_coleta)
-    
-    # Salvar Respostas
-    for resp in coleta_in.respostas:
-        db_resposta = models.Resposta(
-            coleta_id=db_coleta.id,
-            pergunta_id=resp.pergunta_id,
-            valor_resposta=resp.valor_resposta
-        )
-        db.add(db_resposta)
-    
-    db.commit()
     return db_coleta
 
 # ==============================================================================
@@ -524,7 +771,7 @@ def get_coletas_monitoramento(db: Session, pesquisa_id: int, current_user: model
 
     return db.query(
         models.Coleta.id,
-        models.Coleta.data_inicio,
+        models.Coleta.data_inicio_coleta,
         func.ST_AsGeoJSON(models.Coleta.localizacao_inicio).label("geojson_inicio"),
         models.Usuario.nome.label("agente_nome")
     ).join(models.Usuario, models.Coleta.agente_id == models.Usuario.id)\

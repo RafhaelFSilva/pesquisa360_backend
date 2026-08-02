@@ -5,7 +5,7 @@ from typing import Annotated
 
 from pesquisa360 import crud, schemas
 from pesquisa360.core import security
-from pesquisa360.core.dependencies import get_db
+from pesquisa360.core.dependencies import get_db, is_user_access_active
 
 router = APIRouter()
 
@@ -18,7 +18,11 @@ def login_for_access_token(
     user = crud.get_user_by_email(db, email=form_data.username)
     
     # Validação de senha usando o novo security.verify_password (Bcrypt)
-    if not user or not security.verify_password(form_data.password, user.senha_hash):
+    if (
+        not user
+        or not security.verify_password(form_data.password, user.senha_hash)
+        or not is_user_access_active(user)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="E-mail ou senha incorretos",

@@ -20,7 +20,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # 🔑 GARANTE QUE O POSTGIS EXISTA
-    op.execute("CREATE EXTENSION IF NOT EXISTS postgis")
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute("CREATE EXTENSION IF NOT EXISTS postgis")
 
     # ---- tabela coletas ----
     op.create_table(

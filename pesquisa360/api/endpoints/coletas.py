@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -7,6 +8,7 @@ import json
 from pesquisa360 import crud, schemas
 from pesquisa360.db import models
 from pesquisa360.core.dependencies import get_db, get_current_user
+from pesquisa360.core.utils import web_point
 
 router = APIRouter()
 
@@ -68,13 +70,18 @@ def submit_coleta(
         db=db,
         coleta_in=coleta_in,
         pesquisa_id=pesquisa_id,
-        agente_id=current_user.id
+        agente_id=current_user.id,
+        company_id=current_user.company_id,
     )
 
     # A associação do agente vem do token do usuário autenticado,
     # não do payload de coleta.
 
-    return {"msg": "Coleta recebida com sucesso", "id": db_coleta.id}
+    return {
+        "msg": "Coleta recebida com sucesso",
+        "id": db_coleta.id,
+        "client_uuid": db_coleta.client_uuid,
+    }
 
 @router.get("/pesquisas/{pesquisa_id}/coletas/monitoramento/")
 def read_coletas_monitoramento(
@@ -132,17 +139,11 @@ def read_coletas_monitoramento(
     for coleta in coletas_query:
         localizacao_inicio = None
         if coleta.lat_inicio is not None and coleta.lng_inicio is not None:
-            localizacao_inicio = {
-                "lat": float(coleta.lat_inicio),
-                "lng": float(coleta.lng_inicio),
-            }
+            localizacao_inicio = web_point(coleta.lat_inicio, coleta.lng_inicio)
 
         localizacao_fim = None
         if coleta.lat_fim is not None and coleta.lng_fim is not None:
-            localizacao_fim = {
-                "lat": float(coleta.lat_fim),
-                "lng": float(coleta.lng_fim),
-            }
+            localizacao_fim = web_point(coleta.lat_fim, coleta.lng_fim)
 
         resultado.append({
             "id": coleta.id,
@@ -230,6 +231,8 @@ def read_coletas_por_pesquisa(
     *,
     db: Session = Depends(get_db),
     pesquisa_id: int,
+    data_inicio_coleta: datetime | None = None,
+    data_fim_coleta: datetime | None = None,
     current_user: models.Usuario = Depends(get_current_user)
 ):
     """
@@ -243,32 +246,40 @@ def read_coletas_por_pesquisa(
 
     # 2. Busca Coletas (Manual para ter performance com GIS)
     # Como já validamos a pesquisa acima, podemos buscar as coletas pelo ID da pesquisa com segurança.
-    coletas_query = (
-        db.query(
-            models.Coleta.id,
-            models.Coleta.pesquisa_id,
-            models.Coleta.agente_id,
-            models.Coleta.data_inicio,
-            models.Coleta.data_fim,
-            models.Coleta.foi_offline,
-            func.ST_Y(models.Coleta.localizacao_inicio).label("lat_inicio"),
-            func.ST_X(models.Coleta.localizacao_inicio).label("lon_inicio"),
-            func.ST_Y(models.Coleta.localizacao_fim).label("lat_fim"),
-            func.ST_X(models.Coleta.localizacao_fim).label("lon_fim"),
-        )
-        .filter(models.Coleta.pesquisa_id == pesquisa_id)
-        .all()
+    coletas_query = db.query(
+        models.Coleta.id,
+        models.Coleta.pesquisa_id,
+        models.Coleta.agente_id,
+        models.Coleta.data_inicio_coleta,
+        models.Coleta.data_fim_coleta,
+        models.Coleta.foi_offline,
+        func.ST_Y(models.Coleta.localizacao_inicio).label("latitude_inicio"),
+        func.ST_X(models.Coleta.localizacao_inicio).label("longitude_inicio"),
+        func.ST_Y(models.Coleta.localizacao_fim).label("latitude_fim"),
+        func.ST_X(models.Coleta.localizacao_fim).label("longitude_fim"),
     )
+    coletas_query = coletas_query.filter(models.Coleta.pesquisa_id == pesquisa_id)
+
+    if data_inicio_coleta is not None:
+        coletas_query = coletas_query.filter(
+            models.Coleta.data_inicio_coleta >= data_inicio_coleta
+        )
+    if data_fim_coleta is not None:
+        coletas_query = coletas_query.filter(
+            models.Coleta.data_fim_coleta <= data_fim_coleta
+        )
+
+    coletas_query = coletas_query.order_by(models.Coleta.data_inicio_coleta).all()
 
     resultado = []
     for c in coletas_query:
         localizacao_inicio = None
-        if c.lat_inicio is not None and c.lon_inicio is not None:
-            localizacao_inicio = {"lat": c.lat_inicio, "lon": c.lon_inicio}
+        if c.latitude_inicio is not None and c.longitude_inicio is not None:
+            localizacao_inicio = web_point(c.latitude_inicio, c.longitude_inicio)
             
         localizacao_fim = None
-        if c.lat_fim is not None and c.lon_fim is not None:
-            localizacao_fim = {"lat": c.lat_fim, "lon": c.lon_fim}
+        if c.latitude_fim is not None and c.longitude_fim is not None:
+            localizacao_fim = web_point(c.latitude_fim, c.longitude_fim)
 
         # Busca respostas (Isso pode ser otimizado com joinedload no futuro)
         respostas = db.query(models.Resposta).filter(models.Resposta.coleta_id == c.id).all()
@@ -286,8 +297,8 @@ def read_coletas_por_pesquisa(
             "id": c.id,
             "pesquisa_id": c.pesquisa_id,
             "agente_id": c.agente_id,
-            "data_inicio_coleta": c.data_inicio,
-            "data_fim_coleta": c.data_fim,
+            "data_inicio_coleta": c.data_inicio_coleta,
+            "data_fim_coleta": c.data_fim_coleta,
             "foi_offline": c.foi_offline,
             "localizacao_inicio": localizacao_inicio,
             "localizacao_fim": localizacao_fim,

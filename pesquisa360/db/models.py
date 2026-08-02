@@ -1,5 +1,5 @@
 # pesquisa360/db/models.py
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_, Float
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_, Float, UniqueConstraint
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.dialects.postgresql import JSONB
 from geoalchemy2 import Geometry
@@ -12,8 +12,8 @@ class Company(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    cnpj = Column(String, nullable=True)
-    logo_url = Column(String, nullable=True)
+    cnpj = Column(String(14), nullable=True, unique=True)
+    logo_url = Column(String(2048), nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -170,9 +170,15 @@ class Opcao(Base):
 
 class Coleta(Base):
     __tablename__ = "coletas"
+    __table_args__ = (
+        UniqueConstraint("company_id", "client_uuid", name="uq_coletas_company_client_uuid"),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False)
     agente_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    client_uuid = Column(String(36), nullable=False)
 
     # --- NOVOS CAMPOS DE AUDITORIA ---
     foi_offline = Column(Boolean, default=False)  # Indica se o app estava offline

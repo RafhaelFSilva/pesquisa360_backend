@@ -26,7 +26,7 @@ def upgrade() -> None:
         sa.Column('cnpj', sa.String(), nullable=True),
         sa.Column('logo_url', sa.String(), nullable=True),
         sa.Column('is_active', sa.Boolean(), nullable=True),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=True),
         sa.PrimaryKeyConstraint('id')
     )
     
@@ -43,12 +43,16 @@ def upgrade() -> None:
     op.execute("UPDATE projetos SET company_id = (SELECT id FROM companies LIMIT 1)")
 
     # 5. Agora que todos têm dados, alteramos para NOT NULL
-    op.alter_column('usuarios', 'company_id', nullable=False)
-    op.alter_column('projetos', 'company_id', nullable=False)
-
-    # 6. Cria as Foreign Keys (Chaves Estrangeiras)
-    op.create_foreign_key('fk_usuarios_company', 'usuarios', 'companies', ['company_id'], ['id'])
-    op.create_foreign_key('fk_projetos_company', 'projetos', 'companies', ['company_id'], ['id'])
+    with op.batch_alter_table('usuarios') as batch_op:
+        batch_op.alter_column('company_id', existing_type=sa.Integer(), nullable=False)
+        batch_op.create_foreign_key(
+            'fk_usuarios_company', 'companies', ['company_id'], ['id']
+        )
+    with op.batch_alter_table('projetos') as batch_op:
+        batch_op.alter_column('company_id', existing_type=sa.Integer(), nullable=False)
+        batch_op.create_foreign_key(
+            'fk_projetos_company', 'companies', ['company_id'], ['id']
+        )
 
 def downgrade() -> None:
     """Downgrade schema."""

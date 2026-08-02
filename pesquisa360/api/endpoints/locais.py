@@ -5,6 +5,7 @@ from sqlalchemy import func
 from geoalchemy2.shape import from_shape
 from shapely.geometry import Point
 from pesquisa360.core.dependencies import get_db, get_current_user
+from pesquisa360.core.utils import geojson_point
 from pesquisa360.db import models
 from pesquisa360.utils.importadores import processar_csv_locais, processar_geojson_bairros
 import shutil
@@ -269,10 +270,7 @@ def get_coletas_geojson(
     for r in resultados:
         features.append({
             "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [r.lon, r.lat]
-            },
+            "geometry": geojson_point(longitude=r.lon, latitude=r.lat),
             "properties": {
                 "id": r.id,
                 "voto": r.valor_resposta

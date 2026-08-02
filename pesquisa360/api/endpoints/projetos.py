@@ -8,7 +8,8 @@ from sqlalchemy import func
 
 from pesquisa360 import crud, schemas
 from pesquisa360.db import models
-from pesquisa360.core.dependencies import get_db, get_current_user
+from pesquisa360.core.dependencies import get_db, get_current_user, is_superadmin
+from pesquisa360.core.utils import web_point
 from pesquisa360.question_types import normalize_question_type
 
 router = APIRouter()
@@ -125,7 +126,22 @@ def create_projeto(
     current_user: models.Usuario = Depends(get_current_user)
 ):
     """Cria projeto vinculado à empresa do usuário."""
-    return crud.create_projeto(db=db, projeto=projeto, current_user=current_user)
+    if is_superadmin(current_user):
+        if projeto.company_id is None or not crud.get_company(
+            db=db,
+            company_id=projeto.company_id,
+        ):
+            raise HTTPException(status_code=404, detail="Empresa nao encontrada.")
+        company_id = projeto.company_id
+    else:
+        company_id = current_user.company_id
+
+    return crud.create_projeto(
+        db=db,
+        projeto=projeto,
+        current_user=current_user,
+        company_id=company_id,
+    )
 
 @router.get("/projetos/{projeto_id}", response_model=schemas.Projeto)
 def read_projeto(
@@ -148,19 +164,20 @@ def update_projeto(
     current_user: models.Usuario = Depends(get_current_user)
 ):
     """Atualiza um projeto específico (com validação de empresa)."""
-    db_projeto = crud.get_projeto(db=db, projeto_id=projeto_id, current_user=current_user)
+    db_projeto = crud.get_projeto(
+        db=db,
+        projeto_id=projeto_id,
+        current_user=current_user,
+        allow_global=is_superadmin(current_user),
+    )
     if db_projeto is None:
         raise HTTPException(status_code=404, detail="Projeto não encontrado")
 
-    update_data = projeto_update.model_dump(exclude_unset=True)
-    update_data.pop("company_id", None)
-
-    for key, value in update_data.items():
-        setattr(db_projeto, key, value)
-
-    db.commit()
-    db.refresh(db_projeto)
-    return db_projeto
+    return crud.update_projeto(
+        db=db,
+        db_projeto=db_projeto,
+        projeto_update=projeto_update,
+    )
 
 # --- Rotas de Pesquisas ---
 
@@ -273,7 +290,7 @@ def update_pesquisa_geofence(
         if cerca_str:
             geojson = json.loads(cerca_str)
             coords = geojson.get("coordinates", [[]])[0]  # Primeiro ring do Polygon
-            cerca_list = [{"lat": point[1], "lng": point[0]} for point in coords[:-1]]  # Excluir último ponto se fechado
+            cerca_list = [web_point(point[1], point[0]) for point in coords[:-1]]  # Excluir último ponto se fechado
     
     return {
         "id": db_pesquisa.id,
@@ -309,7 +326,7 @@ def get_pesquisa_geofence(
         if cerca_str:
             geojson = json.loads(cerca_str)
             coords = geojson.get("coordinates", [[]])[0]  # Primeiro ring do Polygon
-            cerca_list = [{"lat": point[1], "lng": point[0]} for point in coords[:-1]]  # Excluir último ponto se fechado
+            cerca_list = [web_point(point[1], point[0]) for point in coords[:-1]]  # Excluir último ponto se fechado
 
     return {
         "id": db_pesquisa.id,
@@ -400,7 +417,15 @@ def update_pergunta(
 ):
     """Atualiza uma pergunta específica."""
     check_pesquisa_access(db, pesquisa_id, current_user)
-    return crud.update_pergunta(db=db, pergunta_id=pergunta_id, pergunta_in=pergunta_in)
+    pergunta = crud.update_pergunta(
+        db=db,
+        pesquisa_id=pesquisa_id,
+        pergunta_id=pergunta_id,
+        pergunta_in=pergunta_in,
+    )
+    if not pergunta:
+        raise HTTPException(status_code=404, detail="Pergunta não encontrada.")
+    return pergunta
 
 @router.delete("/pesquisas/{pesquisa_id}/perguntas/{pergunta_id}")
 def delete_pergunta_endpoint(
@@ -551,7 +576,7 @@ def create_setor_by_projeto_pesquisa(
             coords_geo = geojson.get("coordinates", [[]])[0]
             if coords_geo and coords_geo[0] == coords_geo[-1]:
                 coords_geo = coords_geo[:-1]
-            poligono = [{"lat": p[1], "lng": p[0]} for p in coords_geo]
+            poligono = [web_point(p[1], p[0]) for p in coords_geo]
         else:
             poligono = []
     else:

@@ -3,6 +3,9 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, List, Any, Union, Dict
 from datetime import date, datetime
+from uuid import UUID
+import re
+from urllib.parse import urlparse
 #from geoalchemy2.elements import WKBElement # <-- NOVA IMPORTAÇÃO
 #from shapely.wkb import loads # <-- NOVA IMPORTAÇÃO
 
@@ -24,8 +27,13 @@ class Resposta(RespostaBase):
 
 # Schema para a ENTRADA de dados do app mobile
 class Point(BaseModel):
-    lat: float
-    lon: float
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+
+
+class WebPoint(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
 
 class ColetaBase(BaseModel):
     localizacao_inicio: Optional[Point] = None
@@ -37,12 +45,14 @@ class ColetaBase(BaseModel):
 
 class ColetaCreate(ColetaBase):
     respostas: List[RespostaCreate]
+    client_uuid: UUID
     # Garantimos que data_inicio seja obrigatória na criação, se desejar
     data_inicio_coleta: datetime
 
 # Schema de SAÍDA simplificado. A conversão da geolocalização será feita manualmente no endpoint.
 class Coleta(BaseModel):
     id: int
+    client_uuid: UUID
     pesquisa_id: int
     agente_id: int
     status_sincronizacao: str
@@ -61,8 +71,8 @@ class ColetaMonitoramento(BaseModel):
     agente_nome: Optional[str] = None
     data_inicio_coleta: datetime
     data_fim_coleta: Optional[datetime]
-    localizacao_inicio: Optional[Point]
-    localizacao_fim: Optional[Point]
+    localizacao_inicio: Optional[WebPoint]
+    localizacao_fim: Optional[WebPoint]
     inconformidade_localizacao: bool
     endereco_estimado: Optional[str] = None
     foi_offline: bool = False
@@ -162,6 +172,7 @@ class ProjetoBase(BaseModel):
 
 class ProjetoCreate(ProjetoBase):
     coordenador_id: int
+    company_id: Optional[int] = None
 
 class PerfilBase(BaseModel):
     nome: str
@@ -178,6 +189,7 @@ class UsuarioBase(BaseModel):
 
 class UsuarioCreate(UsuarioBase):
     senha: str
+    company_id: Optional[int] = None
 
 class UsuarioAdminCreate(BaseModel):
     email: EmailStr
@@ -194,10 +206,19 @@ class UsuarioAdminUpdate(BaseModel):
     company_id: Optional[int] = None
     senha: Optional[str] = None
 
+class UsuarioPasswordReset(BaseModel):
+    senha: str
+
 class Perfil(PerfilBase):
     id: int
     class Config:
         from_attributes = True
+
+
+class PerfilAtribuivel(BaseModel):
+    id: int
+    code: str
+    nome: str
 
 class ProjetoParaUsuario(ProjetoBase):
     id: int
@@ -218,11 +239,69 @@ class Usuario(UsuarioBase):
     class Config:
         from_attributes = True
 
+def normalize_cnpj(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = re.sub(r"[.\-/\s]", "", str(value).strip())
+    if not normalized:
+        return None
+    if not normalized.isdigit() or len(normalized) != 14:
+        raise ValueError("CNPJ deve conter 14 digitos.")
+    if len(set(normalized)) == 1:
+        raise ValueError("CNPJ invalido.")
+
+    def check_digit(base: str, weights: List[int]) -> str:
+        remainder = sum(int(digit) * weight for digit, weight in zip(base, weights)) % 11
+        return "0" if remainder < 2 else str(11 - remainder)
+
+    first = check_digit(normalized[:12], [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2])
+    second = check_digit(normalized[:12] + first, [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2])
+    if normalized[-2:] != first + second:
+        raise ValueError("CNPJ invalido.")
+    return normalized
+
+
+def normalize_company_name(value: str | None) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError("Nome da empresa e obrigatorio.")
+    return normalized
+
+
+def normalize_logo_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if len(normalized) > 2048:
+        raise ValueError("URL do logo excede o tamanho maximo.")
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("URL do logo deve usar HTTP ou HTTPS.")
+    return normalized
+
+
 class CompanyBase(BaseModel):
     name: str
     cnpj: Optional[str] = None
     logo_url: Optional[str] = None
     is_active: bool = True
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value):
+        return normalize_company_name(value)
+
+    @field_validator("cnpj", mode="before")
+    @classmethod
+    def validate_cnpj(cls, value):
+        return normalize_cnpj(value)
+
+    @field_validator("logo_url", mode="before")
+    @classmethod
+    def validate_logo_url(cls, value):
+        return normalize_logo_url(value)
 
 class CompanyCreate(CompanyBase):
     pass
@@ -232,6 +311,21 @@ class CompanyUpdate(BaseModel):
     cnpj: Optional[str] = None
     logo_url: Optional[str] = None
     is_active: Optional[bool] = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value):
+        return normalize_company_name(value)
+
+    @field_validator("cnpj", mode="before")
+    @classmethod
+    def validate_cnpj(cls, value):
+        return normalize_cnpj(value)
+
+    @field_validator("logo_url", mode="before")
+    @classmethod
+    def validate_logo_url(cls, value):
+        return normalize_logo_url(value)
 
 class CompanyRead(CompanyBase):
     id: int
@@ -251,6 +345,19 @@ class SetorBase(BaseModel):
 class SetorCreate(SetorBase):
     # Receberemos a geometria como uma lista de coordenadas [[lat, lon], ...]
     geometria_coords: List[List[float]] 
+
+    @field_validator("geometria_coords")
+    @classmethod
+    def validar_geometria_coords(cls, coords: List[List[float]]) -> List[List[float]]:
+        for coord in coords:
+            if len(coord) != 2:
+                raise ValueError("Cada coordenada deve conter latitude e longitude.")
+            latitude, longitude = coord
+            if not -90 <= latitude <= 90:
+                raise ValueError("Latitude deve estar entre -90 e 90.")
+            if not -180 <= longitude <= 180:
+                raise ValueError("Longitude deve estar entre -180 e 180.")
+        return coords
 
 class SetorGeofenceCreate(BaseModel):
     nome: str
@@ -275,6 +382,11 @@ class SetorGeofenceCreate(BaseModel):
                     raise ValueError("Coordenada inválida: espere {lat, lng} ou [lat, lng].")
             else:
                 parsed.append([float(item[0]), float(item[1])])
+        for latitude, longitude in parsed:
+            if not -90 <= latitude <= 90:
+                raise ValueError("Latitude deve estar entre -90 e 90.")
+            if not -180 <= longitude <= 180:
+                raise ValueError("Longitude deve estar entre -180 e 180.")
         return parsed
 
 class Setor(SetorBase):
@@ -356,6 +468,8 @@ class ProjetoUpdate(BaseModel):
     status: Optional[str] = None
     data_inicio: Optional[date] = None
     data_fim: Optional[date] = None
+    coordenador_id: Optional[int] = None
+    company_id: Optional[int] = None
 
 # --- NOVOS SCHEMAS PARA RELATÓRIOS AVANÇADOS ---
 
@@ -394,8 +508,8 @@ class CrosstabResponse(BaseModel):
     dados: List[CrosstabRow]
 
 class Coordenada(BaseModel):
-    lat: float
-    lng: float
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
 
 class GeofenceUpdate(BaseModel):
     cerca_eletronica: List[Coordenada]
@@ -445,8 +559,8 @@ class LocalVotacaoBase(BaseModel):
     endereco: str
 
 class LocalVotacaoCreate(LocalVotacaoBase):
-    latitude: float
-    longitude: float
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
     secoes_json: List[dict]
 
 class LocalVotacao(LocalVotacaoBase):

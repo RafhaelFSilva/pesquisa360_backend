@@ -103,3 +103,7 @@ Api.txt
 
 # Runtime uploads
 static/uploads/
+/uploads/
+
+# Local database backups
+/backups/

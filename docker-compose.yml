@@ -1,21 +1,17 @@
-version: '3.8'
-
 services:
   db:
     image: postgis/postgis:15-3.3 # Imagem oficial com PostgreSQL e PostGIS
     container_name: pesquisa360_db
-    env_file:
-      - .env
     environment:
-      - POSTGRES_USER=user360
-      - POSTGRES_PASSWORD=pass360
-      - POSTGRES_DB=pesquisa360_db
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data/
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user360 -d pesquisa360_db"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -28,6 +24,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      - ./uploads:/app/uploads
       - .:/app # Mapeia o código para hot-reload
     depends_on:
       db:

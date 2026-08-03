@@ -75,6 +75,7 @@ server_id
 pesquisa_id
 agente_id
 company_id
+client_uuid
 data_inicio_coleta
 data_fim_coleta
 localizacao_inicio_lat
@@ -133,11 +134,15 @@ POST /pesquisas/{pesquisa_id}/coletas/
 Regras:
 
 - enviar com token JWT;
+- gerar `client_uuid` uma única vez e persistir antes do primeiro upload;
+- reutilizar o mesmo `client_uuid` em todos os retries;
+- atribuir e persistir um `client_uuid` antes de enviar coletas legadas pendentes;
 - não enviar `company_id`;
 - não confiar em `agente_id` para autorização;
 - backend deve vincular `agente_id=current_user.id`;
 - se falhar, manter coleta como pendente;
 - se sucesso, salvar `server_id` e marcar sincronizada.
+- o backend usa `company_id + client_uuid` para idempotência e não duplica respostas em reenvio.
 
 ## 9. Geofence e setores
 

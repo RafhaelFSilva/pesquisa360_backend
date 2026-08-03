@@ -165,6 +165,9 @@ Crosstab:
 - [ ] Abrir formulário offline.
 - [ ] Preencher coleta offline.
 - [ ] Capturar GPS início/fim.
+- [ ] Nova coleta persiste um `client_uuid` único.
+- [ ] Retry reutiliza o mesmo `client_uuid` e não cria duplicidade.
+- [ ] Coleta legada pendente recebe backfill persistente de `client_uuid`.
 - [ ] Sincronizar.
 - [ ] Coleta aparece no monitoramento.
 - [ ] Agente correto.

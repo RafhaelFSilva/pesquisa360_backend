@@ -59,6 +59,8 @@ Consequências:
 
 - banco local com Drift/SQLite;
 - upload posterior de coletas;
+- `client_uuid` é gerado uma vez no Mobile, persistido localmente e reutilizado em retries;
+- o Backend garante idempotência por `company_id + client_uuid` e retorna a coleta existente em reenvios do mesmo agente;
 - `foi_offline` representa condição no momento da coleta;
 - sincronização explícita.
 

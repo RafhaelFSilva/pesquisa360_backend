@@ -236,10 +236,12 @@ Endpoint usado pelo mobile para sincronizar coleta.
 
 ```json
 {
+  "client_uuid": "27f7d4a3-5477-4ac3-8df1-4b73bd702270",
   "data_inicio_coleta": "2026-05-03T09:00:00",
   "data_fim_coleta": "2026-05-03T09:04:00",
   "localizacao_inicio": { "lat": 0.0405, "lon": -51.1352 },
   "localizacao_fim": { "lat": 0.0406, "lon": -51.1351 },
+  "foi_offline": true,
   "respostas": [
     { "pergunta_id": 13, "valor_resposta": "Candidato A" }
   ]
@@ -249,8 +251,11 @@ Endpoint usado pelo mobile para sincronizar coleta.
 **Regras:**
 
 - `pesquisa_id` vem da URL.
+- `client_uuid` é um UUID obrigatório, gerado e persistido uma única vez pelo mobile.
+- Retries reutilizam o mesmo `client_uuid`; dentro da empresa, o backend retorna a coleta já criada sem duplicar respostas.
 - `agente_id` deve ser `current_user.id`.
 - `company_id` não vem do payload.
+- `localizacao_inicio` e `localizacao_fim` podem ser nulas.
 - Backend calcula `inconformidade_localizacao`.
 - Backend pode preencher `endereco_estimado`.
 

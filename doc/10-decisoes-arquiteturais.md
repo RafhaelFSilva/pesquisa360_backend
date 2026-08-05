@@ -157,3 +157,11 @@ Quando uma rota é ajustada, atualizar:
 - `02-contratos-api.md`;
 - `09-checklist-testes.md`;
 - `08-roadmap.md`, se aplicável.
+
+## ADR-016 — Importação administrativa de Shapefile por CLI
+
+Importação administrativa de Shapefile por CLI, convertida para `Polygon`
+EPSG:4326 e submetida às mesmas regras de tenant da aplicação. A ferramenta
+reutiliza o contrato interno e o CRUD de criação de setor, sem endpoint ou
+migration novos. `MultiPolygon` é rejeitado enquanto a coluna permanecer
+`Geometry("POLYGON", srid=4326)`.

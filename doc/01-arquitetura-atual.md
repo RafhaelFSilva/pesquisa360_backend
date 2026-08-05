@@ -60,9 +60,14 @@ pesquisa360/
     session.py
   utils/
     geocoding.py
+  services/
+    setor_shapefile_import.py
   crud.py
   schemas.py
 migrations/
+scripts/
+  importar_setor_shapefile.py
+  importar_setor_shapefile.sh
 ```
 
 ### Responsabilidades
@@ -76,6 +81,8 @@ migrations/
 | `dependencies.py` | `get_db`, `get_current_user`, validações de autenticação |
 | `security.py` | Hash de senha, criação e validação de token |
 | `utils/geocoding.py` | Geocoding reverso por coordenadas |
+| `services/setor_shapefile_import.py` | Validacao e conversao pura de Shapefile para Polygon EPSG:4326 |
+| `scripts/importar_setor_shapefile.*` | Importacao administrativa que reutiliza o CRUD de setores |
 
 ### Regras
 

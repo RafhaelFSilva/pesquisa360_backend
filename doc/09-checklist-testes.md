@@ -106,6 +106,17 @@ flutter test
 - [ ] Recarregar mantém setores restantes.
 - [ ] Controles Leaflet não duplicam.
 
+- [ ] CLI lista apenas gerente/superadmin ativo com tenant ativo.
+- [ ] CLI restringe projeto, pesquisa ativa e agente ao tenant selecionado.
+- [ ] Dry-run valida arquivo, CRS, geometria, duplicidade e nao grava setor.
+- [ ] Polygon EPSG:4326 e aceito; MultiPolygon e uniao desconexa sao rejeitados.
+- [ ] Importacao confirmada persiste `meta`, `tolerancia` e `geometria` pelo CRUD existente.
+- [ ] Editar nome, meta, tolerância e agente preserva o ID do setor.
+- [ ] Editar vértices persiste o novo Polygon EPSG:4326.
+- [ ] Salvar sem alterar o mapa preserva a geometria existente.
+- [ ] Projeto, pesquisa, setor ou agente de outro tenant retorna `404`.
+- [ ] Polygon inválido não deixa alterações parciais no setor.
+
 ## 9. Seed de coletas
 
 - [ ] Criar 100 coletas via API real.

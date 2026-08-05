@@ -104,6 +104,8 @@ Heartbeat mobile:
 
 ### Setores e cotas
 
+- concluido: importacao administrativa de Shapefile por CLI, restrita a
+  `Polygon` EPSG:4326 e protegida pelas regras de tenant existentes;
 - associar coleta ao setor;
 - calcular progresso por setor;
 - alertar cota atingida;

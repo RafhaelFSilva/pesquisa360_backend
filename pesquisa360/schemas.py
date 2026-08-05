@@ -389,6 +389,51 @@ class SetorGeofenceCreate(BaseModel):
                 raise ValueError("Longitude deve estar entre -180 e 180.")
         return parsed
 
+
+class SetorUpdate(BaseModel):
+    nome: Optional[str] = None
+    meta: Optional[int] = None
+    agente_id: Optional[int] = None
+    tolerancia_metros: Optional[int] = None
+    geometria: Optional[List[dict]] = None
+    poligono: Optional[List[dict]] = None
+
+    @field_validator("nome")
+    @classmethod
+    def validar_nome(cls, value: Optional[str]) -> str:
+        if value is None or not value.strip():
+            raise ValueError("Nome do setor e obrigatorio quando informado.")
+        return value.strip()
+
+    @field_validator("meta")
+    @classmethod
+    def validar_meta(cls, value: Optional[int]) -> int:
+        if value is None or value <= 0:
+            raise ValueError("Meta deve ser um inteiro positivo quando informada.")
+        return value
+
+    @field_validator("tolerancia_metros")
+    @classmethod
+    def validar_tolerancia(cls, value: Optional[int]) -> int:
+        if value is None or value < 0:
+            raise ValueError("Tolerancia deve ser maior ou igual a zero quando informada.")
+        return value
+
+    def get_coords(self) -> Optional[List[List[float]]]:
+        geometry_fields = {"geometria", "poligono"}
+        if not geometry_fields.intersection(self.model_fields_set):
+            return None
+
+        coords = SetorGeofenceCreate(
+            nome="validacao",
+            meta=1,
+            geometria=self.geometria,
+            poligono=self.poligono,
+        ).get_coords()
+        if len(coords) < 3:
+            raise ValueError("O poligono deve conter pelo menos tres pontos.")
+        return coords
+
 class Setor(SetorBase):
     id: int
     pesquisa_id: int

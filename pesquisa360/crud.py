@@ -7,12 +7,12 @@ from fastapi import HTTPException
 from typing import List, Optional
 from .utils import geocoding
 from geopy.geocoders import Nominatim
-from sqlalchemy.orm import Session, aliased, joinedload 
+from sqlalchemy.orm import Session, aliased, joinedload, load_only
 from sqlalchemy import func, Text, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import text, bindparam
 from geoalchemy2.shape import from_shape
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
 from .db import models
 from . import schemas
 from .core import security
@@ -699,6 +699,15 @@ def create_coleta(
 # SETORES E MISSÕES
 # ==============================================================================
 
+def _setor_polygon_wkt(coords: List[List[float]]) -> str:
+    if len(coords) < 3 or len({(p[0], p[1]) for p in coords}) < 3:
+        raise ValueError("O poligono deve conter pelo menos tres pontos distintos.")
+
+    polygon = Polygon([(p[1], p[0]) for p in coords])
+    if polygon.is_empty or not polygon.is_valid or polygon.geom_type != "Polygon":
+        raise ValueError("Polygon invalido.")
+    return polygon.wkt
+
 def create_setor(db: Session, setor_in: schemas.SetorCreate, pesquisa_id: int, current_user: models.Usuario):
     # Valida acesso à pesquisa através do projeto
     # (Juntando tabelas para validar empresa numa query só)
@@ -709,13 +718,7 @@ def create_setor(db: Session, setor_in: schemas.SetorCreate, pesquisa_id: int, c
     if not pesquisa_valida:
         raise Exception("Acesso negado à pesquisa.")
 
-    # Monta o WKT do Polígono
-    coords = setor_in.geometria_coords
-    if coords[0] != coords[-1]:
-        coords.append(coords[0])
-        
-    coords_str = ", ".join([f"{p[1]} {p[0]}" for p in coords]) # PostGIS usa Lon Lat
-    wkt = f"POLYGON(({coords_str}))"
+    wkt = _setor_polygon_wkt(setor_in.geometria_coords)
 
     db_setor = models.Setor(
         nome=setor_in.nome,
@@ -728,6 +731,87 @@ def create_setor(db: Session, setor_in: schemas.SetorCreate, pesquisa_id: int, c
     db.add(db_setor)
     db.commit()
     db.refresh(db_setor)
+    return db_setor
+
+
+def update_setor(
+    db: Session,
+    projeto_id: int,
+    pesquisa_id: int,
+    setor_id: int,
+    setor_update: schemas.SetorUpdate,
+    current_user: models.Usuario,
+):
+    projeto = db.query(models.Projeto.id).filter(
+        models.Projeto.id == projeto_id,
+        models.Projeto.company_id == current_user.company_id,
+    ).first()
+    if not projeto:
+        raise HTTPException(status_code=404, detail="Projeto nao encontrado.")
+
+    pesquisa = db.query(models.Pesquisa.id).filter(
+        models.Pesquisa.id == pesquisa_id,
+        models.Pesquisa.projeto_id == projeto_id,
+    ).first()
+    if not pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa nao encontrada.")
+
+    db_setor = (
+        db.query(models.Setor)
+        .options(
+            load_only(
+                models.Setor.id,
+                models.Setor.nome,
+                models.Setor.meta,
+                models.Setor.tolerancia,
+                models.Setor.pesquisa_id,
+                models.Setor.agente_id,
+            )
+        )
+        .filter(
+            models.Setor.id == setor_id,
+            models.Setor.pesquisa_id == pesquisa_id,
+        )
+        .first()
+    )
+    if not db_setor:
+        raise HTTPException(status_code=404, detail="Setor nao encontrado.")
+
+    fields_set = setor_update.model_fields_set
+    if "agente_id" in fields_set and setor_update.agente_id is not None:
+        agente = db.query(models.Usuario.id).join(models.Perfil).filter(
+            models.Usuario.id == setor_update.agente_id,
+            models.Usuario.company_id == current_user.company_id,
+            models.Usuario.ativo.is_(True),
+            models.Perfil.nome.ilike("%agente%"),
+        ).first()
+        if not agente:
+            raise HTTPException(status_code=404, detail="Agente nao encontrado.")
+
+    coords = setor_update.get_coords()
+    geometry_wkt = _setor_polygon_wkt(coords) if coords is not None else None
+
+    if "nome" in fields_set:
+        db_setor.nome = setor_update.nome
+    if "meta" in fields_set:
+        db_setor.meta = setor_update.meta
+    if "tolerancia_metros" in fields_set:
+        db_setor.tolerancia = setor_update.tolerancia_metros
+    if "agente_id" in fields_set:
+        db_setor.agente_id = setor_update.agente_id
+    if geometry_wkt is not None:
+        db_setor.geometria = func.ST_GeomFromText(geometry_wkt, 4326)
+
+    db.add(db_setor)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(
+        db_setor,
+        attribute_names=["id", "nome", "meta", "tolerancia", "pesquisa_id", "agente_id"],
+    )
     return db_setor
 
 def get_setores_by_pesquisa(db: Session, pesquisa_id: int):

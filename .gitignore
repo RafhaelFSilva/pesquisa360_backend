@@ -107,3 +107,8 @@ static/uploads/
 
 # Local database backups
 /backups/
+
+# Shapefiles operacionais de importacao (documentacao da pasta permanece rastreavel)
+/data/imports/setores/*
+!/data/imports/setores/.gitkeep
+!/data/imports/setores/README.md

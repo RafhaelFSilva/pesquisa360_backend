@@ -8,7 +8,12 @@ from sqlalchemy import func
 
 from pesquisa360 import crud, schemas
 from pesquisa360.db import models
-from pesquisa360.core.dependencies import get_db, get_current_user, is_superadmin
+from pesquisa360.core.dependencies import (
+    get_db,
+    get_current_user,
+    is_superadmin,
+    require_manager_or_superadmin,
+)
 from pesquisa360.core.utils import web_point
 from pesquisa360.question_types import normalize_question_type
 
@@ -591,6 +596,35 @@ def create_setor_by_projeto_pesquisa(
         "agente_id": db_setor.agente_id,
         "poligono": poligono
     }
+
+
+@router.patch("/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores/{setor_id}")
+def update_setor_by_projeto_pesquisa(
+    projeto_id: int,
+    pesquisa_id: int,
+    setor_id: int,
+    setor_payload: schemas.SetorUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(require_manager_or_superadmin),
+):
+    """Atualiza parcialmente um setor preservando seu ID."""
+    try:
+        db_setor = crud.update_setor(
+            db=db,
+            projeto_id=projeto_id,
+            pesquisa_id=pesquisa_id,
+            setor_id=setor_id,
+            setor_update=setor_payload,
+            current_user=current_user,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    setores_raw = crud.get_setores_by_pesquisa(db=db, pesquisa_id=pesquisa_id)
+    setor_atualizado = next((setor for setor in setores_raw if setor.id == db_setor.id), None)
+    if setor_atualizado is None:
+        raise HTTPException(status_code=404, detail="Setor nao encontrado.")
+    return setor_to_dict(setor_atualizado)
 
 @router.delete("/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores/{setor_id}")
 def delete_setor_by_projeto_pesquisa(

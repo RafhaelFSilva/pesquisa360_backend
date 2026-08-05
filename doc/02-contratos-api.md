@@ -228,6 +228,41 @@ Remove setor.
 **Status atual:** delete físico.  
 **Recomendação futura:** avaliar soft delete para preservar histórico operacional.
 
+### PATCH `/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores/{setor_id}`
+
+Atualiza parcialmente um setor existente sem alterar seu ID. Exige perfil
+Gerente ou Superadmin e valida projeto, pesquisa, setor e agente no tenant do
+usuário autenticado.
+
+Campos aceitos:
+
+```json
+{
+  "nome": "Setor Centro atualizado",
+  "meta": 120,
+  "tolerancia_metros": 75,
+  "agente_id": 4,
+  "poligono": [
+    { "lat": 0.0467, "lng": -51.1372 },
+    { "lat": 0.0465, "lng": -51.1304 },
+    { "lat": 0.0385, "lng": -51.1309 }
+  ]
+}
+```
+
+Todos os campos são opcionais. Quando o polígono não é enviado, a geometria
+existente é preservada. Quando enviado, deve ser um `Polygon` válido em
+EPSG:4326 com pelo menos três pontos distintos. Recursos fora do tenant são
+respondidos como `404`.
+
+### Importacao administrativa por terminal
+
+A importacao de Shapefile por terminal nao e um endpoint novo e nao altera os
+contratos HTTP acima. O CLI reutiliza internamente `schemas.SetorCreate` e
+`crud.create_setor`. Os nomes persistidos no modelo real sao `meta`,
+`tolerancia` e `geometria`; os termos amigaveis da interface sao mapeados para
+esses campos. Consulte `11-importacao-setores-shapefile.md`.
+
 ## 9. Coletas
 
 ### POST `/pesquisas/{pesquisa_id}/coletas/`

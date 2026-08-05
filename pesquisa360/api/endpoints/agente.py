@@ -54,15 +54,27 @@ def get_missao_agente(
         raise HTTPException(status_code=404, detail="Pesquisa não encontrada ou acesso negado.")
 
     # 2. Busca o setor do agente
-    setor = db.query(models.Setor).filter(
-        models.Setor.pesquisa_id == pesquisa_id,
-        models.Setor.agente_id == current_user.id
-    ).first()
+    setores = (
+        db.query(models.Setor)
+        .filter(
+            models.Setor.pesquisa_id == pesquisa_id,
+            models.Setor.agente_id == current_user.id,
+        )
+        .order_by(models.Setor.id.asc())
+        .all()
+    )
 
-    if not setor:
+    if not setores:
         return {
-            "tem_setor": False, 
-            "mensagem": "Você não possui um setor designado nesta pesquisa."
+            "tem_setor": False,
+            "setor_id": None,
+            "setor_nome": None,
+            "meta": 0,
+            "realizado": 0,
+            "restante": 0,
+            "tolerancia_metros": 0,
+            "geometria": None,
+            "setores": [],
         }
 
     # 3. Calcula o progresso (Cota)
@@ -72,20 +84,31 @@ def get_missao_agente(
     ).scalar()
 
     # 4. Converte a geometria para GeoJSON
-    geojson = None
-    if setor.geometria is not None:
-        # PostGIS function para converter WKB para GeoJSON
-        cerca_str = db.query(func.ST_AsGeoJSON(setor.geometria)).scalar()
-        if cerca_str:
-            geojson = json.loads(cerca_str)
+    setores_payload = []
+    for setor in setores:
+        geojson = None
+        if setor.geometria is not None:
+            cerca_str = db.query(func.ST_AsGeoJSON(setor.geometria)).scalar()
+            if cerca_str:
+                geojson = json.loads(cerca_str)
+        setores_payload.append({
+            "id": setor.id,
+            "nome": setor.nome,
+            "meta": setor.meta,
+            "tolerancia_metros": setor.tolerancia,
+            "geometria": geojson,
+        })
+
+    primeiro_setor = setores[0]
             
     return {
         "tem_setor": True,
-        "setor_id": setor.id,
-        "setor_nome": setor.nome,
-        "meta": setor.meta,
+        "setor_id": primeiro_setor.id,
+        "setor_nome": primeiro_setor.nome,
+        "meta": primeiro_setor.meta,
         "realizado": coletas_realizadas,
-        "restante": max(0, setor.meta - coletas_realizadas),
-        "tolerancia_metros": setor.tolerancia,
-        "geometria": geojson 
+        "restante": max(0, primeiro_setor.meta - coletas_realizadas),
+        "tolerancia_metros": primeiro_setor.tolerancia,
+        "geometria": setores_payload[0]["geometria"],
+        "setores": setores_payload,
     }

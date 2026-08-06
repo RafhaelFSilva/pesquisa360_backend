@@ -627,6 +627,7 @@ def _get_spontaneous_raw_answers(
         models.Resposta.valor_resposta.label("valor_resposta"),
         models.Pergunta.id.label("pergunta_id"),
         models.Pergunta.texto_pergunta.label("texto_pergunta"),
+        models.Pergunta.ordem.label("pergunta_ordem"),
     ).select_from(models.Resposta)\
         .join(models.Pergunta, models.Pergunta.id == models.Resposta.pergunta_id)\
         .join(models.Coleta, models.Coleta.id == models.Resposta.coleta_id)\
@@ -666,7 +667,17 @@ def _agrupar_respostas_espontaneas(
         grupo["quantidade_total"] += 1
         texto_original = "" if row.valor_resposta is None else str(row.valor_resposta).strip()
         grupo["variantes"][texto_original] += 1
-        grupo["perguntas"][int(row.pergunta_id)] = str(row.texto_pergunta)
+        pergunta_id = int(row.pergunta_id)
+        pergunta = grupo["perguntas"].setdefault(
+            pergunta_id,
+            {
+                "pergunta_id": pergunta_id,
+                "texto_pergunta": str(row.texto_pergunta),
+                "ordem": int(row.pergunta_ordem) if row.pergunta_ordem is not None else 0,
+                "quantidade": 0,
+            },
+        )
+        pergunta["quantidade"] += 1
 
     items = []
     total_respostas = 0
@@ -688,16 +699,24 @@ def _agrupar_respostas_espontaneas(
                 key=lambda item: (-item[1], normalizar_resposta_espontanea(item[0]), item[0]),
             )
         ]
-        perguntas = [
-            {"id": pergunta_id, "texto_pergunta": texto_pergunta}
-            for pergunta_id, texto_pergunta in sorted(grupo["perguntas"].items(), key=lambda item: item[0])
-        ]
+        perguntas = []
+        for pergunta in sorted(
+            grupo["perguntas"].values(),
+            key=lambda item: (item["ordem"], item["pergunta_id"]),
+        ):
+            perguntas.append({
+                "id": pergunta["pergunta_id"],
+                "pergunta_id": pergunta["pergunta_id"],
+                "texto_pergunta": pergunta["texto_pergunta"],
+                "quantidade": pergunta["quantidade"],
+            })
 
         items.append({
             "chave_normalizada": chave,
             "quantidade_total": quantidade_total,
             "variantes": variantes,
             "perguntas": perguntas,
+            "mapeamento_id": mapping.id if mapping else None,
             "categoria": None if categoria is None else {
                 "id": categoria.id,
                 "nome": categoria.nome,

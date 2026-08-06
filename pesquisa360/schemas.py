@@ -559,7 +559,9 @@ class RespostaEspontaneaVariacao(BaseModel):
 
 class RespostaEspontaneaPerguntaRelacionado(BaseModel):
     id: int
+    pergunta_id: int
     texto_pergunta: str
+    quantidade: int
 
 
 class RespostaEspontaneaCategoriaBase(BaseModel):
@@ -641,6 +643,7 @@ class RespostaEspontaneaItem(BaseModel):
     quantidade_total: int
     variantes: List[RespostaEspontaneaVariacao]
     perguntas: List[RespostaEspontaneaPerguntaRelacionado]
+    mapeamento_id: Optional[int] = None
     categoria: Optional[RespostaEspontaneaCategoriaRef] = None
     status: Literal["categorizada", "pendente"]
 

@@ -280,6 +280,9 @@ class ApuracaoEspontaneaTests(unittest.TestCase):
             [question["id"] for question in payload["itens"][0]["perguntas"]],
             [10],
         )
+        self.assertIsNone(payload["itens"][0]["mapeamento_id"])
+        self.assertEqual(payload["itens"][0]["perguntas"][0]["pergunta_id"], 10)
+        self.assertEqual(payload["itens"][0]["perguntas"][0]["quantidade"], 2)
 
         filtered = self.client.get("/pesquisas/1000/apuracao-espontanea/respostas?busca=dr&modo_busca=comeca_com")
         self.assertEqual(filtered.status_code, 200)
@@ -341,6 +344,12 @@ class ApuracaoEspontaneaTests(unittest.TestCase):
         )
         self.assertEqual(lote.status_code, 200)
         self.assertEqual(lote.json()["criadas"], 2)
+
+        categorizada_payload = self.client.get(
+            "/pesquisas/1000/apuracao-espontanea/respostas?busca=clecio"
+        ).json()
+        self.assertIsInstance(categorizada_payload["itens"][0]["mapeamento_id"], int)
+        self.assertGreater(categorizada_payload["itens"][0]["mapeamento_id"], 0)
 
         categorizadas = self.client.get("/pesquisas/1000/apuracao-espontanea/respostas?status=categorizada")
         self.assertEqual(categorizadas.status_code, 200)
@@ -466,6 +475,56 @@ class ApuracaoEspontaneaTests(unittest.TestCase):
         self.assertEqual(len(historico), 3)
         self.assertEqual(sum(bool(row.ativo) for row in historico), 1)
         self.assertTrue(all(row.atualizado_por_id == 1 for row in historico))
+
+    def test_mapping_id_tracks_only_active_mapping_after_undo_and_recreate(self):
+        categoria = self.client.post(
+            "/pesquisas/1000/apuracao-espontanea/categorias", json={"nome": "Candidato"}
+        ).json()
+        self.client.post(
+            "/pesquisas/1000/apuracao-espontanea/mapeamentos/lote",
+            json={"categoria_id": categoria["id"], "chaves_normalizadas": ["clecio"]},
+        )
+        first_id = self.client.get(
+            "/pesquisas/1000/apuracao-espontanea/respostas?busca=clecio"
+        ).json()["itens"][0]["mapeamento_id"]
+        self.client.delete(f"/pesquisas/1000/apuracao-espontanea/mapeamentos/{first_id}")
+        pending = self.client.get(
+            "/pesquisas/1000/apuracao-espontanea/respostas?busca=clecio"
+        ).json()["itens"][0]
+        self.assertIsNone(pending["mapeamento_id"])
+        self.client.post(
+            "/pesquisas/1000/apuracao-espontanea/mapeamentos/lote",
+            json={"categoria_id": categoria["id"], "chaves_normalizadas": ["clecio"]},
+        )
+        second_id = self.client.get(
+            "/pesquisas/1000/apuracao-espontanea/respostas?busca=clecio"
+        ).json()["itens"][0]["mapeamento_id"]
+        self.assertNotEqual(first_id, second_id)
+
+    def test_question_occurrence_counts_sum_to_item_total_and_ignore_non_spontaneous(self):
+        with self.engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO respostas (id, pergunta_id, coleta_id, valor_resposta) "
+                "VALUES (11, 11, 100, 'clecio'), (12, 11, 101, 'clecio')"
+            ))
+        payload = self.client.get("/pesquisas/1000/apuracao-espontanea/respostas").json()
+        item = next(item for item in payload["itens"] if item["chave_normalizada"] == "clecio")
+        self.assertEqual(item["quantidade_total"], 4)
+        self.assertEqual(
+            [(question["pergunta_id"], question["quantidade"]) for question in item["perguntas"]],
+            [(10, 2), (11, 2)],
+        )
+        self.assertEqual(sum(question["quantidade"] for question in item["perguntas"]), item["quantidade_total"])
+        self.assertNotIn(12, [question["pergunta_id"] for question in item["perguntas"]])
+
+    def test_response_schema_serializes_new_fields(self):
+        payload = schemas.RespostaEspontaneaResumo.model_validate(
+            self.client.get("/pesquisas/1000/apuracao-espontanea/respostas").json()
+        )
+        item = payload.itens[0]
+        self.assertIsNone(item.mapeamento_id)
+        self.assertEqual(item.perguntas[0].pergunta_id, item.perguntas[0].id)
+        self.assertIsInstance(item.model_dump(), dict)
 
     def test_inactive_and_cross_scope_categories_are_rejected(self):
         categoria = self.client.post(

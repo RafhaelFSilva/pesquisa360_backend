@@ -17,7 +17,7 @@ from alembic.script import ScriptDirectory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "e7f9a2b3c4d5"
+HEAD_REVISION = "b1c2d3e4f5a6"
 
 
 class MigrationChainTests(unittest.TestCase):
@@ -156,10 +156,22 @@ class MigrationChainTests(unittest.TestCase):
                 coleta_columns = {
                     row[1]: row for row in connection.execute("PRAGMA table_info(coletas)")
                 }
+                pergunta_columns = {
+                    row[1]: row for row in connection.execute("PRAGMA table_info(perguntas)")
+                }
+                categoria_indexes = connection.execute(
+                    "PRAGMA index_list(categorias_resposta_espontanea)"
+                ).fetchall()
+                mapeamento_indexes = connection.execute(
+                    "PRAGMA index_list(mapeamentos_resposta_espontanea)"
+                ).fetchall()
             finally:
                 connection.close()
             self.assertTrue(
-                {"companies", "usuarios", "projetos", "pesquisas", "coletas"} <= tables
+                {
+                    "companies", "usuarios", "projetos", "pesquisas", "coletas",
+                    "categorias_resposta_espontanea", "mapeamentos_resposta_espontanea",
+                } <= tables
             )
             self.assertTrue(any(index[2] for index in company_indexes))
             self.assertTrue(
@@ -167,6 +179,15 @@ class MigrationChainTests(unittest.TestCase):
             )
             self.assertEqual(coleta_columns["company_id"][3], 1)
             self.assertEqual(coleta_columns["client_uuid"][3], 1)
+            self.assertEqual(pergunta_columns["eh_resposta_espontanea"][3], 1)
+            self.assertIn(
+                "uq_categoria_resposta_espontanea_pesquisa_nome_ativo",
+                {index[1] for index in categoria_indexes if index[2]},
+            )
+            self.assertIn(
+                "uq_mapeamento_resposta_espontanea_pesquisa_chave_ativo",
+                {index[1] for index in mapeamento_indexes if index[2]},
+            )
 
     def test_valid_legacy_data_is_normalized_and_preserved(self):
         with self.temporary_database("c8e4b1a2d9f0") as (db_path, database_url):
@@ -274,6 +295,15 @@ class MigrationChainTests(unittest.TestCase):
             self.assertRegex(sql_text, re.compile(r"\bGeometry\b", re.IGNORECASE))
             self.assertIn("FOREIGN KEY", sql_text.upper())
             self.assertIn("NOT NULL", sql_text.upper())
+            self.assertIn(
+                "CREATE UNIQUE INDEX uq_categoria_resposta_espontanea_pesquisa_nome_ativo",
+                sql_text,
+            )
+            self.assertIn(
+                "CREATE UNIQUE INDEX uq_mapeamento_resposta_espontanea_pesquisa_chave_ativo",
+                sql_text,
+            )
+            self.assertGreaterEqual(sql_text.upper().count("WHERE ATIVO IS TRUE"), 2)
             self.assertNotIn("PRAGMA", sql_text.upper())
 
 

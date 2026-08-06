@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .db import models
 from .db.session import engine
-from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais, empresas
+from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais, empresas, apuracao_espontanea
 from .core.dependencies import get_current_user
 
 
@@ -182,6 +182,9 @@ app.include_router(coletas.router, tags=["Coletas"])
 
 # Relatórios
 app.include_router(relatorios.router, tags=["Relatorios"])
+
+# Apuração espontânea
+app.include_router(apuracao_espontanea.router, tags=["Apuracao Espontanea"])
 
 # Agente
 app.include_router(agente.router, prefix="/agente", tags=["Agente"])

@@ -1,7 +1,7 @@
 # pesquisa360/schemas.py (versão final simplificada)
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
-from typing import Optional, List, Any, Union, Dict
+from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
+from typing import Optional, List, Any, Union, Dict, Literal
 from datetime import date, datetime
 from uuid import UUID
 import re
@@ -101,6 +101,7 @@ class PerguntaBase(BaseModel):
     tipo_pergunta: str
     ordem: int
     eh_obrigatoria: bool = True
+    eh_resposta_espontanea: bool = False
     opcoes: Optional[List[OpcaoCreate]] = None # <--- Alterado para OpcaoCreate
 
     @field_validator("tipo_pergunta")
@@ -116,6 +117,7 @@ class PerguntaUpdate(BaseModel):
     tipo_pergunta: Optional[str] = None
     ordem: Optional[int] = None
     eh_obrigatoria: Optional[bool] = None
+    eh_resposta_espontanea: Optional[bool] = None
     opcoes: Optional[List[Any]] = None
     ativo: Optional[bool] = None
 
@@ -593,6 +595,131 @@ class Apuracao(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class RespostaEspontaneaVariacao(BaseModel):
+    texto_original: str
+    quantidade: int
+
+
+class RespostaEspontaneaPerguntaRelacionado(BaseModel):
+    id: int
+    pergunta_id: int
+    texto_pergunta: str
+    quantidade: int
+
+
+class RespostaEspontaneaCategoriaBase(BaseModel):
+    nome: str
+
+    @field_validator("nome", mode="before")
+    @classmethod
+    def normalize_nome(cls, value):
+        if value is None:
+            raise ValueError("Nome da categoria e obrigatorio.")
+        texto = str(value).strip()
+        if not texto:
+            raise ValueError("Nome da categoria e obrigatorio.")
+        return texto
+
+
+class RespostaEspontaneaCategoriaCreate(RespostaEspontaneaCategoriaBase):
+    model_config = ConfigDict(extra="forbid")
+
+
+class RespostaEspontaneaCategoriaUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nome: Optional[str] = None
+    ativo: Optional[bool] = None
+
+    @field_validator("nome", mode="before")
+    @classmethod
+    def normalize_nome(cls, value):
+        if value is None:
+            return None
+        texto = str(value).strip()
+        if not texto:
+            raise ValueError("Nome da categoria e obrigatorio.")
+        return texto
+
+
+class RespostaEspontaneaCategoriaRead(BaseModel):
+    id: int
+    pesquisa_id: int
+    nome: str
+    nome_normalizado: str
+    ativo: bool
+    criado_por_id: int
+    atualizado_por_id: int
+    criado_em: datetime
+    atualizado_em: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RespostaEspontaneaCategoriaRef(BaseModel):
+    id: int
+    nome: str
+
+    class Config:
+        from_attributes = True
+
+
+class RespostaEspontaneaMapeamentoRead(BaseModel):
+    id: int
+    pesquisa_id: int
+    categoria_id: int
+    chave_normalizada: str
+    texto_referencia: str
+    ativo: bool
+    criado_por_id: int
+    atualizado_por_id: int
+    criado_em: datetime
+    atualizado_em: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RespostaEspontaneaItem(BaseModel):
+    chave_normalizada: str
+    quantidade_total: int
+    variantes: List[RespostaEspontaneaVariacao]
+    perguntas: List[RespostaEspontaneaPerguntaRelacionado]
+    mapeamento_id: Optional[int] = None
+    categoria: Optional[RespostaEspontaneaCategoriaRef] = None
+    status: Literal["categorizada", "pendente"]
+
+
+class RespostaEspontaneaResumo(BaseModel):
+    pesquisa_id: int
+    total_chaves: int
+    total_respostas: int
+    respostas_categorizadas: int
+    respostas_pendentes: int
+    percentual_categorizado: float
+    pagina: int
+    por_pagina: int
+    total_paginas: int
+    itens: List[RespostaEspontaneaItem]
+
+
+class RespostaEspontaneaMapeamentoLote(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    categoria_id: int = Field(..., gt=0)
+    chaves_normalizadas: List[str] = Field(..., min_length=1, max_length=500)
+
+
+class RespostaEspontaneaMapeamentoLoteResultado(BaseModel):
+    categoria_id: int
+    categoria_nome: str
+    criadas: int
+    atualizadas: int
+    inalteradas: int
+    total_processado: int
 
 # Adicione ao pesquisa360/schemas.py
 

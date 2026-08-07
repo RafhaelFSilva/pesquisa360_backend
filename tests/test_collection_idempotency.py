@@ -88,7 +88,8 @@ class CollectionIdempotencyTests(unittest.TestCase):
                 CREATE TABLE perguntas (
                     id INTEGER PRIMARY KEY, texto_pergunta TEXT NOT NULL,
                     tipo_pergunta TEXT NOT NULL, ordem INTEGER NOT NULL,
-                    eh_obrigatoria BOOLEAN NOT NULL, ativo BOOLEAN NOT NULL,
+                    eh_obrigatoria BOOLEAN NOT NULL, eh_resposta_espontanea BOOLEAN NOT NULL DEFAULT 0,
+                    ativo BOOLEAN NOT NULL,
                     pesquisa_id INTEGER NOT NULL
                 )
             """))
@@ -573,7 +574,7 @@ class CollectionIdempotencyTests(unittest.TestCase):
     def test_migration_has_exactly_one_new_head(self):
         config = Config("alembic.ini")
         heads = ScriptDirectory.from_config(config).get_heads()
-        self.assertEqual(heads, ["e7f9a2b3c4d5"])
+        self.assertEqual(heads, ["b1c2d3e4f5a6"])
 
 
 if __name__ == "__main__":

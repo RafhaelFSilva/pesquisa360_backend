@@ -1,5 +1,5 @@
 # pesquisa360/db/models.py
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_, Float, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_, Float, Index, UniqueConstraint, text
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.dialects.postgresql import JSONB
 from geoalchemy2 import Geometry
@@ -130,6 +130,16 @@ class Pesquisa(Base):
     )
     coletas = relationship("Coleta", back_populates="pesquisa", cascade="all, delete-orphan")
     apuracoes = relationship("Apuracao", back_populates="pesquisa", cascade="all, delete-orphan")
+    categorias_resposta_espontanea = relationship(
+        "CategoriaRespostaEspontanea",
+        back_populates="pesquisa",
+        cascade="all, delete-orphan",
+    )
+    mapeamentos_resposta_espontanea = relationship(
+        "MapeamentoRespostaEspontanea",
+        back_populates="pesquisa",
+        cascade="all, delete-orphan",
+    )
     setores = relationship("Setor", back_populates="pesquisa", cascade="all, delete-orphan")
 
 class Pergunta(Base):
@@ -139,6 +149,7 @@ class Pergunta(Base):
     tipo_pergunta = Column(String, nullable=False)
     ordem = Column(Integer, nullable=False)
     eh_obrigatoria = Column(Boolean, default=True, nullable=False)
+    eh_resposta_espontanea = Column(Boolean, default=False, nullable=False)
     
     ativo = Column(Boolean, default=True, nullable=False)
     pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False)
@@ -252,3 +263,66 @@ class AnaliseSalva(Base):
     
     apuracao_id = Column(Integer, ForeignKey("apuracoes.id"), nullable=False)
     apuracao = relationship("Apuracao", back_populates="analises")
+
+
+class CategoriaRespostaEspontanea(Base):
+    __tablename__ = "categorias_resposta_espontanea"
+    __table_args__ = (
+        Index(
+            "uq_categoria_resposta_espontanea_pesquisa_nome_ativo",
+            "pesquisa_id",
+            "nome_normalizado",
+            unique=True,
+            postgresql_where=text("ativo IS TRUE"),
+            sqlite_where=text("ativo = 1"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False, index=True)
+    nome = Column(String, nullable=False)
+    nome_normalizado = Column(String, nullable=False)
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"), index=True)
+    criado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    atualizado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    pesquisa = relationship("Pesquisa", back_populates="categorias_resposta_espontanea")
+    criador = relationship("Usuario", foreign_keys=[criado_por_id])
+    atualizador = relationship("Usuario", foreign_keys=[atualizado_por_id])
+    mapeamentos = relationship(
+        "MapeamentoRespostaEspontanea",
+        back_populates="categoria",
+        cascade="all, delete-orphan",
+    )
+
+
+class MapeamentoRespostaEspontanea(Base):
+    __tablename__ = "mapeamentos_resposta_espontanea"
+    __table_args__ = (
+        Index(
+            "uq_mapeamento_resposta_espontanea_pesquisa_chave_ativo",
+            "pesquisa_id",
+            "chave_normalizada",
+            unique=True,
+            postgresql_where=text("ativo IS TRUE"),
+            sqlite_where=text("ativo = 1"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False, index=True)
+    categoria_id = Column(Integer, ForeignKey("categorias_resposta_espontanea.id"), nullable=False, index=True)
+    chave_normalizada = Column(String, nullable=False)
+    texto_referencia = Column(Text, nullable=False)
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"), index=True)
+    criado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    atualizado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    pesquisa = relationship("Pesquisa", back_populates="mapeamentos_resposta_espontanea")
+    categoria = relationship("CategoriaRespostaEspontanea", back_populates="mapeamentos")
+    criador = relationship("Usuario", foreign_keys=[criado_por_id])
+    atualizador = relationship("Usuario", foreign_keys=[atualizado_por_id])

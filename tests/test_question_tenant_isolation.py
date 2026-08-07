@@ -44,7 +44,8 @@ class QuestionTenantIsolationTests(unittest.TestCase):
                 CREATE TABLE perguntas (
                     id INTEGER PRIMARY KEY, texto_pergunta TEXT NOT NULL,
                     tipo_pergunta TEXT NOT NULL, ordem INTEGER NOT NULL,
-                    eh_obrigatoria BOOLEAN NOT NULL, ativo BOOLEAN NOT NULL,
+                    eh_obrigatoria BOOLEAN NOT NULL, eh_resposta_espontanea BOOLEAN NOT NULL DEFAULT 0,
+                    ativo BOOLEAN NOT NULL,
                     pesquisa_id INTEGER NOT NULL
                 )
             """))

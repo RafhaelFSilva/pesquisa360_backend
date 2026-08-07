@@ -1,6 +1,8 @@
 # pesquisa360/crud.py
 
 import json
+from collections import defaultdict
+from math import ceil
 import pandas as pd
 import numpy as np
 from fastapi import HTTPException
@@ -16,6 +18,7 @@ from shapely.geometry import Point, Polygon
 from .db import models
 from . import schemas
 from .core import security
+from .utils.response_normalization import normalizar_resposta_espontanea
 
 # ==============================================================================
 # USUÁRIOS (Gestão de Acesso)
@@ -564,6 +567,506 @@ def delete_projeto(db: Session, *, db_obj: models.Projeto) -> models.Projeto:
     return db_obj
 
 # ==============================================================================
+# APURAÇÃO ESPONTÂNEA
+# ==============================================================================
+
+def _get_spontaneous_pesquisa(db: Session, pesquisa_id: int, current_user: models.Usuario):
+    pesquisa = db.query(models.Pesquisa).join(models.Projeto).filter(
+        models.Pesquisa.id == pesquisa_id,
+        models.Projeto.company_id == current_user.company_id,
+    ).first()
+    if not pesquisa:
+        raise HTTPException(status_code=404, detail="Pesquisa nao encontrada.")
+    return pesquisa
+
+
+def _get_spontaneous_category(
+    db: Session,
+    pesquisa_id: int,
+    categoria_id: int,
+    current_user: models.Usuario,
+):
+    return db.query(models.CategoriaRespostaEspontanea)\
+        .join(models.Pesquisa, models.Pesquisa.id == models.CategoriaRespostaEspontanea.pesquisa_id)\
+        .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id).filter(
+        models.CategoriaRespostaEspontanea.id == categoria_id,
+        models.CategoriaRespostaEspontanea.pesquisa_id == pesquisa_id,
+        models.Projeto.company_id == current_user.company_id,
+    ).first()
+
+
+def _get_spontaneous_categories(db: Session, pesquisa_id: int, current_user: models.Usuario):
+    return db.query(models.CategoriaRespostaEspontanea)\
+        .join(models.Pesquisa, models.Pesquisa.id == models.CategoriaRespostaEspontanea.pesquisa_id)\
+        .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id).filter(
+        models.CategoriaRespostaEspontanea.pesquisa_id == pesquisa_id,
+        models.Projeto.company_id == current_user.company_id,
+        models.CategoriaRespostaEspontanea.ativo.is_(True),
+    ).order_by(models.CategoriaRespostaEspontanea.nome_normalizado, models.CategoriaRespostaEspontanea.id).all()
+
+
+def _get_spontaneous_mappings(db: Session, pesquisa_id: int, current_user: models.Usuario):
+    return db.query(models.MapeamentoRespostaEspontanea)\
+        .join(models.Pesquisa, models.Pesquisa.id == models.MapeamentoRespostaEspontanea.pesquisa_id)\
+        .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id)\
+        .join(models.CategoriaRespostaEspontanea, models.CategoriaRespostaEspontanea.id == models.MapeamentoRespostaEspontanea.categoria_id).filter(
+        models.MapeamentoRespostaEspontanea.pesquisa_id == pesquisa_id,
+        models.Projeto.company_id == current_user.company_id,
+        models.MapeamentoRespostaEspontanea.ativo.is_(True),
+        models.CategoriaRespostaEspontanea.ativo.is_(True),
+    ).all()
+
+
+def _get_spontaneous_raw_answers(
+    db: Session,
+    pesquisa_id: int,
+    current_user: models.Usuario,
+    pergunta_id: Optional[int] = None,
+):
+    query = db.query(
+        models.Resposta.valor_resposta.label("valor_resposta"),
+        models.Pergunta.id.label("pergunta_id"),
+        models.Pergunta.texto_pergunta.label("texto_pergunta"),
+        models.Pergunta.ordem.label("pergunta_ordem"),
+    ).select_from(models.Resposta)\
+        .join(models.Pergunta, models.Pergunta.id == models.Resposta.pergunta_id)\
+        .join(models.Coleta, models.Coleta.id == models.Resposta.coleta_id)\
+        .join(models.Pesquisa, models.Pesquisa.id == models.Coleta.pesquisa_id)\
+        .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id)\
+        .filter(
+            models.Pesquisa.id == pesquisa_id,
+            models.Projeto.company_id == current_user.company_id,
+            models.Coleta.company_id == current_user.company_id,
+            models.Pergunta.pesquisa_id == pesquisa_id,
+            models.Pergunta.ativo.is_(True),
+            models.Pergunta.eh_resposta_espontanea.is_(True),
+        )
+    if pergunta_id is not None:
+        query = query.filter(models.Pergunta.id == pergunta_id)
+    return query.all()
+
+
+def _agrupar_respostas_espontaneas(
+    raw_rows,
+    categorias_por_id,
+    mapeamentos_por_chave,
+):
+    grupos: dict[str, dict] = {}
+    for row in raw_rows:
+        chave = normalizar_resposta_espontanea(row.valor_resposta)
+        if not chave:
+            continue
+        grupo = grupos.setdefault(
+            chave,
+            {
+                "quantidade_total": 0,
+                "variantes": defaultdict(int),
+                "perguntas": {},
+            },
+        )
+        grupo["quantidade_total"] += 1
+        texto_original = "" if row.valor_resposta is None else str(row.valor_resposta).strip()
+        grupo["variantes"][texto_original] += 1
+        pergunta_id = int(row.pergunta_id)
+        pergunta = grupo["perguntas"].setdefault(
+            pergunta_id,
+            {
+                "pergunta_id": pergunta_id,
+                "texto_pergunta": str(row.texto_pergunta),
+                "ordem": int(row.pergunta_ordem) if row.pergunta_ordem is not None else 0,
+                "quantidade": 0,
+            },
+        )
+        pergunta["quantidade"] += 1
+
+    items = []
+    total_respostas = 0
+    respostas_categorizadas = 0
+
+    for chave, grupo in grupos.items():
+        mapping = mapeamentos_por_chave.get(chave)
+        categoria = categorias_por_id.get(mapping.categoria_id) if mapping else None
+        status = "categorizada" if mapping else "pendente"
+        quantidade_total = int(grupo["quantidade_total"])
+        total_respostas += quantidade_total
+        if status == "categorizada":
+            respostas_categorizadas += quantidade_total
+
+        variantes = [
+            {"texto_original": texto, "quantidade": quantidade}
+            for texto, quantidade in sorted(
+                grupo["variantes"].items(),
+                key=lambda item: (-item[1], normalizar_resposta_espontanea(item[0]), item[0]),
+            )
+        ]
+        perguntas = []
+        for pergunta in sorted(
+            grupo["perguntas"].values(),
+            key=lambda item: (item["ordem"], item["pergunta_id"]),
+        ):
+            perguntas.append({
+                "id": pergunta["pergunta_id"],
+                "pergunta_id": pergunta["pergunta_id"],
+                "texto_pergunta": pergunta["texto_pergunta"],
+                "quantidade": pergunta["quantidade"],
+            })
+
+        items.append({
+            "chave_normalizada": chave,
+            "quantidade_total": quantidade_total,
+            "variantes": variantes,
+            "perguntas": perguntas,
+            "mapeamento_id": mapping.id if mapping else None,
+            "categoria": None if categoria is None else {
+                "id": categoria.id,
+                "nome": categoria.nome,
+            },
+            "status": status,
+        })
+
+    items.sort(key=lambda item: (-item["quantidade_total"], item["chave_normalizada"]))
+    return items, total_respostas, respostas_categorizadas
+
+
+def get_respostas_espontaneas_resumo(
+    db: Session,
+    pesquisa_id: int,
+    current_user: models.Usuario,
+    *,
+    busca: Optional[str] = None,
+    modo_busca: str = "contem",
+    pergunta_id: Optional[int] = None,
+    status: Optional[str] = None,
+    categoria_id: Optional[int] = None,
+    pagina: int = 1,
+    por_pagina: int = 25,
+):
+    _get_spontaneous_pesquisa(db, pesquisa_id, current_user)
+    if pagina < 1 or por_pagina < 1 or por_pagina > 100:
+        raise HTTPException(status_code=422, detail="Paginacao invalida.")
+    raw_rows = _get_spontaneous_raw_answers(db, pesquisa_id, current_user, pergunta_id=pergunta_id)
+    categorias = _get_spontaneous_categories(db, pesquisa_id, current_user)
+    categorias_por_id = {categoria.id: categoria for categoria in categorias}
+    mapeamentos_por_chave = {
+        mapping.chave_normalizada: mapping
+        for mapping in _get_spontaneous_mappings(db, pesquisa_id, current_user)
+    }
+    items, _, _ = _agrupar_respostas_espontaneas(raw_rows, categorias_por_id, mapeamentos_por_chave)
+
+    normalized_busca = normalizar_resposta_espontanea(busca)
+    modo = (modo_busca or "contem").strip().casefold()
+    if modo not in {"contem", "comeca_com", "termina_com", "igual"}:
+        raise HTTPException(status_code=422, detail="Modo de busca invalido.")
+    if normalized_busca:
+        if modo == "igual":
+            items = [item for item in items if item["chave_normalizada"] == normalized_busca]
+        elif modo == "comeca_com":
+            items = [item for item in items if item["chave_normalizada"].startswith(normalized_busca)]
+        elif modo == "termina_com":
+            items = [item for item in items if item["chave_normalizada"].endswith(normalized_busca)]
+        elif modo == "contem":
+            items = [item for item in items if normalized_busca in item["chave_normalizada"]]
+
+    if pergunta_id is not None:
+        items = [
+            item for item in items
+            if any(pergunta["id"] == pergunta_id for pergunta in item["perguntas"])
+        ]
+
+    if status is not None:
+        status_normalizado = status.strip().casefold()
+        if status_normalizado not in {"categorizada", "pendente"}:
+            raise HTTPException(status_code=422, detail="Status invalido.")
+        items = [item for item in items if item["status"] == status_normalizado]
+
+    if categoria_id is not None:
+        items = [
+            item for item in items
+            if item["categoria"] is not None and item["categoria"]["id"] == categoria_id
+        ]
+
+    total_chaves = len(items)
+    total_respostas = sum(item["quantidade_total"] for item in items)
+    respostas_categorizadas = sum(item["quantidade_total"] for item in items if item["status"] == "categorizada")
+    respostas_pendentes = total_respostas - respostas_categorizadas
+    percentual_categorizado = round((respostas_categorizadas / total_respostas) * 100, 2) if total_respostas else 0.0
+    total_paginas = max(1, ceil(total_chaves / por_pagina))
+    pagina_atual = pagina
+    inicio = (pagina_atual - 1) * por_pagina
+    fim = inicio + por_pagina
+    itens_paginados = items[inicio:fim]
+
+    return {
+        "pesquisa_id": pesquisa_id,
+        "total_chaves": total_chaves,
+        "total_respostas": total_respostas,
+        "respostas_categorizadas": respostas_categorizadas,
+        "respostas_pendentes": respostas_pendentes,
+        "percentual_categorizado": percentual_categorizado,
+        "pagina": pagina_atual,
+        "por_pagina": por_pagina,
+        "total_paginas": total_paginas,
+        "itens": itens_paginados,
+    }
+
+
+def get_resposta_espontanea_categorias(db: Session, pesquisa_id: int, current_user: models.Usuario):
+    _get_spontaneous_pesquisa(db, pesquisa_id, current_user)
+    return _get_spontaneous_categories(db, pesquisa_id, current_user)
+
+
+def create_resposta_espontanea_categoria(
+    db: Session,
+    pesquisa_id: int,
+    categoria_in: schemas.RespostaEspontaneaCategoriaCreate,
+    current_user: models.Usuario,
+):
+    _get_spontaneous_pesquisa(db, pesquisa_id, current_user)
+    nome = categoria_in.nome.strip()
+    nome_normalizado = normalizar_resposta_espontanea(nome)
+    if not nome_normalizado:
+        raise HTTPException(status_code=422, detail="Nome da categoria e obrigatorio.")
+
+    existente = db.query(models.CategoriaRespostaEspontanea).filter(
+        models.CategoriaRespostaEspontanea.pesquisa_id == pesquisa_id,
+        models.CategoriaRespostaEspontanea.nome_normalizado == nome_normalizado,
+        models.CategoriaRespostaEspontanea.ativo.is_(True),
+    ).first()
+    if existente:
+        raise HTTPException(status_code=409, detail="Categoria ja cadastrada para esta pesquisa.")
+
+    db_categoria = models.CategoriaRespostaEspontanea(
+        pesquisa_id=pesquisa_id,
+        nome=nome,
+        nome_normalizado=nome_normalizado,
+        ativo=True,
+        criado_por_id=current_user.id,
+        atualizado_por_id=current_user.id,
+    )
+    try:
+        db.add(db_categoria)
+        db.commit()
+        db.refresh(db_categoria)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Categoria ja cadastrada para esta pesquisa.") from exc
+    return db_categoria
+
+
+def update_resposta_espontanea_categoria(
+    db: Session,
+    pesquisa_id: int,
+    categoria_id: int,
+    categoria_in: schemas.RespostaEspontaneaCategoriaUpdate,
+    current_user: models.Usuario,
+):
+    db_categoria = _get_spontaneous_category(db, pesquisa_id, categoria_id, current_user)
+    if not db_categoria:
+        raise HTTPException(status_code=404, detail="Categoria nao encontrada.")
+
+    update_data = categoria_in.model_dump(exclude_unset=True)
+    nome = update_data.get("nome")
+    if nome is not None:
+        nome_normalizado = normalizar_resposta_espontanea(nome)
+        if not nome_normalizado:
+            raise HTTPException(status_code=422, detail="Nome da categoria e obrigatorio.")
+        existe_outro = db.query(models.CategoriaRespostaEspontanea.id).filter(
+            models.CategoriaRespostaEspontanea.pesquisa_id == pesquisa_id,
+            models.CategoriaRespostaEspontanea.nome_normalizado == nome_normalizado,
+            models.CategoriaRespostaEspontanea.ativo.is_(True),
+            models.CategoriaRespostaEspontanea.id != categoria_id,
+        ).first()
+        if existe_outro:
+            raise HTTPException(status_code=409, detail="Categoria ja cadastrada para esta pesquisa.")
+        db_categoria.nome = nome.strip()
+        db_categoria.nome_normalizado = nome_normalizado
+
+    if "ativo" in update_data:
+        if update_data["ativo"] is False:
+            db_categoria.ativo = False
+            mapeamentos_ativos = db.query(models.MapeamentoRespostaEspontanea).filter(
+                models.MapeamentoRespostaEspontanea.pesquisa_id == pesquisa_id,
+                models.MapeamentoRespostaEspontanea.categoria_id == categoria_id,
+                models.MapeamentoRespostaEspontanea.ativo.is_(True),
+            ).all()
+            for mapeamento in mapeamentos_ativos:
+                mapeamento.ativo = False
+                mapeamento.atualizado_por_id = current_user.id
+                mapeamento.atualizado_em = func.now()
+        elif update_data["ativo"] is True:
+            existe_outro = db.query(models.CategoriaRespostaEspontanea.id).filter(
+                models.CategoriaRespostaEspontanea.pesquisa_id == pesquisa_id,
+                models.CategoriaRespostaEspontanea.nome_normalizado == db_categoria.nome_normalizado,
+                models.CategoriaRespostaEspontanea.ativo.is_(True),
+                models.CategoriaRespostaEspontanea.id != categoria_id,
+            ).first()
+            if existe_outro:
+                raise HTTPException(status_code=409, detail="Categoria ja cadastrada para esta pesquisa.")
+            db_categoria.ativo = True
+
+    db_categoria.atualizado_por_id = current_user.id
+    db_categoria.atualizado_em = func.now()
+    try:
+        db.add(db_categoria)
+        db.commit()
+        db.refresh(db_categoria)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Categoria ja cadastrada para esta pesquisa.") from exc
+    return db_categoria
+
+
+def delete_resposta_espontanea_categoria(
+    db: Session,
+    pesquisa_id: int,
+    categoria_id: int,
+    current_user: models.Usuario,
+):
+    db_categoria = _get_spontaneous_category(db, pesquisa_id, categoria_id, current_user)
+    if not db_categoria:
+        raise HTTPException(status_code=404, detail="Categoria nao encontrada.")
+
+    mapeamentos_ativos = db.query(models.MapeamentoRespostaEspontanea).filter(
+        models.MapeamentoRespostaEspontanea.pesquisa_id == pesquisa_id,
+        models.MapeamentoRespostaEspontanea.categoria_id == categoria_id,
+        models.MapeamentoRespostaEspontanea.ativo.is_(True),
+    ).all()
+
+    try:
+        for mapeamento in mapeamentos_ativos:
+            mapeamento.ativo = False
+            mapeamento.atualizado_por_id = current_user.id
+            mapeamento.atualizado_em = func.now()
+        db_categoria.ativo = False
+        db_categoria.atualizado_por_id = current_user.id
+        db_categoria.atualizado_em = func.now()
+        db.commit()
+        db.refresh(db_categoria)
+    except Exception:
+        db.rollback()
+        raise
+    return db_categoria
+
+
+def mapear_respostas_espontaneas_em_lote(
+    db: Session,
+    pesquisa_id: int,
+    payload: schemas.RespostaEspontaneaMapeamentoLote,
+    current_user: models.Usuario,
+):
+    _get_spontaneous_pesquisa(db, pesquisa_id, current_user)
+    categoria = _get_spontaneous_category(db, pesquisa_id, payload.categoria_id, current_user)
+    if not categoria or not categoria.ativo:
+        raise HTTPException(status_code=404, detail="Categoria nao encontrada.")
+
+    chaves_normalizadas = [normalizar_resposta_espontanea(chave) for chave in payload.chaves_normalizadas]
+    if not chaves_normalizadas or any(not chave for chave in chaves_normalizadas):
+        raise HTTPException(status_code=422, detail="Lista de chaves invalida.")
+    if len(chaves_normalizadas) != len(set(chaves_normalizadas)):
+        raise HTTPException(status_code=422, detail="Chaves duplicadas no payload.")
+
+    query = (
+        db.query(models.Resposta.valor_resposta)
+        .join(models.Pergunta, models.Pergunta.id == models.Resposta.pergunta_id)
+        .join(models.Coleta, models.Coleta.id == models.Resposta.coleta_id)
+        .join(models.Pesquisa, models.Pesquisa.id == models.Coleta.pesquisa_id)
+        .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id)
+        .filter(
+            models.Pesquisa.id == pesquisa_id,
+            models.Projeto.company_id == current_user.company_id,
+            models.Coleta.company_id == current_user.company_id,
+            models.Pergunta.pesquisa_id == pesquisa_id,
+            models.Pergunta.ativo.is_(True),
+            models.Pergunta.eh_resposta_espontanea.is_(True),
+        )
+        .distinct()
+    )
+    keys_existentes = {
+        normalizar_resposta_espontanea(valor)
+        for valor, in query.all()
+    }
+    if not set(chaves_normalizadas).issubset(keys_existentes):
+        raise HTTPException(status_code=404, detail="Uma ou mais chaves nao foram encontradas nas respostas espontaneas da pesquisa.")
+
+    mapeamentos_atual = {
+        mapping.chave_normalizada: mapping
+        for mapping in db.query(models.MapeamentoRespostaEspontanea).filter(
+            models.MapeamentoRespostaEspontanea.pesquisa_id == pesquisa_id,
+            models.MapeamentoRespostaEspontanea.ativo.is_(True),
+        ).all()
+    }
+
+    criadas = atualizadas = inalteradas = 0
+    for chave in chaves_normalizadas:
+        existente = mapeamentos_atual.get(chave)
+        if existente is None:
+            db.add(models.MapeamentoRespostaEspontanea(
+                pesquisa_id=pesquisa_id,
+                categoria_id=categoria.id,
+                chave_normalizada=chave,
+                texto_referencia=chave,
+                ativo=True,
+                criado_por_id=current_user.id,
+                atualizado_por_id=current_user.id,
+            ))
+            criadas += 1
+            continue
+
+        if existente.categoria_id == categoria.id:
+            inalteradas += 1
+            continue
+
+        existente.categoria_id = categoria.id
+        existente.texto_referencia = chave
+        existente.atualizado_por_id = current_user.id
+        existente.atualizado_em = func.now()
+        atualizadas += 1
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Uma ou mais chaves ja possuem mapeamento ativo.") from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "categoria_id": categoria.id,
+        "categoria_nome": categoria.nome,
+        "criadas": criadas,
+        "atualizadas": atualizadas,
+        "inalteradas": inalteradas,
+        "total_processado": len(chaves_normalizadas),
+    }
+
+
+def delete_resposta_espontanea_mapeamento(
+    db: Session,
+    pesquisa_id: int,
+    mapeamento_id: int,
+    current_user: models.Usuario,
+):
+    mapeamento = db.query(models.MapeamentoRespostaEspontanea)\
+        .join(models.Pesquisa, models.Pesquisa.id == models.MapeamentoRespostaEspontanea.pesquisa_id)\
+        .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id).filter(
+        models.MapeamentoRespostaEspontanea.id == mapeamento_id,
+        models.MapeamentoRespostaEspontanea.pesquisa_id == pesquisa_id,
+        models.Projeto.company_id == current_user.company_id,
+        models.MapeamentoRespostaEspontanea.ativo.is_(True),
+    ).first()
+    if not mapeamento:
+        raise HTTPException(status_code=404, detail="Mapeamento nao encontrado.")
+
+    mapeamento.ativo = False
+    mapeamento.atualizado_por_id = current_user.id
+    mapeamento.atualizado_em = func.now()
+    db.add(mapeamento)
+    db.commit()
+    db.refresh(mapeamento)
+    return mapeamento
+
+# ==============================================================================
 # COLETAS E RESPOSTAS
 # ==============================================================================
 
@@ -975,6 +1478,54 @@ def get_relatorio_filtros(db: Session, pesquisa_id: int, current_user: models.Us
         ],
     }
 
+NAO_CATEGORIZADA = "Não categorizada"
+
+
+def resolve_reportable_response_value(
+    *,
+    pergunta,
+    valor_resposta,
+    spontaneous_mapping: dict[str, str],
+) -> str:
+    valor_original = "" if valor_resposta is None else str(valor_resposta)
+    if not pergunta.eh_resposta_espontanea:
+        return valor_original
+
+    chave_normalizada = normalizar_resposta_espontanea(valor_resposta)
+    return spontaneous_mapping.get(chave_normalizada, NAO_CATEGORIZADA)
+
+
+def get_active_spontaneous_mapping_for_report(
+    *,
+    db: Session,
+    pesquisa_id: int,
+    current_user: models.Usuario,
+) -> dict[str, str]:
+    rows = db.query(
+        models.MapeamentoRespostaEspontanea.chave_normalizada,
+        models.CategoriaRespostaEspontanea.nome,
+    ).join(
+        models.CategoriaRespostaEspontanea,
+        and_(
+            models.CategoriaRespostaEspontanea.id
+            == models.MapeamentoRespostaEspontanea.categoria_id,
+            models.CategoriaRespostaEspontanea.pesquisa_id == pesquisa_id,
+        ),
+    ).join(
+        models.Pesquisa,
+        models.Pesquisa.id == models.MapeamentoRespostaEspontanea.pesquisa_id,
+    ).join(
+        models.Projeto,
+        models.Projeto.id == models.Pesquisa.projeto_id,
+    ).filter(
+        models.MapeamentoRespostaEspontanea.pesquisa_id == pesquisa_id,
+        models.MapeamentoRespostaEspontanea.ativo.is_(True),
+        models.CategoriaRespostaEspontanea.ativo.is_(True),
+        models.Projeto.company_id == current_user.company_id,
+    ).all()
+    return {row.chave_normalizada: row.nome for row in rows}
+
+
 def get_relatorio_pesquisa(
     db: Session,
     pesquisa_id: int,
@@ -996,6 +1547,16 @@ def get_relatorio_pesquisa(
         )\
         .order_by(models.Pergunta.ordem, models.Pergunta.id)\
         .all()
+
+    spontaneous_mapping = (
+        get_active_spontaneous_mapping_for_report(
+            db=db,
+            pesquisa_id=pesquisa_id,
+            current_user=current_user,
+        )
+        if any(pergunta.eh_resposta_espontanea for pergunta in perguntas)
+        else {}
+    )
 
     total_query = db.query(func.count(models.Coleta.id))\
         .filter(models.Coleta.pesquisa_id == pesquisa_id)
@@ -1020,6 +1581,17 @@ def get_relatorio_pesquisa(
         .group_by(models.Resposta.valor_resposta)\
         .order_by(models.Resposta.valor_resposta)\
         .all()
+
+        if pergunta.eh_resposta_espontanea:
+            reportable_counts = defaultdict(int)
+            for valor_resposta, contagem in rows:
+                reportable_value = resolve_reportable_response_value(
+                    pergunta=pergunta,
+                    valor_resposta=valor_resposta,
+                    spontaneous_mapping=spontaneous_mapping,
+                )
+                reportable_counts[reportable_value] += int(contagem or 0)
+            rows = sorted(reportable_counts.items())
 
         total_pergunta = sum(int(contagem or 0) for _, contagem in rows)
         dados = []
@@ -1077,6 +1649,31 @@ def get_report_crosstab(
     _validar_pesquisa_relatorio(db, pesquisa_id, current_user)
     _validar_setores_relatorio(db, pesquisa_id, setor_ids, current_user)
 
+    perguntas = db.query(models.Pergunta).filter(
+        models.Pergunta.pesquisa_id == pesquisa_id,
+        models.Pergunta.id.in_([pergunta_linha_id, pergunta_coluna_id]),
+        models.Pergunta.ativo.is_(True),
+    ).all()
+    perguntas_por_id = {pergunta.id: pergunta for pergunta in perguntas}
+    pergunta_linha = perguntas_por_id.get(pergunta_linha_id)
+    pergunta_coluna = perguntas_por_id.get(pergunta_coluna_id)
+    if pergunta_linha is None or pergunta_coluna is None:
+        raise HTTPException(status_code=404, detail="Pergunta nao encontrada.")
+
+    has_spontaneous_question = (
+        pergunta_linha.eh_resposta_espontanea
+        or pergunta_coluna.eh_resposta_espontanea
+    )
+    spontaneous_mapping = (
+        get_active_spontaneous_mapping_for_report(
+            db=db,
+            pesquisa_id=pesquisa_id,
+            current_user=current_user,
+        )
+        if has_spontaneous_question
+        else {}
+    )
+
     resposta_linha = aliased(models.Resposta)
     resposta_coluna = aliased(models.Resposta)
 
@@ -1101,12 +1698,26 @@ def get_report_crosstab(
     .all()
     
     # Formata para JSON amigável ao Frontend
-    data = []
+    reportable_counts = defaultdict(int)
     for row in result:
+        reportable_line = resolve_reportable_response_value(
+            pergunta=pergunta_linha,
+            valor_resposta=row.linha,
+            spontaneous_mapping=spontaneous_mapping,
+        )
+        reportable_column = resolve_reportable_response_value(
+            pergunta=pergunta_coluna,
+            valor_resposta=row.coluna,
+            spontaneous_mapping=spontaneous_mapping,
+        )
+        reportable_counts[(reportable_line, reportable_column)] += int(row.total or 0)
+
+    data = []
+    for (reportable_line, reportable_column), total in reportable_counts.items():
         data.append({
-            "linha": row.linha,
-            "coluna": row.coluna,
-            "valor": row.total
+            "linha": reportable_line,
+            "coluna": reportable_column,
+            "valor": total
         })
         
     return data

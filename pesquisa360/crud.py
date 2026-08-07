@@ -1394,6 +1394,54 @@ def get_relatorio_filtros(db: Session, pesquisa_id: int, current_user: models.Us
         ],
     }
 
+NAO_CATEGORIZADA = "Não categorizada"
+
+
+def resolve_reportable_response_value(
+    *,
+    pergunta,
+    valor_resposta,
+    spontaneous_mapping: dict[str, str],
+) -> str:
+    valor_original = "" if valor_resposta is None else str(valor_resposta)
+    if not pergunta.eh_resposta_espontanea:
+        return valor_original
+
+    chave_normalizada = normalizar_resposta_espontanea(valor_resposta)
+    return spontaneous_mapping.get(chave_normalizada, NAO_CATEGORIZADA)
+
+
+def get_active_spontaneous_mapping_for_report(
+    *,
+    db: Session,
+    pesquisa_id: int,
+    current_user: models.Usuario,
+) -> dict[str, str]:
+    rows = db.query(
+        models.MapeamentoRespostaEspontanea.chave_normalizada,
+        models.CategoriaRespostaEspontanea.nome,
+    ).join(
+        models.CategoriaRespostaEspontanea,
+        and_(
+            models.CategoriaRespostaEspontanea.id
+            == models.MapeamentoRespostaEspontanea.categoria_id,
+            models.CategoriaRespostaEspontanea.pesquisa_id == pesquisa_id,
+        ),
+    ).join(
+        models.Pesquisa,
+        models.Pesquisa.id == models.MapeamentoRespostaEspontanea.pesquisa_id,
+    ).join(
+        models.Projeto,
+        models.Projeto.id == models.Pesquisa.projeto_id,
+    ).filter(
+        models.MapeamentoRespostaEspontanea.pesquisa_id == pesquisa_id,
+        models.MapeamentoRespostaEspontanea.ativo.is_(True),
+        models.CategoriaRespostaEspontanea.ativo.is_(True),
+        models.Projeto.company_id == current_user.company_id,
+    ).all()
+    return {row.chave_normalizada: row.nome for row in rows}
+
+
 def get_relatorio_pesquisa(
     db: Session,
     pesquisa_id: int,
@@ -1415,6 +1463,16 @@ def get_relatorio_pesquisa(
         )\
         .order_by(models.Pergunta.ordem, models.Pergunta.id)\
         .all()
+
+    spontaneous_mapping = (
+        get_active_spontaneous_mapping_for_report(
+            db=db,
+            pesquisa_id=pesquisa_id,
+            current_user=current_user,
+        )
+        if any(pergunta.eh_resposta_espontanea for pergunta in perguntas)
+        else {}
+    )
 
     total_query = db.query(func.count(models.Coleta.id))\
         .filter(models.Coleta.pesquisa_id == pesquisa_id)
@@ -1439,6 +1497,17 @@ def get_relatorio_pesquisa(
         .group_by(models.Resposta.valor_resposta)\
         .order_by(models.Resposta.valor_resposta)\
         .all()
+
+        if pergunta.eh_resposta_espontanea:
+            reportable_counts = defaultdict(int)
+            for valor_resposta, contagem in rows:
+                reportable_value = resolve_reportable_response_value(
+                    pergunta=pergunta,
+                    valor_resposta=valor_resposta,
+                    spontaneous_mapping=spontaneous_mapping,
+                )
+                reportable_counts[reportable_value] += int(contagem or 0)
+            rows = sorted(reportable_counts.items())
 
         total_pergunta = sum(int(contagem or 0) for _, contagem in rows)
         dados = []
@@ -1496,6 +1565,31 @@ def get_report_crosstab(
     _validar_pesquisa_relatorio(db, pesquisa_id, current_user)
     _validar_setores_relatorio(db, pesquisa_id, setor_ids, current_user)
 
+    perguntas = db.query(models.Pergunta).filter(
+        models.Pergunta.pesquisa_id == pesquisa_id,
+        models.Pergunta.id.in_([pergunta_linha_id, pergunta_coluna_id]),
+        models.Pergunta.ativo.is_(True),
+    ).all()
+    perguntas_por_id = {pergunta.id: pergunta for pergunta in perguntas}
+    pergunta_linha = perguntas_por_id.get(pergunta_linha_id)
+    pergunta_coluna = perguntas_por_id.get(pergunta_coluna_id)
+    if pergunta_linha is None or pergunta_coluna is None:
+        raise HTTPException(status_code=404, detail="Pergunta nao encontrada.")
+
+    has_spontaneous_question = (
+        pergunta_linha.eh_resposta_espontanea
+        or pergunta_coluna.eh_resposta_espontanea
+    )
+    spontaneous_mapping = (
+        get_active_spontaneous_mapping_for_report(
+            db=db,
+            pesquisa_id=pesquisa_id,
+            current_user=current_user,
+        )
+        if has_spontaneous_question
+        else {}
+    )
+
     resposta_linha = aliased(models.Resposta)
     resposta_coluna = aliased(models.Resposta)
 
@@ -1520,12 +1614,26 @@ def get_report_crosstab(
     .all()
     
     # Formata para JSON amigável ao Frontend
-    data = []
+    reportable_counts = defaultdict(int)
     for row in result:
+        reportable_line = resolve_reportable_response_value(
+            pergunta=pergunta_linha,
+            valor_resposta=row.linha,
+            spontaneous_mapping=spontaneous_mapping,
+        )
+        reportable_column = resolve_reportable_response_value(
+            pergunta=pergunta_coluna,
+            valor_resposta=row.coluna,
+            spontaneous_mapping=spontaneous_mapping,
+        )
+        reportable_counts[(reportable_line, reportable_column)] += int(row.total or 0)
+
+    data = []
+    for (reportable_line, reportable_column), total in reportable_counts.items():
         data.append({
-            "linha": row.linha,
-            "coluna": row.coluna,
-            "valor": row.total
+            "linha": reportable_line,
+            "coluna": reportable_column,
+            "valor": total
         })
         
     return data

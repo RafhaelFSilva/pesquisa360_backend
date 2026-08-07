@@ -2,7 +2,7 @@ import os
 import unittest
 from types import SimpleNamespace
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
@@ -231,9 +231,145 @@ class ApuracaoEspontaneaTests(unittest.TestCase):
     def tearDown(self):
         self.app.dependency_overrides.pop(get_current_user, None)
 
+    def _seed_report_mappings(self):
+        with self.engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO categorias_resposta_espontanea
+                    (id, pesquisa_id, nome, nome_normalizado, ativo, criado_por_id, atualizado_por_id)
+                VALUES (800, 1000, 'Clécio Luís', 'clecio luis', 1, 1, 1),
+                       (801, 1000, 'Categoria inativa', 'categoria inativa', 0, 1, 1),
+                       (802, 1000, 'Dr. Furlan', 'dr furlan', 1, 1, 1),
+                       (900, 2000, 'Outro tenant', 'outro tenant', 1, 2, 2)
+            """))
+            connection.execute(text("""
+                INSERT INTO mapeamentos_resposta_espontanea
+                    (id, pesquisa_id, categoria_id, chave_normalizada, texto_referencia,
+                     ativo, criado_por_id, atualizado_por_id)
+                VALUES (810, 1000, 800, 'clecio', 'Clécio', 1, 1, 1),
+                       (811, 1000, 800, 'clecio luis', 'Clécio Luís', 1, 1, 1),
+                       (812, 1000, 800, 'mapa inativo', 'Mapa inativo', 0, 1, 1),
+                       (813, 1000, 801, 'categoria inativa', 'Categoria inativa', 1, 1, 1),
+                       (814, 1000, 802, 'dr furlan', 'Dr. Furlan', 1, 1, 1),
+                       (910, 2000, 900, 'clecio', 'Clécio', 1, 2, 2)
+            """))
+
     def test_normalization_helper_is_deterministic(self):
         self.assertEqual(normalizar_resposta_espontanea(" Clécio  "), "clecio")
         self.assertEqual(normalizar_resposta_espontanea("DR. FURLAN"), "dr furlan")
+
+    def test_reportable_response_value_resolution(self):
+        normal = SimpleNamespace(eh_resposta_espontanea=False)
+        espontanea = SimpleNamespace(eh_resposta_espontanea=True)
+        original = " Clécio  "
+        mapping = {"clecio": "Clécio Luís"}
+
+        self.assertEqual(crud.resolve_reportable_response_value(
+            pergunta=normal,
+            valor_resposta=original,
+            spontaneous_mapping=mapping,
+        ), original)
+        self.assertEqual(crud.resolve_reportable_response_value(
+            pergunta=espontanea,
+            valor_resposta=original,
+            spontaneous_mapping=mapping,
+        ), "Clécio Luís")
+        self.assertEqual(crud.resolve_reportable_response_value(
+            pergunta=espontanea,
+            valor_resposta="Sem mapa",
+            spontaneous_mapping=mapping,
+        ), "Não categorizada")
+        self.assertEqual(original, " Clécio  ")
+
+    def test_simple_report_resolves_spontaneous_values_and_preserves_totals(self):
+        self._seed_report_mappings()
+        with self.engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO respostas (id, pergunta_id, coleta_id, valor_resposta)
+                VALUES (11, 10, 100, 'Clécio Luís'),
+                       (12, 10, 100, 'Sem mapa'),
+                       (13, 10, 101, 'Mapa inativo'),
+                       (14, 10, 101, 'Categoria inativa')
+            """))
+
+        with self.Session() as db:
+            report = crud.get_relatorio_pesquisa(db, 1000, self.current_user)
+            original_values = db.execute(text(
+                "SELECT valor_resposta FROM respostas WHERE id IN (1, 2, 11, 12, 13, 14) ORDER BY id"
+            )).scalars().all()
+
+        results = {item["pergunta_id"]: item for item in report["resultados"]}
+        spontaneous = results[10]
+        normal = results[12]
+
+        self.assertEqual(spontaneous["opcoes_resposta"], {
+            "Clécio Luís": 3,
+            "Não categorizada": 5,
+        })
+        self.assertEqual(spontaneous["total"], 8)
+        self.assertEqual(sum(spontaneous["opcoes_resposta"].values()), 8)
+        self.assertEqual(sum(item["percentual"] for item in spontaneous["dados"]), 100.0)
+        self.assertEqual(normal["opcoes_resposta"], {"Ignorar": 1})
+        self.assertEqual(original_values, [
+            "Clécio", "clecio", "Clécio Luís", "Sem mapa", "Mapa inativo", "Categoria inativa"
+        ])
+
+    def test_crosstab_resolves_both_axes_and_preserves_all_totals(self):
+        self._seed_report_mappings()
+        with self.engine.begin() as connection:
+            connection.execute(text("""
+                INSERT INTO perguntas
+                    (id, texto_pergunta, tipo_pergunta, ordem, eh_obrigatoria,
+                     eh_resposta_espontanea, ativo, pesquisa_id)
+                VALUES (14, 'Faixa', 'TEXTO', 5, 1, 0, 1, 1000)
+            """))
+            connection.execute(text("""
+                INSERT INTO respostas (id, pergunta_id, coleta_id, valor_resposta)
+                VALUES (11, 10, 100, 'Clécio Luís'),
+                       (12, 10, 100, 'Sem mapa'),
+                       (13, 10, 100, 'Mapa inativo'),
+                       (14, 10, 100, 'Categoria inativa'),
+                       (15, 14, 100, 'A'),
+                       (16, 14, 101, 'B')
+            """))
+
+        def counts(rows):
+            return {(row["linha"], row["coluna"]): row["valor"] for row in rows}
+
+        with self.Session() as db:
+            normal_normal = crud.get_report_crosstab(
+                db, 1000, 12, 14, self.current_user
+            )
+            normal_spontaneous = crud.get_report_crosstab(
+                db, 1000, 12, 10, self.current_user
+            )
+            spontaneous_normal = crud.get_report_crosstab(
+                db, 1000, 10, 14, self.current_user
+            )
+            spontaneous_spontaneous = crud.get_report_crosstab(
+                db, 1000, 10, 11, self.current_user
+            )
+
+        self.assertEqual(counts(normal_normal), {("Ignorar", "A"): 1})
+        self.assertEqual(counts(normal_spontaneous), {
+            ("Ignorar", "Clécio Luís"): 2,
+            ("Ignorar", "Não categorizada"): 4,
+        })
+        self.assertEqual(counts(spontaneous_normal), {
+            ("Clécio Luís", "A"): 2,
+            ("Clécio Luís", "B"): 1,
+            ("Não categorizada", "A"): 4,
+            ("Não categorizada", "B"): 1,
+        })
+        self.assertEqual(counts(spontaneous_spontaneous), {
+            ("Clécio Luís", "Dr. Furlan"): 3,
+            ("Não categorizada", "Dr. Furlan"): 5,
+        })
+        self.assertEqual(sum(counts(spontaneous_normal).values()), 8)
+        self.assertEqual(sum(counts(spontaneous_spontaneous).values()), 8)
+        with self.Session() as db:
+            with self.assertRaises(HTTPException) as tenant_error:
+                crud.get_report_crosstab(db, 2000, 20, 20, self.current_user)
+        self.assertEqual(tenant_error.exception.status_code, 404)
 
     def test_default_question_flag_stays_false_and_can_be_preserved_on_update(self):
         db = self.Session()

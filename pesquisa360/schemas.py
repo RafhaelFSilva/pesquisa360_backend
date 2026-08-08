@@ -563,6 +563,21 @@ class CrosstabResponse(BaseModel):
     pergunta_coluna: str
     dados: List[CrosstabRow]
 
+class TipoMapaEstrategico(StrEnum):
+    COBERTURA = "COBERTURA"
+    DISTRIBUICAO_SETOR = "DISTRIBUICAO_SETOR"
+    RESULTADO_SETOR = "RESULTADO_SETOR"
+    LIDERANCA_SETOR = "LIDERANCA_SETOR"
+
+class MapaPreviewRequest(BaseModel):
+    tipo_mapa: TipoMapaEstrategico
+    setor_ids: Optional[List[int]] = None
+    pergunta_id: Optional[int] = None
+    resposta: Optional[str] = None
+    agente_ids: Optional[List[int]] = None
+    data_inicio: Optional[datetime] = None
+    data_fim: Optional[datetime] = None
+
 class Coordenada(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lng: float = Field(ge=-180, le=180)

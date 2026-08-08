@@ -10,7 +10,7 @@ from typing import List, Optional
 from .utils import geocoding
 from geopy.geocoders import Nominatim
 from sqlalchemy.orm import Session, aliased, joinedload, load_only
-from sqlalchemy import func, Text, and_
+from sqlalchemy import func, Text, and_, exists
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import text, bindparam
 from geoalchemy2.shape import from_shape
@@ -18,6 +18,7 @@ from shapely.geometry import Point, Polygon
 from .db import models
 from . import schemas
 from .core import security
+from .question_types import normalize_question_type
 from .utils.response_normalization import normalizar_resposta_espontanea
 
 # ==============================================================================
@@ -1656,6 +1657,342 @@ def get_relatorio_pesquisa(
         "total_coletas": int(total_coletas),
         "resultados": resultados,
         "resultados_por_pergunta": resultados,
+    }
+
+FINALIDADES_ANALITICAS = ("RELATORIO", "AMBOS")
+TIPOS_PERGUNTA_CATEGORICA = {"ESCOLHA_SIMPLES", "MULTIPLA_ESCOLHA"}
+
+
+def _coleta_ponto_referencia():
+    return func.coalesce(models.Coleta.localizacao_inicio, models.Coleta.localizacao_fim)
+
+
+def _validar_setores_analiticos(
+    db: Session,
+    pesquisa_id: int,
+    setor_ids: Optional[List[int]],
+    current_user: models.Usuario,
+):
+    query = db.query(
+        models.Setor.id,
+        models.Setor.nome,
+        models.Setor.finalidade,
+        func.ST_AsGeoJSON(models.Setor.geometria).label("geometria"),
+    ).join(models.Pesquisa).join(models.Projeto).filter(
+        models.Setor.pesquisa_id == pesquisa_id,
+        models.Projeto.company_id == current_user.company_id,
+        models.Setor.finalidade.in_(FINALIDADES_ANALITICAS),
+        models.Setor.geometria.isnot(None),
+    )
+    if setor_ids:
+        ids_unicos = set(setor_ids)
+        query = query.filter(models.Setor.id.in_(ids_unicos))
+        setores = query.order_by(models.Setor.nome, models.Setor.id).all()
+        ids_validos = {setor.id for setor in setores}
+        if ids_validos != ids_unicos:
+            raise HTTPException(status_code=404, detail="Setor analitico nao encontrado para esta pesquisa.")
+        return setores
+    return query.order_by(models.Setor.nome, models.Setor.id).all()
+
+
+def _validar_pergunta_mapa(
+    db: Session,
+    pesquisa_id: int,
+    pergunta_id: Optional[int],
+    obrigatoria: bool,
+):
+    if pergunta_id is None:
+        if obrigatoria:
+            raise HTTPException(status_code=422, detail="pergunta_id e obrigatorio para este tipo de mapa.")
+        return None
+    pergunta = db.query(models.Pergunta).filter(
+        models.Pergunta.id == pergunta_id,
+        models.Pergunta.pesquisa_id == pesquisa_id,
+        models.Pergunta.ativo.is_(True),
+    ).first()
+    if pergunta is None:
+        raise HTTPException(status_code=404, detail="Pergunta nao encontrada.")
+    if obrigatoria and normalize_question_type(pergunta.tipo_pergunta) not in TIPOS_PERGUNTA_CATEGORICA:
+        raise HTTPException(status_code=422, detail="Pergunta deve ser categorica para este tipo de mapa.")
+    return pergunta
+
+
+def _aplicar_filtros_mapa(query, payload: schemas.MapaPreviewRequest):
+    if payload.agente_ids:
+        query = query.filter(models.Coleta.agente_id.in_(payload.agente_ids))
+    if payload.data_inicio:
+        query = query.filter(models.Coleta.data_inicio_coleta >= payload.data_inicio)
+    if payload.data_fim:
+        query = query.filter(models.Coleta.data_inicio_coleta <= payload.data_fim)
+    if payload.resposta is not None and payload.tipo_mapa != schemas.TipoMapaEstrategico.RESULTADO_SETOR:
+        resposta_match = db_query_exists_resposta(payload.pergunta_id, payload.resposta)
+        query = query.filter(resposta_match)
+    return query
+
+
+def db_query_exists_resposta(pergunta_id: Optional[int], resposta: str):
+    filtros = [
+        models.Resposta.coleta_id == models.Coleta.id,
+        models.Resposta.valor_resposta == resposta,
+    ]
+    if pergunta_id is not None:
+        filtros.append(models.Resposta.pergunta_id == pergunta_id)
+    return exists().where(and_(*filtros))
+
+
+def _classificar_coletas_territorio(
+    db: Session,
+    pesquisa_id: int,
+    current_user: models.Usuario,
+    payload: schemas.MapaPreviewRequest,
+):
+    _validar_pesquisa_relatorio(db, pesquisa_id, current_user)
+    setores = _validar_setores_analiticos(db, pesquisa_id, payload.setor_ids, current_user)
+    setor_ids = [setor.id for setor in setores]
+    ponto = _coleta_ponto_referencia()
+
+    base_query = db.query(
+        models.Coleta.id.label("coleta_id"),
+        func.ST_Y(ponto).label("lat"),
+        func.ST_X(ponto).label("lng"),
+    ).filter(
+        models.Coleta.pesquisa_id == pesquisa_id,
+        models.Coleta.company_id == current_user.company_id,
+    )
+    base_query = _aplicar_filtros_mapa(base_query, payload)
+    coletas = base_query.all()
+    coleta_ids = [row.coleta_id for row in coletas]
+    sem_coordenada = {row.coleta_id for row in coletas if row.lat is None or row.lng is None}
+    com_coordenada = [row.coleta_id for row in coletas if row.coleta_id not in sem_coordenada]
+
+    matches_por_coleta = defaultdict(list)
+    if com_coordenada and setor_ids:
+        matches = db.query(
+            models.Coleta.id.label("coleta_id"),
+            models.Setor.id.label("setor_id"),
+        ).select_from(models.Coleta).join(
+            models.Setor,
+            and_(
+                models.Setor.pesquisa_id == models.Coleta.pesquisa_id,
+                models.Setor.id.in_(setor_ids),
+                func.ST_Covers(models.Setor.geometria, ponto),
+            ),
+        ).filter(
+            models.Coleta.id.in_(com_coordenada),
+            models.Coleta.company_id == current_user.company_id,
+        ).all()
+        for row in matches:
+            matches_por_coleta[row.coleta_id].append(row.setor_id)
+
+    classificados = {}
+    conflito = set()
+    sem_setor = set()
+    for coleta_id in coleta_ids:
+        if coleta_id in sem_coordenada:
+            continue
+        matches = matches_por_coleta.get(coleta_id, [])
+        if len(matches) == 1:
+            classificados[coleta_id] = matches[0]
+        elif len(matches) > 1:
+            conflito.add(coleta_id)
+        else:
+            sem_setor.add(coleta_id)
+
+    return {
+        "setores": setores,
+        "coletas": coletas,
+        "classificados": classificados,
+        "sem_coordenada": sem_coordenada,
+        "sem_setor": sem_setor,
+        "conflito_setor": conflito,
+    }
+
+
+def get_mapa_territorio_diagnostico(
+    db: Session,
+    pesquisa_id: int,
+    current_user: models.Usuario,
+):
+    _validar_pesquisa_relatorio(db, pesquisa_id, current_user)
+    setor_a = aliased(models.Setor)
+    setor_b = aliased(models.Setor)
+    conflitos = db.query(
+        setor_a.id.label("setor_a_id"),
+        setor_a.nome.label("setor_a_nome"),
+        setor_a.finalidade.label("setor_a_finalidade"),
+        setor_b.id.label("setor_b_id"),
+        setor_b.nome.label("setor_b_nome"),
+        setor_b.finalidade.label("setor_b_finalidade"),
+        func.ST_Area(func.ST_Intersection(setor_a.geometria, setor_b.geometria)).label("area"),
+    ).select_from(setor_a).join(
+        setor_b,
+        and_(
+            setor_a.pesquisa_id == setor_b.pesquisa_id,
+            setor_a.id < setor_b.id,
+            setor_b.finalidade.in_(FINALIDADES_ANALITICAS),
+            setor_b.geometria.isnot(None),
+        ),
+    ).join(
+        models.Pesquisa,
+        models.Pesquisa.id == setor_a.pesquisa_id,
+    ).join(
+        models.Projeto,
+        models.Projeto.id == models.Pesquisa.projeto_id,
+    ).filter(
+        setor_a.pesquisa_id == pesquisa_id,
+        setor_a.finalidade.in_(FINALIDADES_ANALITICAS),
+        setor_a.geometria.isnot(None),
+        models.Projeto.company_id == current_user.company_id,
+        func.ST_Area(func.ST_Intersection(setor_a.geometria, setor_b.geometria)) > 0,
+    ).order_by(setor_a.id, setor_b.id).all()
+
+    payload = schemas.MapaPreviewRequest(tipo_mapa=schemas.TipoMapaEstrategico.DISTRIBUICAO_SETOR)
+    classificacao = _classificar_coletas_territorio(db, pesquisa_id, current_user, payload)
+    return {
+        "pesquisa_id": pesquisa_id,
+        "total_setores_analiticos": len(classificacao["setores"]),
+        "total_coletas": len(classificacao["coletas"]),
+        "total_classificado": len(classificacao["classificados"]),
+        "total_sem_setor": len(classificacao["sem_setor"]),
+        "total_conflito_setor": len(classificacao["conflito_setor"]),
+        "total_sem_coordenada": len(classificacao["sem_coordenada"]),
+        "conflitos_geometricos": [
+            {
+                "setor_a": {
+                    "id": row.setor_a_id,
+                    "nome": row.setor_a_nome,
+                    "finalidade": row.setor_a_finalidade,
+                },
+                "setor_b": {
+                    "id": row.setor_b_id,
+                    "nome": row.setor_b_nome,
+                    "finalidade": row.setor_b_finalidade,
+                },
+                "area_intersecao": float(row.area or 0),
+            }
+            for row in conflitos
+        ],
+    }
+
+
+def _setor_resultados_base(setores, classificados):
+    totais = defaultdict(int)
+    for setor_id in classificados.values():
+        totais[setor_id] += 1
+    return {
+        setor.id: {
+            "setor_id": setor.id,
+            "setor_nome": setor.nome,
+            "finalidade": setor.finalidade,
+            "geometria": json.loads(setor.geometria) if setor.geometria else None,
+            "total_coletas": int(totais.get(setor.id, 0)),
+            "amostra_setor": int(totais.get(setor.id, 0)),
+        }
+        for setor in setores
+    }
+
+
+def get_mapa_preview(
+    db: Session,
+    pesquisa_id: int,
+    current_user: models.Usuario,
+    payload: schemas.MapaPreviewRequest,
+):
+    pergunta = _validar_pergunta_mapa(
+        db,
+        pesquisa_id,
+        payload.pergunta_id,
+        payload.tipo_mapa in {
+            schemas.TipoMapaEstrategico.RESULTADO_SETOR,
+            schemas.TipoMapaEstrategico.LIDERANCA_SETOR,
+        },
+    )
+    classificacao = _classificar_coletas_territorio(db, pesquisa_id, current_user, payload)
+    resultado_por_setor = _setor_resultados_base(
+        classificacao["setores"],
+        classificacao["classificados"],
+    )
+
+    resposta_rows = []
+    if pergunta is not None and classificacao["classificados"]:
+        coleta_ids = list(classificacao["classificados"].keys())
+        resposta_rows = db.query(
+            models.Resposta.coleta_id,
+            models.Resposta.valor_resposta,
+        ).filter(
+            models.Resposta.coleta_id.in_(coleta_ids),
+            models.Resposta.pergunta_id == pergunta.id,
+        ).all()
+
+    if payload.tipo_mapa == schemas.TipoMapaEstrategico.COBERTURA:
+        pontos = [
+            {"lat": float(row.lat), "lng": float(row.lng), "peso": 1}
+            for row in classificacao["coletas"]
+            if row.coleta_id not in classificacao["sem_coordenada"]
+        ]
+        dados = []
+    elif payload.tipo_mapa == schemas.TipoMapaEstrategico.DISTRIBUICAO_SETOR:
+        pontos = []
+        dados = [
+            {**item, "valor": item["total_coletas"], "percentual": 0.0}
+            for item in resultado_por_setor.values()
+        ]
+    else:
+        pontos = []
+        contagens = defaultdict(lambda: defaultdict(int))
+        for row in resposta_rows:
+            setor_id = classificacao["classificados"].get(row.coleta_id)
+            if setor_id is None:
+                continue
+            contagens[setor_id]["__total__"] += 1
+            contagens[setor_id]["" if row.valor_resposta is None else str(row.valor_resposta)] += 1
+
+        dados = []
+        for setor_id, item in resultado_por_setor.items():
+            total_respostas = int(contagens[setor_id].get("__total__", 0))
+            if payload.tipo_mapa == schemas.TipoMapaEstrategico.RESULTADO_SETOR:
+                valor = int(contagens[setor_id].get(payload.resposta, 0)) if payload.resposta is not None else total_respostas
+                percentual = round((valor / total_respostas) * 100, 2) if total_respostas else 0.0
+                dados.append({
+                    **item,
+                    "total_respostas_validas": total_respostas,
+                    "valor": valor,
+                    "percentual": percentual,
+                })
+            else:
+                opcoes = [
+                    (opcao, total)
+                    for opcao, total in contagens[setor_id].items()
+                    if opcao != "__total__"
+                ]
+                opcoes.sort(key=lambda row: (-row[1], row[0]))
+                lider = opcoes[0] if opcoes else (None, 0)
+                segundo = opcoes[1] if len(opcoes) > 1 else (None, 0)
+                lider_percentual = round((lider[1] / total_respostas) * 100, 2) if total_respostas else 0.0
+                segundo_percentual = round((segundo[1] / total_respostas) * 100, 2) if total_respostas else 0.0
+                dados.append({
+                    **item,
+                    "total_respostas_validas": total_respostas,
+                    "lider": lider[0],
+                    "lider_total": int(lider[1]),
+                    "lider_percentual": lider_percentual,
+                    "segundo": segundo[0],
+                    "segundo_total": int(segundo[1]),
+                    "segundo_percentual": segundo_percentual,
+                    "margem": round(lider_percentual - segundo_percentual, 2),
+                })
+
+    return {
+        "pesquisa_id": pesquisa_id,
+        "tipo_mapa": payload.tipo_mapa.value,
+        "pergunta_id": pergunta.id if pergunta is not None else None,
+        "total_coletas": len(classificacao["coletas"]),
+        "total_classificado": len(classificacao["classificados"]),
+        "total_sem_setor": len(classificacao["sem_setor"]),
+        "total_conflito_setor": len(classificacao["conflito_setor"]),
+        "total_sem_coordenada": len(classificacao["sem_coordenada"]),
+        "pontos": pontos,
+        "dados": dados,
     }
 
 def get_report_crosstab(

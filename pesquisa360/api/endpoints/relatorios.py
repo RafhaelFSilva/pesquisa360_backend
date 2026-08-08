@@ -49,6 +49,42 @@ def read_relatorio_filtros(
         current_user=current_user
     )
 
+@router.get("/relatorios/pesquisas/{pesquisa_id}/mapas/territorio/diagnostico/")
+def read_mapa_territorio_diagnostico(
+    *,
+    db: Session = Depends(get_db),
+    pesquisa_id: int,
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """
+    Diagnostica a base territorial analitica da pesquisa.
+    """
+    check_access(db, pesquisa_id, current_user)
+    return crud.get_mapa_territorio_diagnostico(
+        db=db,
+        pesquisa_id=pesquisa_id,
+        current_user=current_user,
+    )
+
+@router.post("/relatorios/pesquisas/{pesquisa_id}/mapas/preview/")
+def read_mapa_preview(
+    *,
+    db: Session = Depends(get_db),
+    pesquisa_id: int,
+    payload: schemas.MapaPreviewRequest,
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """
+    Retorna previa agregada para Mapas Estrategicos.
+    """
+    check_access(db, pesquisa_id, current_user)
+    return crud.get_mapa_preview(
+        db=db,
+        pesquisa_id=pesquisa_id,
+        current_user=current_user,
+        payload=payload,
+    )
+
 @router.get("/relatorios/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa)
 @router.get("/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa)
 def read_relatorio_simples(

@@ -59,6 +59,10 @@ def get_missao_agente(
         .filter(
             models.Setor.pesquisa_id == pesquisa_id,
             models.Setor.agente_id == current_user.id,
+            models.Setor.finalidade.in_([
+                schemas.FinalidadeSetor.OPERACAO.value,
+                schemas.FinalidadeSetor.AMBOS.value,
+            ]),
         )
         .order_by(models.Setor.id.asc())
         .all()

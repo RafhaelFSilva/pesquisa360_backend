@@ -183,6 +183,15 @@ Todo relatório e monitoramento deve validar:
 pesquisa_id -> projeto_id -> company_id
 ```
 
+A finalidade territorial futura (`OPERACAO`, `RELATORIO`, `AMBOS`) nao altera a
+origem do tenant: o backend continua derivando `company_id` de
+`current_user.company_id`. Web e Mobile nao escolhem `company_id` ao criar,
+editar, importar ou consultar setores.
+
+Setores exclusivamente `RELATORIO` devem respeitar o mesmo isolamento por
+tenant, mas nao devem aparecer em fluxos operacionais, Mobile ou monitoramento
+operacional.
+
 ## 7. Testes obrigatórios Empresa A x Empresa B
 
 | Cenário | Resultado esperado |

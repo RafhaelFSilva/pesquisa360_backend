@@ -24,6 +24,7 @@ from pesquisa360.services.setor_shapefile_import import (
     read_source_crs,
     validate_shapefile_components,
 )
+from pesquisa360.schemas import FinalidadeSetor
 from scripts import importar_setor_shapefile as cli
 
 
@@ -175,6 +176,7 @@ def db():
         connection.execute(text("""
             CREATE TABLE setores (
                 id INTEGER PRIMARY KEY, nome TEXT, meta INTEGER, tolerancia INTEGER,
+                finalidade TEXT DEFAULT 'OPERACAO' NOT NULL,
                 geometria TEXT, pesquisa_id INTEGER, agente_id INTEGER
             )
         """))
@@ -199,7 +201,7 @@ def db():
               (2000, 'Survey B', NULL, 1, 200, NULL, NULL),
               (1001, 'Inactive', NULL, 0, 100, NULL, NULL)
         """))
-        connection.execute(text("INSERT INTO setores VALUES (1, '  Centro   Norte ', 1, 0, NULL, 1000, 2)"))
+        connection.execute(text("INSERT INTO setores VALUES (1, '  Centro   Norte ', 1, 0, 'OPERACAO', NULL, 1000, 2)"))
     session = Session()
     try:
         yield session
@@ -242,11 +244,48 @@ def test_summary_uses_real_persistence_names(db):
         features_merged=False,
     )
     summary = cli.build_summary(
-        context, geometry, file_path=Path("sector.shp"), name="Centro", meta=10, tolerance=20
+        context,
+        geometry,
+        file_path=Path("sector.shp"),
+        name="Centro",
+        finalidade=FinalidadeSetor.OPERACAO,
+        meta=10,
+        tolerance=20,
     )
+    assert "Finalidade: OPERACAO" in summary
     assert "Cota/meta: 10" in summary
     assert "Tolerancia: 20 m" in summary
     assert "Polygon EPSG:4326" in summary
+
+
+def test_summary_for_relatorio_omits_operational_fields(db):
+    context = cli.validate_import_context(
+        db,
+        user_id=1,
+        project_id=100,
+        survey_id=1000,
+        agent_id=None,
+        finalidade=FinalidadeSetor.RELATORIO,
+    )
+    geometry = Mock(
+        polygon=Polygon(clockwise_square(-51, -1)),
+        source_crs="EPSG:4326",
+        feature_count=1,
+        features_merged=False,
+    )
+    summary = cli.build_summary(
+        context,
+        geometry,
+        file_path=Path("sector.shp"),
+        name="Alta Floresta",
+        finalidade=FinalidadeSetor.RELATORIO,
+        meta=None,
+        tolerance=None,
+    )
+    assert "Finalidade: RELATORIO" in summary
+    assert "Agente:" not in summary
+    assert "Cota/meta:" not in summary
+    assert "Tolerancia:" not in summary
 
 
 def test_dry_run_does_not_call_create_or_commit(db, tmp_path: Path):
@@ -260,6 +299,7 @@ def test_dry_run_does_not_call_create_or_commit(db, tmp_path: Path):
         nome="Novo setor",
         meta="10",
         tolerancia="5",
+        finalidade="OPERACAO",
         unir_feicoes=False,
         dry_run=True,
         permitir_nome_duplicado=False,
@@ -269,6 +309,104 @@ def test_dry_run_does_not_call_create_or_commit(db, tmp_path: Path):
         assert cli.run(args, db) == 0
     create_setor.assert_not_called()
     commit.assert_not_called()
+
+
+def test_dry_run_relatorio_without_agent_or_operational_fields(db, tmp_path: Path):
+    shp = write_shapefile(tmp_path / "relatorio-dry", [[clockwise_square(-51, -1)]])
+    args = argparse.Namespace(
+        usuario_id=1,
+        projeto_id=100,
+        pesquisa_id=1000,
+        agente_id=None,
+        arquivo=shp,
+        nome="Alta Floresta",
+        meta=None,
+        tolerancia=None,
+        finalidade="RELATORIO",
+        unir_feicoes=False,
+        dry_run=True,
+        permitir_nome_duplicado=False,
+        sim=False,
+    )
+    with patch.object(cli, "persist_sector") as create_setor, patch.object(db, "commit") as commit:
+        assert cli.run(args, db) == 0
+    create_setor.assert_not_called()
+    commit.assert_not_called()
+
+
+def test_persist_sector_records_finalidade_and_optional_agent(db):
+    context = cli.validate_import_context(
+        db,
+        user_id=1,
+        project_id=100,
+        survey_id=1000,
+        agent_id=None,
+        finalidade=FinalidadeSetor.RELATORIO,
+    )
+    geometry = Mock(coordinates_lat_lon=[[0, -51], [0, -50], [1, -50]])
+    with patch("pesquisa360.crud.create_setor") as create_setor:
+        cli.persist_sector(
+            db,
+            context,
+            geometry,
+            name="Sagrado Coracao",
+            finalidade=FinalidadeSetor.RELATORIO,
+            meta=0,
+            tolerance=0,
+        )
+    setor_in = create_setor.call_args.args[1]
+    assert setor_in.finalidade == FinalidadeSetor.RELATORIO
+    assert setor_in.agente_id is None
+    assert setor_in.meta == 0
+    assert setor_in.tolerancia == 0
+
+
+def test_run_persists_ambos_with_agent(db, tmp_path: Path):
+    shp = write_shapefile(tmp_path / "ambos", [[clockwise_square(-51, -1)]])
+    args = argparse.Namespace(
+        usuario_id=1,
+        projeto_id=100,
+        pesquisa_id=1000,
+        agente_id=2,
+        arquivo=shp,
+        nome="Setor Ambos",
+        meta="12",
+        tolerancia="7",
+        finalidade="AMBOS",
+        unir_feicoes=False,
+        dry_run=False,
+        permitir_nome_duplicado=False,
+        sim=True,
+    )
+    with patch.object(cli, "persist_sector") as create_setor:
+        create_setor.return_value = Mock(id=99)
+        assert cli.run(args, db) == 0
+    assert create_setor.call_args.kwargs["finalidade"] == FinalidadeSetor.AMBOS
+    assert create_setor.call_args.kwargs["meta"] == 12
+    assert create_setor.call_args.kwargs["tolerance"] == 7
+
+
+def test_invalid_finalidade_aborts_before_persisting(db, tmp_path: Path):
+    shp = write_shapefile(tmp_path / "invalid-purpose", [[clockwise_square(-51, -1)]])
+    args = argparse.Namespace(
+        usuario_id=1,
+        projeto_id=100,
+        pesquisa_id=1000,
+        agente_id=None,
+        arquivo=shp,
+        nome="Invalido",
+        meta=None,
+        tolerancia=None,
+        finalidade="ANALITICO",
+        unir_feicoes=False,
+        dry_run=False,
+        permitir_nome_duplicado=False,
+        sim=True,
+    )
+    with patch.object(cli, "persist_sector") as create_setor:
+        with pytest.raises(ValueError, match="Finalidade invalida"):
+            cli.run(args, db)
+    create_setor.assert_not_called()
 
 
 def test_main_rolls_back_and_closes_on_unexpected_error():

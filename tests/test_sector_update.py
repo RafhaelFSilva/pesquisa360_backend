@@ -40,6 +40,7 @@ def database():
     raw = engine.raw_connection()
     raw.create_function("ST_GeomFromText", 2, lambda value, srid: value)
     as_geojson = lambda value: json.dumps(mapping(shapely_wkt.loads(value))) if value else None
+    raw.create_function("AsEWKB", 1, lambda value: value)
     raw.create_function("ST_AsGeoJSON", 1, as_geojson)
     raw.create_function("AsGeoJSON", 1, as_geojson)
     raw.close()
@@ -76,6 +77,7 @@ def database():
         connection.execute(text("""
             CREATE TABLE setores (
                 id INTEGER PRIMARY KEY, nome TEXT, meta INTEGER, tolerancia INTEGER,
+                finalidade TEXT DEFAULT 'OPERACAO' NOT NULL,
                 geometria TEXT, pesquisa_id INTEGER, agente_id INTEGER
             )
         """))
@@ -102,8 +104,9 @@ def database():
         """))
         connection.execute(text("""
             INSERT INTO setores VALUES
-              (500, 'Original', 10, 50, 'POLYGON ((-51 0, -50 0, -50 1, -51 0))', 1000, 2),
-              (501, 'Other survey', 20, 60, 'POLYGON ((-49 0, -48 0, -48 1, -49 0))', 1001, 2)
+              (500, 'Original', 10, 50, 'OPERACAO', 'POLYGON ((-51 0, -50 0, -50 1, -51 0))', 1000, 2),
+              (501, 'Other survey', 20, 60, 'OPERACAO', 'POLYGON ((-49 0, -48 0, -48 1, -49 0))', 1001, 2),
+              (502, 'Analitico', 0, 0, 'RELATORIO', 'POLYGON ((-51 1, -50 1, -50 2, -51 1))', 1000, NULL)
         """))
 
     yield engine, Session
@@ -123,7 +126,7 @@ def update(db, payload, **ids):
 
 def row(db, sector_id=500):
     return db.execute(
-        text("SELECT id, nome, meta, tolerancia, geometria, pesquisa_id, agente_id FROM setores WHERE id=:id"),
+        text("SELECT id, nome, meta, tolerancia, finalidade, geometria, pesquisa_id, agente_id FROM setores WHERE id=:id"),
         {"id": sector_id},
     ).mappings().one()
 
@@ -153,6 +156,93 @@ def test_updates_meta_and_tolerance(database):
         update(db, {"meta": 94, "tolerancia_metros": 100})
         after = row(db)
     assert (after["meta"], after["tolerancia"]) == (94, 100)
+
+
+def test_updates_finalidade(database):
+    _, Session = database
+    with Session() as db:
+        update(db, {"finalidade": "RELATORIO"})
+        after = row(db)
+    assert after["finalidade"] == "RELATORIO"
+
+
+def test_changes_operacao_to_relatorio_and_removes_agent(database):
+    _, Session = database
+    with Session() as db:
+        update(db, {"finalidade": "RELATORIO", "agente_id": None})
+        after = row(db)
+    assert after["finalidade"] == "RELATORIO"
+    assert after["agente_id"] is None
+
+
+def test_changes_relatorio_to_operacao_preserving_current_rules(database):
+    _, Session = database
+    with Session() as db:
+        update(
+            db,
+            {"finalidade": "OPERACAO", "agente_id": 2},
+            sector_id=502,
+        )
+        after = row(db, 502)
+    assert after["finalidade"] == "OPERACAO"
+    assert after["agente_id"] == 2
+
+
+def test_create_without_finalidade_defaults_to_operacao(database):
+    _, Session = database
+    with Session() as db:
+        setor = crud.create_setor(
+            db=db,
+            pesquisa_id=1000,
+            current_user=user(1, 10, "Gerente"),
+            setor_in=schemas.SetorCreate(
+                nome="Novo operacional",
+                meta=10,
+                geometria_coords=[[0, -51], [0, -50], [1, -50]],
+            ),
+        )
+        created = row(db, setor.id)
+    assert created["finalidade"] == "OPERACAO"
+    assert created["agente_id"] is None
+
+
+def test_create_relatorio_without_agent_is_valid(database):
+    _, Session = database
+    with Session() as db:
+        setor = crud.create_setor(
+            db=db,
+            pesquisa_id=1000,
+            current_user=user(1, 10, "Gerente"),
+            setor_in=schemas.SetorCreate(
+                nome="Analitico",
+                meta=10,
+                finalidade="RELATORIO",
+                geometria_coords=[[0, -51], [0, -50], [1, -50]],
+            ),
+        )
+        created = row(db, setor.id)
+    assert created["finalidade"] == "RELATORIO"
+    assert created["agente_id"] is None
+
+
+def test_create_operacao_and_ambos_preserve_current_optional_agent_rule(database):
+    _, Session = database
+    for finalidade in ("OPERACAO", "AMBOS"):
+        with Session() as db:
+            setor = crud.create_setor(
+                db=db,
+                pesquisa_id=1000,
+                current_user=user(1, 10, "Gerente"),
+                setor_in=schemas.SetorCreate(
+                    nome=f"Setor {finalidade}",
+                    meta=10,
+                    finalidade=finalidade,
+                    geometria_coords=[[0, -51], [0, -50], [1, -50]],
+                ),
+            )
+            created = row(db, setor.id)
+        assert created["finalidade"] == finalidade
+        assert created["agente_id"] is None
 
 
 def test_changes_to_active_agent_from_same_tenant(database):
@@ -270,6 +360,72 @@ def test_patch_returns_listing_format_and_preserves_id(database):
     assert response.json()["id"] == 500
     assert response.json()["nome"] == "Through PATCH"
     assert response.json()["geometria"]["type"] == "Polygon"
+    assert response.json()["finalidade"] == "OPERACAO"
+
+
+def test_list_returns_finalidade(database):
+    _, Session = database
+    app = FastAPI()
+    app.include_router(projetos.router)
+
+    def override_db():
+        with Session() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user(1, 10, "Gerente")
+    with TestClient(app) as client:
+        response = client.get("/projetos/100/pesquisas/1000/setores")
+    assert response.status_code == 200
+    assert response.json()[0]["finalidade"] == "OPERACAO"
+
+
+def test_list_can_filter_by_finalidade_without_changing_default(database):
+    _, Session = database
+    app = FastAPI()
+    app.include_router(projetos.router)
+
+    def override_db():
+        with Session() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user(1, 10, "Gerente")
+    with TestClient(app) as client:
+        all_response = client.get("/projetos/100/pesquisas/1000/setores")
+        relatorio_response = client.get("/projetos/100/pesquisas/1000/setores?finalidade=RELATORIO")
+    assert all_response.status_code == 200
+    assert relatorio_response.status_code == 200
+    assert {item["finalidade"] for item in all_response.json()} == {"OPERACAO", "RELATORIO"}
+    assert [item["id"] for item in relatorio_response.json()] == [502]
+
+
+def test_create_route_rejects_invalid_finalidade_with_422(database):
+    _, Session = database
+    app = FastAPI()
+    app.include_router(projetos.router)
+
+    def override_db():
+        with Session() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: user(1, 10, "Gerente")
+    with TestClient(app) as client:
+        response = client.post(
+            "/projetos/100/pesquisas/1000/setores",
+            json={
+                "nome": "Invalido",
+                "meta": 10,
+                "finalidade": "ANALITICO",
+                "poligono": [
+                    {"lat": 0, "lng": -51},
+                    {"lat": 0, "lng": -50},
+                    {"lat": 1, "lng": -50},
+                ],
+            },
+        )
+    assert response.status_code == 422
 
 
 def test_patch_returns_400_for_topologically_invalid_polygon(database):

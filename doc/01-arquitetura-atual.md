@@ -185,7 +185,7 @@ O mobile é **offline-first**. Toda coleta deve poder ocorrer sem internet e ser
 | Perguntas | Estrutura do formulário |
 | Coletas | Respostas + GPS + status de sync |
 | Geofence | Cerca global da pesquisa |
-| Setores | Subdivisão operacional e cotas |
+| Setores | Subdivisao operacional e cotas no estado atual; separacao futura entre territorio operacional e analitico |
 | Relatórios | Resumo e crosstab |
 | Monitoramento | Visualização de coletas em mapa |
 
@@ -196,6 +196,8 @@ O mobile é **offline-first**. Toda coleta deve poder ocorrer sem internet e ser
 3. Geocoding existe, mas precisa de política controlada para evitar chamadas em massa.
 4. Monitoramento atual é de coletas sincronizadas, não heartbeat em tempo real do agente.
 5. Relatórios multivariáveis ficam fora do ciclo atual.
+6. A finalidade territorial `OPERACAO` / `RELATORIO` / `AMBOS` esta aprovada,
+   mas ainda nao implementada no contrato atual.
 
 ## 7. Direção recomendada
 
@@ -205,3 +207,5 @@ O mobile é **offline-first**. Toda coleta deve poder ocorrer sem internet e ser
 - Criar camada explícita de sincronização mobile.
 - Tratar geocoding como processamento controlado/backfill.
 - Evoluir monitoramento em duas fases: polling Web e heartbeat Mobile.
+- Implementar a separacao entre setores operacionais e analiticos preservando
+  compatibilidade: todos os setores existentes devem iniciar como `OPERACAO`.

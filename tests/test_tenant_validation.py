@@ -228,7 +228,7 @@ class TenantValidationTests(unittest.TestCase):
 
     def test_migration_has_one_new_head(self):
         heads = ScriptDirectory.from_config(Config("alembic.ini")).get_heads()
-        self.assertEqual(heads, ["b1c2d3e4f5a6"])
+        self.assertEqual(heads, ["f2a3b4c5d6e7"])
 
 
 if __name__ == "__main__":

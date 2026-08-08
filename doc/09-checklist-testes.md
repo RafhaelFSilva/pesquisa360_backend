@@ -117,6 +117,20 @@ flutter test
 - [ ] Projeto, pesquisa, setor ou agente de outro tenant retorna `404`.
 - [ ] Polygon inválido não deixa alterações parciais no setor.
 
+Futuro - finalidade territorial:
+
+- [ ] Setores existentes sao interpretados/migrados como `OPERACAO`.
+- [ ] Criar setor `OPERACAO` exige regras operacionais aplicaveis.
+- [ ] Criar setor `RELATORIO` nao exige agente, meta/cota ou tolerancia
+  operacional.
+- [ ] Criar setor `AMBOS` cumpre regras operacionais quando usado em operacao.
+- [ ] Setor `RELATORIO` exclusivo nao aparece no download Mobile, monitoramento
+  operacional, geofence operacional ou cotas.
+- [ ] Edicao de nome, geometria e finalidade nao reclassifica historico
+  silenciosamente.
+- [ ] Importacao de Shapefile permite escolher finalidade sem aceitar
+  `company_id` do cliente.
+
 ## 9. Seed de coletas
 
 - [ ] Criar 100 coletas via API real.
@@ -149,6 +163,19 @@ Crosstab:
 - [ ] Gerar 10 combinações 2 a 2.
 - [ ] Gráficos renderizam.
 - [ ] Sem erro CORS/500/ResponseValidationError.
+
+Futuro - Mapas Estrategicos:
+
+- [ ] Cobertura das Coletas filtra setores analiticos por tenant.
+- [ ] Resultado por Setor usa setores `RELATORIO` ou `AMBOS`.
+- [ ] Lideranca por Setor nao duplica entrevistas em sobreposicao/conflito.
+- [ ] Distribuicao de Coletas classifica coleta fora de setor como `SEM_SETOR`.
+- [ ] Classificacao espacial roda no Backend/PostGIS, preferencialmente com
+  `ST_Covers`.
+- [ ] Localizacao inicial e usada como referencia principal; localizacao final
+  funciona como fallback.
+- [ ] Relatorio Executivo de Mapas respeita filtros, escolha de setores e
+  previa.
 
 ## 11. Monitoramento
 

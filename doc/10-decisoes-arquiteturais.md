@@ -165,3 +165,45 @@ EPSG:4326 e submetida às mesmas regras de tenant da aplicação. A ferramenta
 reutiliza o contrato interno e o CRUD de criação de setor, sem endpoint ou
 migration novos. `MultiPolygon` é rejeitado enquanto a coluna permanecer
 `Geometry("POLYGON", srid=4326)`.
+
+## ADR-017 - Separacao entre territorio operacional e territorio analitico
+
+Status: decisao aprovada para implementacao futura. Nao representa contrato
+HTTP ja disponivel no estado atual.
+
+O dominio de setores passara a distinguir a finalidade territorial por valores
+canonicos:
+
+```text
+OPERACAO
+RELATORIO
+AMBOS
+```
+
+Regras aprovadas:
+
+- Setor `OPERACAO` e usado para planejamento e execucao da coleta, pode ter
+  agente responsavel, participa de meta/cota, tolerancia/geofence operacional,
+  envio ao Mobile e monitoramento operacional.
+- Setor `RELATORIO` e usado para analise territorial, mapas e relatorios
+  executivos. Agente, meta/cota e tolerancia operacional nao sao obrigatorios.
+- Setor `RELATORIO` exclusivo nao deve ser enviado ao Mobile como setor
+  operacional nem aparecer nos fluxos operacionais atuais.
+- Setor `AMBOS` pode exercer as duas funcoes; quando atuar operacionalmente,
+  deve cumprir as regras de operacao.
+- Todos os setores existentes devem ser considerados `OPERACAO` para preservar
+  compatibilidade com Mobile, planejamento, monitoramento e cotas.
+- O Backend continua sendo a fonte da verdade para tenant, finalidade,
+  permissoes e classificacao territorial. Web e Mobile nao escolhem
+  `company_id`.
+- A classificacao espacial futura sera feita no Backend/PostGIS,
+  preferencialmente com `ST_Covers`, usando a localizacao inicial da coleta como
+  referencia principal e a localizacao final como fallback.
+- Coleta que nao estiver em nenhum setor analitico deve ser classificada como
+  `SEM_SETOR`.
+- Sobreposicao/conflito entre setores analiticos nao deve duplicar entrevistas.
+- Edicoes futuras de nome, geometria e finalidade devem preservar historico:
+  edicao territorial nao deve reclassificar silenciosamente dados historicos.
+- Importacao e edicao futuras devem reutilizar a infraestrutura existente de
+  setores/Shapefile, acrescentando a escolha de finalidade sem criar tenant no
+  cliente.

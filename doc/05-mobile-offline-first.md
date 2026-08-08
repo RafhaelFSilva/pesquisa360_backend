@@ -151,6 +151,14 @@ Regras:
 - Enviar coleta normalmente se a regra não for bloqueante.
 - Backend continua validando geofence na criação da coleta.
 
+Estado atual: todos os setores existentes devem continuar sendo tratados como
+operacionais para preservar o comportamento do Mobile.
+
+Roadmap aprovado: quando o backend suportar finalidade territorial, o Mobile
+deve baixar apenas setores `OPERACAO` ou `AMBOS` no contexto operacional.
+Setores exclusivamente `RELATORIO` nao devem ser enviados ao app como missao,
+setor operacional, meta/cota ou tolerancia/geofence operacional.
+
 ## 10. Troca de usuário
 
 Ao fazer logout:

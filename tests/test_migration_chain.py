@@ -17,7 +17,7 @@ from alembic.script import ScriptDirectory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "b1c2d3e4f5a6"
+HEAD_REVISION = "f2a3b4c5d6e7"
 
 
 class MigrationChainTests(unittest.TestCase):
@@ -159,6 +159,9 @@ class MigrationChainTests(unittest.TestCase):
                 pergunta_columns = {
                     row[1]: row for row in connection.execute("PRAGMA table_info(perguntas)")
                 }
+                setor_columns = {
+                    row[1]: row for row in connection.execute("PRAGMA table_info(setores)")
+                }
                 categoria_indexes = connection.execute(
                     "PRAGMA index_list(categorias_resposta_espontanea)"
                 ).fetchall()
@@ -180,6 +183,8 @@ class MigrationChainTests(unittest.TestCase):
             self.assertEqual(coleta_columns["company_id"][3], 1)
             self.assertEqual(coleta_columns["client_uuid"][3], 1)
             self.assertEqual(pergunta_columns["eh_resposta_espontanea"][3], 1)
+            self.assertEqual(setor_columns["finalidade"][3], 1)
+            self.assertEqual(setor_columns["finalidade"][4], "'OPERACAO'")
             self.assertIn(
                 "uq_categoria_resposta_espontanea_pesquisa_nome_ativo",
                 {index[1] for index in categoria_indexes if index[2]},
@@ -207,6 +212,30 @@ class MigrationChainTests(unittest.TestCase):
             self.assertEqual({row[0] for row in collections}, {company_id})
             uuids = [UUID(row[1]) for row in collections]
             self.assertEqual(len(set(uuids)), 2)
+
+    def test_legacy_setores_receive_operacao_finalidade(self):
+        with self.temporary_database("b1c2d3e4f5a6") as (db_path, database_url):
+            connection = sqlite3.connect(db_path)
+            try:
+                connection.execute(
+                    """INSERT INTO setores
+                       (id, nome, meta, geometria, pesquisa_id, agente_id, tolerancia)
+                       VALUES (990, 'Setor legado', 10, NULL, 1, NULL, 50)"""
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            self.run_alembic("upgrade", "head", database_url=database_url)
+
+            connection = sqlite3.connect(db_path)
+            try:
+                finalidade = connection.execute(
+                    "SELECT finalidade FROM setores WHERE id = 990"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            self.assertEqual(finalidade, "OPERACAO")
 
     def test_invalid_legacy_cnpj_aborts_without_advancing_revision(self):
         with self.temporary_database("d4e8a1b2c3f4") as (db_path, database_url):

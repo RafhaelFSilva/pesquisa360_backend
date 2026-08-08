@@ -23,6 +23,7 @@ from pesquisa360.services.setor_shapefile_import import (  # noqa: E402
     ShapefileImportError,
     load_sector_geometry,
 )
+from pesquisa360.schemas import FinalidadeSetor  # noqa: E402
 
 
 IMPORT_DIR = ROOT_DIR / "data" / "imports" / "setores"
@@ -39,7 +40,7 @@ class ImportContext:
     current_user: models.Usuario
     project: models.Projeto
     survey: models.Pesquisa
-    agent: models.Usuario
+    agent: models.Usuario | None
 
 
 def normalize_sector_name(value: str) -> str:
@@ -67,35 +68,60 @@ def validate_tolerance(value: object) -> int:
     return parsed
 
 
+def normalize_finalidade(value: object) -> FinalidadeSetor:
+    normalized = str(value).strip().upper()
+    try:
+        return FinalidadeSetor(normalized)
+    except ValueError as exc:
+        raise ValueError("Finalidade invalida. Use OPERACAO, RELATORIO ou AMBOS.") from exc
+
+
+def finalidade_is_operational(finalidade: FinalidadeSetor) -> bool:
+    return finalidade in {FinalidadeSetor.OPERACAO, FinalidadeSetor.AMBOS}
+
+
 def build_summary(
     context: ImportContext,
     geometry: ImportedSectorGeometry,
     *,
     file_path: Path,
     name: str,
-    meta: int,
-    tolerance: int,
+    finalidade: FinalidadeSetor,
+    meta: int | None,
+    tolerance: int | None,
 ) -> str:
     min_lon, min_lat, max_lon, max_lat = geometry.polygon.bounds
-    return "\n".join(
-        (
-            "Resumo da importacao",
-            f"Tenant: {context.current_user.company_id}",
-            f"Usuario administrativo: {context.current_user.nome} (ID {context.current_user.id})",
-            f"Projeto: {context.project.nome} (ID {context.project.id})",
-            f"Pesquisa: {context.survey.titulo} (ID {context.survey.id})",
-            f"Agente: {context.agent.nome} (ID {context.agent.id})",
+    lines = [
+        "Resumo da importacao",
+        f"Tenant: {context.current_user.company_id}",
+        f"Usuario administrativo: {context.current_user.nome} (ID {context.current_user.id})",
+        f"Projeto: {context.project.nome} (ID {context.project.id})",
+        f"Pesquisa: {context.survey.titulo} (ID {context.survey.id})",
+        f"Finalidade: {finalidade.value}",
+    ]
+    if context.agent is not None:
+        lines.append(f"Agente: {context.agent.nome} (ID {context.agent.id})")
+    lines.extend(
+        [
             f"Arquivo: {file_path}",
             f"Setor: {name}",
-            f"Cota/meta: {meta}",
-            f"Tolerancia: {tolerance} m",
+        ]
+    )
+    if meta is not None:
+        lines.append(f"Cota/meta: {meta}")
+    if tolerance is not None:
+        lines.append(f"Tolerancia: {tolerance} m")
+    lines.extend(
+        [
             f"CRS de origem: {geometry.source_crs}",
             f"Feicoes: {geometry.feature_count}",
+            "Feicoes rejeitadas: 0",
             f"Feicoes unidas: {'sim' if geometry.features_merged else 'nao'}",
             "Geometria final: Polygon EPSG:4326",
             f"Limites (lon/lat): {min_lon:.6f}, {min_lat:.6f}, {max_lon:.6f}, {max_lat:.6f}",
-        )
+        ]
     )
+    return "\n".join(lines)
 
 
 def eligible_admins(db: Session) -> list[models.Usuario]:
@@ -164,7 +190,8 @@ def validate_import_context(
     user_id: int,
     project_id: int,
     survey_id: int,
-    agent_id: int,
+    agent_id: int | None,
+    finalidade: FinalidadeSetor = FinalidadeSetor.OPERACAO,
 ) -> ImportContext:
     current_user = (
         db.query(models.Usuario)
@@ -214,18 +241,20 @@ def validate_import_context(
     if survey is None:
         raise ValueError("Pesquisa inexistente, inativa ou fora do projeto selecionado.")
 
-    agent = (
-        db.query(models.Usuario)
-        .join(models.Perfil)
-        .filter(
-            models.Usuario.id == agent_id,
-            models.Usuario.company_id == current_user.company_id,
-            models.Usuario.ativo.is_(True),
-            func.lower(models.Perfil.nome) == AGENT_PROFILE,
+    agent = None
+    if agent_id is not None:
+        agent = (
+            db.query(models.Usuario)
+            .join(models.Perfil)
+            .filter(
+                models.Usuario.id == agent_id,
+                models.Usuario.company_id == current_user.company_id,
+                models.Usuario.ativo.is_(True),
+                func.lower(models.Perfil.nome) == AGENT_PROFILE,
+            )
+            .first()
         )
-        .first()
-    )
-    if agent is None:
+    if finalidade_is_operational(finalidade) and agent is None:
         raise ValueError("Agente inexistente, inativo ou fora do tenant selecionado.")
     return ImportContext(current_user=current_user, project=project, survey=survey, agent=agent)
 
@@ -283,6 +312,28 @@ def _validated_number(label: str, validator: Callable[[object], int]) -> int:
             print(exc)
 
 
+def _select_finalidade() -> FinalidadeSetor:
+    options = (
+        ("1", "Operacao de Campo", FinalidadeSetor.OPERACAO),
+        ("2", "Relatorios", FinalidadeSetor.RELATORIO),
+        ("3", "Operacao + Relatorios", FinalidadeSetor.AMBOS),
+    )
+    while True:
+        print("\nFinalidade dos setores (0 para cancelar):")
+        for key, label, _ in options:
+            print(f"{key} - {label}")
+        raw = input("> ").strip().casefold()
+        if raw in {"0", "cancelar"}:
+            raise ImportCancelled
+        for key, _, finalidade in options:
+            if raw == key:
+                return finalidade
+        try:
+            return normalize_finalidade(raw)
+        except ValueError:
+            print("Opcao invalida. Tente novamente.")
+
+
 def _select_file() -> Path:
     available = sorted(IMPORT_DIR.glob("*.shp"), key=lambda item: item.name.casefold())
     while True:
@@ -335,6 +386,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nome")
     parser.add_argument("--meta", "--cota", dest="meta")
     parser.add_argument("--tolerancia", "--tolerancia-metros", dest="tolerancia")
+    parser.add_argument("--finalidade")
     parser.add_argument("--unir-feicoes", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--permitir-nome-duplicado", action="store_true")
@@ -348,6 +400,7 @@ def persist_sector(
     geometry: ImportedSectorGeometry,
     *,
     name: str,
+    finalidade: FinalidadeSetor,
     meta: int,
     tolerance: int,
 ):
@@ -358,7 +411,8 @@ def persist_sector(
         nome=name,
         meta=meta,
         tolerancia=tolerance,
-        agente_id=context.agent.id,
+        agente_id=context.agent.id if context.agent is not None else None,
+        finalidade=finalidade,
         geometria_coords=geometry.coordinates_lat_lon,
     )
     return crud.create_setor(db, setor_in, context.survey.id, context.current_user)
@@ -386,19 +440,34 @@ def run(args: argparse.Namespace, db: Session) -> int:
     if survey is None:
         raise ValueError("Pesquisa inexistente, inativa ou fora do projeto selecionado.")
 
-    agents = tenant_agents(db, current_user.company_id)
-    agent = next((item for item in agents if item.id == args.agente_id), None)
-    if agent is None and args.agente_id is None:
-        agent = _select(agents, "o agente ativo", lambda item: f"{item.nome} (ID {item.id})")
-    if agent is None:
-        raise ValueError("Agente inexistente, inativo ou fora do tenant selecionado.")
+    finalidade = normalize_finalidade(args.finalidade) if args.finalidade is not None else _select_finalidade()
+
+    agent = None
+    if finalidade_is_operational(finalidade):
+        agents = tenant_agents(db, current_user.company_id)
+        agent = next((item for item in agents if item.id == args.agente_id), None)
+        if agent is None and args.agente_id is None:
+            agent = _select(agents, "o agente ativo", lambda item: f"{item.nome} (ID {item.id})")
+        if agent is None:
+            raise ValueError("Agente inexistente, inativo ou fora do tenant selecionado.")
+    elif args.agente_id is not None:
+        agents = tenant_agents(db, current_user.company_id)
+        agent = next((item for item in agents if item.id == args.agente_id), None)
+        if agent is None:
+            raise ValueError("Agente inexistente, inativo ou fora do tenant selecionado.")
 
     file_path = args.arquivo.expanduser() if args.arquivo else _select_file()
     name = args.nome.strip() if args.nome else _required_text("Nome do setor")
     if not name:
         raise ValueError("Nome do setor e obrigatorio.")
-    meta = validate_meta(args.meta) if args.meta is not None else _validated_number("Cota/meta", validate_meta)
-    tolerance = validate_tolerance(args.tolerancia) if args.tolerancia is not None else _validated_number("Tolerancia", validate_tolerance)
+    if finalidade_is_operational(finalidade):
+        meta_input = validate_meta(args.meta) if args.meta is not None else _validated_number("Cota/meta", validate_meta)
+        tolerance_input = validate_tolerance(args.tolerancia) if args.tolerancia is not None else _validated_number("Tolerancia", validate_tolerance)
+    else:
+        meta_input = validate_meta(args.meta) if args.meta is not None else None
+        tolerance_input = validate_tolerance(args.tolerancia) if args.tolerancia is not None else None
+    meta_to_persist = meta_input if meta_input is not None else 0
+    tolerance_to_persist = tolerance_input if tolerance_input is not None else 0
     geometry = _resolve_geometry(file_path, args.unir_feicoes)
 
     # Revalida toda a cadeia imediatamente antes do dry-run ou da gravacao.
@@ -407,7 +476,8 @@ def run(args: argparse.Namespace, db: Session) -> int:
         user_id=current_user.id,
         project_id=project.id,
         survey_id=survey.id,
-        agent_id=agent.id,
+        agent_id=agent.id if agent is not None else None,
+        finalidade=finalidade,
     )
     ensure_name_available(
         db,
@@ -415,7 +485,17 @@ def run(args: argparse.Namespace, db: Session) -> int:
         name=name,
         allow_duplicate=args.permitir_nome_duplicado,
     )
-    print(build_summary(context, geometry, file_path=file_path.resolve(), name=name, meta=meta, tolerance=tolerance))
+    print(
+        build_summary(
+            context,
+            geometry,
+            file_path=file_path.resolve(),
+            name=name,
+            finalidade=finalidade,
+            meta=meta_input,
+            tolerance=tolerance_input,
+        )
+    )
 
     if args.dry_run:
         print("Dry-run concluido: nenhuma gravacao foi executada.")
@@ -428,8 +508,9 @@ def run(args: argparse.Namespace, db: Session) -> int:
         context,
         geometry,
         name=name,
-        meta=meta,
-        tolerance=tolerance,
+        finalidade=finalidade,
+        meta=meta_to_persist,
+        tolerance=tolerance_to_persist,
     )
     print(f"Setor importado com sucesso. ID criado: {created.id}")
     return 0

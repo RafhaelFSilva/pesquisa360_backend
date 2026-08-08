@@ -203,6 +203,11 @@ Lista setores.
 
 **Atenção:** o contrato atual pode retornar `geometria` GeoJSON ou `poligono`, dependendo do endpoint/ajuste. O frontend deve tolerar ambos enquanto o contrato não for consolidado.
 
+**Estado atual:** setores existentes sao tratados como setores operacionais.
+Ainda nao existe campo de finalidade no contrato HTTP. A separacao futura entre
+`OPERACAO`, `RELATORIO` e `AMBOS` esta aprovada em ADR, mas nao deve ser
+assumida por Web/Mobile ate implementacao e versionamento do contrato.
+
 ### POST `/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores`
 
 Cria setor.
@@ -262,6 +267,10 @@ contratos HTTP acima. O CLI reutiliza internamente `schemas.SetorCreate` e
 `crud.create_setor`. Os nomes persistidos no modelo real sao `meta`,
 `tolerancia` e `geometria`; os termos amigaveis da interface sao mapeados para
 esses campos. Consulte `11-importacao-setores-shapefile.md`.
+
+Roadmap aprovado: reutilizar a importacao interativa para permitir escolha de
+finalidade territorial. Setores `RELATORIO` nao exigirao agente, meta/cota ou
+tolerancia operacional. Essa regra ainda nao altera o contrato atual.
 
 ## 9. Coletas
 

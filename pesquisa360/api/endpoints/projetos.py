@@ -105,6 +105,7 @@ def setor_to_dict(s) -> dict:
         "id": s.id,
         "nome": s.nome,
         "meta": s.meta,
+        "finalidade": s.finalidade,
         "tolerancia": s.tolerancia,
         "tolerancia_metros": s.tolerancia,
         "agente_id": s.agente_id,
@@ -521,6 +522,7 @@ def list_setores_endpoint(
     *,
     db: Session = Depends(get_db),
     pesquisa_id: int,
+    finalidade: schemas.FinalidadeSetor | None = None,
     current_user: models.Usuario = Depends(get_current_user)
 ):
     """Lista setores de uma pesquisa (convertendo GeoJSON)."""
@@ -528,7 +530,11 @@ def list_setores_endpoint(
     check_pesquisa_access(db, pesquisa_id, current_user)
 
     # 2. Busca setores
-    setores_raw = crud.get_setores_by_pesquisa(db=db, pesquisa_id=pesquisa_id)
+    setores_raw = crud.get_setores_by_pesquisa(
+        db=db,
+        pesquisa_id=pesquisa_id,
+        finalidade=finalidade,
+    )
     
     # 3. Processa retorno
     return [setor_to_dict(s) for s in setores_raw]
@@ -563,6 +569,7 @@ def create_setor_by_projeto_pesquisa(
         meta=setor_payload.meta,
         agente_id=setor_payload.agente_id,
         tolerancia=setor_payload.tolerancia_metros or 50,
+        finalidade=setor_payload.finalidade,
         geometria_coords=coords
     )
 
@@ -592,6 +599,7 @@ def create_setor_by_projeto_pesquisa(
         "pesquisa_id": db_setor.pesquisa_id,
         "nome": db_setor.nome,
         "meta": db_setor.meta,
+        "finalidade": db_setor.finalidade,
         "tolerancia_metros": db_setor.tolerancia,
         "agente_id": db_setor.agente_id,
         "poligono": poligono
@@ -661,6 +669,7 @@ def delete_setor_by_projeto_pesquisa(
 def list_setores_by_projeto_pesquisa(
     projeto_id: int,
     pesquisa_id: int,
+    finalidade: schemas.FinalidadeSetor | None = None,
     db: Session = Depends(get_db),
     current_user: models.Usuario = Depends(get_current_user)
 ):
@@ -679,7 +688,11 @@ def list_setores_by_projeto_pesquisa(
         raise HTTPException(status_code=404, detail="Pesquisa não encontrada.")
 
     # 3. Busca setores
-    setores_raw = crud.get_setores_by_pesquisa(db=db, pesquisa_id=pesquisa_id)
+    setores_raw = crud.get_setores_by_pesquisa(
+        db=db,
+        pesquisa_id=pesquisa_id,
+        finalidade=finalidade,
+    )
     
     # 4. Processa retorno
     return [setor_to_dict(s) for s in setores_raw]

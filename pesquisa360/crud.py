@@ -1229,11 +1229,23 @@ def create_setor(db: Session, setor_in: schemas.SetorCreate, pesquisa_id: int, c
         pesquisa_id=pesquisa_id,
         agente_id=setor_in.agente_id,
         tolerancia=setor_in.tolerancia,
+        finalidade=setor_in.finalidade.value,
         geometria=func.ST_GeomFromText(wkt, 4326)
     )
     db.add(db_setor)
     db.commit()
-    db.refresh(db_setor)
+    db.refresh(
+        db_setor,
+        attribute_names=[
+            "id",
+            "nome",
+            "meta",
+            "tolerancia",
+            "finalidade",
+            "pesquisa_id",
+            "agente_id",
+        ],
+    )
     return db_setor
 
 
@@ -1267,6 +1279,7 @@ def update_setor(
                 models.Setor.nome,
                 models.Setor.meta,
                 models.Setor.tolerancia,
+                models.Setor.finalidade,
                 models.Setor.pesquisa_id,
                 models.Setor.agente_id,
             )
@@ -1300,6 +1313,10 @@ def update_setor(
         db_setor.meta = setor_update.meta
     if "tolerancia_metros" in fields_set:
         db_setor.tolerancia = setor_update.tolerancia_metros
+    if "finalidade" in fields_set:
+        if setor_update.finalidade is None:
+            raise ValueError("Finalidade do setor e obrigatoria quando informada.")
+        db_setor.finalidade = setor_update.finalidade.value
     if "agente_id" in fields_set:
         db_setor.agente_id = setor_update.agente_id
     if geometry_wkt is not None:
@@ -1313,17 +1330,22 @@ def update_setor(
         raise
     db.refresh(
         db_setor,
-        attribute_names=["id", "nome", "meta", "tolerancia", "pesquisa_id", "agente_id"],
+        attribute_names=["id", "nome", "meta", "tolerancia", "finalidade", "pesquisa_id", "agente_id"],
     )
     return db_setor
 
-def get_setores_by_pesquisa(db: Session, pesquisa_id: int):
+def get_setores_by_pesquisa(
+    db: Session,
+    pesquisa_id: int,
+    finalidade: schemas.FinalidadeSetor | None = None,
+):
     # Retorna GeoJSON
-    return db.query(
+    query = db.query(
         models.Setor.id,
         models.Setor.nome,
         models.Setor.meta,
         models.Setor.tolerancia,
+        models.Setor.finalidade,
         models.Usuario.id.label("agente_id"),
         models.Usuario.nome.label("agente_nome"),
         func.ST_AsGeoJSON(models.Setor.geometria).label("geojson")
@@ -1339,7 +1361,10 @@ def get_setores_by_pesquisa(db: Session, pesquisa_id: int):
             models.Usuario.id == models.Setor.agente_id,
             models.Usuario.company_id == models.Projeto.company_id,
         )
-    ).filter(models.Setor.pesquisa_id == pesquisa_id).all()
+    ).filter(models.Setor.pesquisa_id == pesquisa_id)
+    if finalidade is not None:
+        query = query.filter(models.Setor.finalidade == finalidade.value)
+    return query.all()
 
 # ==============================================================================
 # DASHBOARD E RELATÓRIOS (Com Filtro de Empresa)

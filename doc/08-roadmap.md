@@ -106,10 +106,43 @@ Heartbeat mobile:
 
 - concluido: importacao administrativa de Shapefile por CLI, restrita a
   `Polygon` EPSG:4326 e protegida pelas regras de tenant existentes;
+- implementar finalidade territorial canonica `OPERACAO`, `RELATORIO` e
+  `AMBOS`;
+- migrar/interpretar todos os setores existentes como `OPERACAO`;
+- isolar setores exclusivamente `RELATORIO` dos fluxos operacionais, Mobile,
+  monitoramento operacional, geofence operacional e cotas;
+- permitir que setores `RELATORIO` nao exijam agente, meta/cota ou tolerancia
+  operacional;
+- reutilizar a importacao interativa de Shapefile para escolha de finalidade;
+- permitir edicao futura de nome, geometria e finalidade sem reclassificar
+  silenciosamente dados historicos;
 - associar coleta ao setor;
 - calcular progresso por setor;
 - alertar cota atingida;
 - dashboard de cobertura territorial.
+
+### Mapas Estrategicos
+
+Modulo futuro aprovado, nao concluido:
+
+- Cobertura das Coletas;
+- Resultado por Setor;
+- Lideranca por Setor;
+- Distribuicao de Coletas;
+- escolha de setores;
+- filtros;
+- previa;
+- Relatorio Executivo de Mapas.
+
+Classificacao espacial futura:
+
+- realizar no Backend/PostGIS;
+- preferir `ST_Covers`;
+- usar localizacao inicial da coleta como referencia principal;
+- usar localizacao final como fallback;
+- classificar como `SEM_SETOR` quando a coleta nao estiver em nenhum setor
+  analitico;
+- resolver sobreposicao/conflito sem duplicar entrevistas.
 
 ### Exportação PDF
 

@@ -11,29 +11,35 @@ from pesquisa360.api.endpoints.agente import get_missao_agente
 from pesquisa360.db import models
 
 
-def _sector(sector_id, name, meta, tolerance, geometry):
+def _sector(sector_id, name, meta, tolerance, geometry, finalidade="OPERACAO"):
     return SimpleNamespace(
         id=sector_id,
         nome=name,
         meta=meta,
         tolerancia=tolerance,
         geometria=geometry,
+        finalidade=finalidade,
     )
 
 
 def _database(sectors, completed=0):
     ordered_sectors = sorted(sectors, key=lambda sector: sector.id)
+    mission_sectors = [
+        sector
+        for sector in ordered_sectors
+        if sector.finalidade in {"OPERACAO", "AMBOS"}
+    ]
     db = MagicMock()
     sector_query = MagicMock()
     sector_query.filter.return_value = sector_query
     sector_query.order_by.return_value = sector_query
-    sector_query.all.return_value = ordered_sectors
+    sector_query.all.return_value = mission_sectors
 
     scalar_values = iter(
         [completed]
         + [
             json.dumps(geometry)
-            for geometry in (s.geometria for s in ordered_sectors)
+            for geometry in (s.geometria for s in mission_sectors)
             if geometry
         ]
     )
@@ -103,6 +109,7 @@ def test_mission_returns_all_agent_sectors_in_deterministic_order():
     criteria = " ".join(str(item) for item in query.filter.call_args.args)
     assert "setores.pesquisa_id" in criteria
     assert "setores.agente_id" in criteria
+    assert "setores.finalidade" in criteria
     query.order_by.assert_called_once()
 
 
@@ -143,3 +150,16 @@ def test_sector_query_is_scoped_to_current_agent_and_requested_survey():
     assert criteria[0].right.value == 100
     assert str(criteria[1].left) == "setores.agente_id"
     assert criteria[1].right.value == 77
+
+
+def test_mission_returns_operacao_and_ambos_but_not_relatorio():
+    sectors = [
+        _sector(30, "Operacao", 10, 50, None, "OPERACAO"),
+        _sector(31, "Relatorio", 20, 50, None, "RELATORIO"),
+        _sector(32, "Ambos", 30, 50, None, "AMBOS"),
+    ]
+
+    payload, _ = _mission(sectors)
+
+    assert [sector["id"] for sector in payload["setores"]] == [30, 32]
+    assert payload["setor_id"] == 30

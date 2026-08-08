@@ -227,6 +227,7 @@ class Setor(Base):
     # Tolerância específica deste setor em metros. 
     # Se for 0 ou Null, o sistema pode usar a tolerância padrão da Pesquisa.
     tolerancia = Column(Integer, default=50, nullable=False)
+    finalidade = Column(String, nullable=False, default="OPERACAO", server_default="OPERACAO")
     
     # Geometria do Setor (Polígono específico desta área)
     geometria = Column(Geometry("POLYGON", srid=4326), nullable=True)

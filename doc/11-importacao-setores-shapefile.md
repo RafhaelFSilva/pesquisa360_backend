@@ -58,3 +58,25 @@ Sem `--sim`, a ferramenta exige `IMPORTAR`. `--cota` e alias de `--meta`;
 
 O modelo atual usa `Geometry("POLYGON", srid=4326)`. Suporte a `MultiPolygon` ou
 aneis internos exige decisao de contrato/modelagem fora desta ferramenta.
+
+## Roadmap aprovado - finalidade territorial
+
+A importacao interativa atual sera reutilizada em patch posterior para permitir
+que o usuario escolha a finalidade do territorio:
+
+```text
+OPERACAO
+RELATORIO
+AMBOS
+```
+
+No estado atual, a ferramenta continua criando setores operacionais e nao altera
+contrato, schema ou modelo. Na evolucao aprovada:
+
+- setores existentes devem ser considerados `OPERACAO`;
+- setores `RELATORIO` nao exigirao agente, meta/cota ou tolerancia operacional;
+- setores `RELATORIO` exclusivos nao devem ser enviados ao Mobile como setores
+  operacionais;
+- setores `AMBOS` devem cumprir regras operacionais quando usados em operacao;
+- o tenant continuara vindo de `current_user.company_id`;
+- o frontend/mobile nao escolherao `company_id`.

@@ -3,6 +3,7 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 from typing import Optional, List, Any, Union, Dict, Literal
 from datetime import date, datetime
+from enum import StrEnum
 from uuid import UUID
 import re
 from urllib.parse import urlparse
@@ -338,11 +339,17 @@ class CompanyRead(CompanyBase):
 
 # --- SCHEMAS DE SETORES ---
 
+class FinalidadeSetor(StrEnum):
+    OPERACAO = "OPERACAO"
+    RELATORIO = "RELATORIO"
+    AMBOS = "AMBOS"
+
 class SetorBase(BaseModel):
     nome: str
     meta: int
     agente_id: Optional[int] = None
     tolerancia: int = 50
+    finalidade: FinalidadeSetor = FinalidadeSetor.OPERACAO
 
 class SetorCreate(SetorBase):
     # Receberemos a geometria como uma lista de coordenadas [[lat, lon], ...]
@@ -366,6 +373,7 @@ class SetorGeofenceCreate(BaseModel):
     meta: int
     agente_id: Optional[int] = None
     tolerancia_metros: Optional[int] = 50
+    finalidade: FinalidadeSetor = FinalidadeSetor.OPERACAO
     geometria: Optional[List[dict]] = None
     poligono: Optional[List[dict]] = None
 
@@ -397,6 +405,7 @@ class SetorUpdate(BaseModel):
     meta: Optional[int] = None
     agente_id: Optional[int] = None
     tolerancia_metros: Optional[int] = None
+    finalidade: Optional[FinalidadeSetor] = None
     geometria: Optional[List[dict]] = None
     poligono: Optional[List[dict]] = None
 

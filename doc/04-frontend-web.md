@@ -136,6 +136,14 @@ Number.isFinite(lat) && Number.isFinite(lng)
 - Setores devem renderizar tanto `poligono` quanto `geometria`.
 - Controles Leaflet/Geoman devem ser adicionados uma única vez.
 
+Estado atual: a gestao de territorio trabalha com setores operacionais.
+
+Roadmap aprovado: o Web devera permitir finalidade `OPERACAO`, `RELATORIO` e
+`AMBOS` quando o backend expuser esse contrato. Setores `RELATORIO` nao devem
+exigir agente, meta/cota ou tolerancia operacional. Setores `OPERACAO` e
+`AMBOS`, quando usados operacionalmente, continuam sujeitos as regras de agente,
+cota, tolerancia/geofence e monitoramento.
+
 ## 8. Relatórios
 
 Central:

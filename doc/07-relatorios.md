@@ -12,6 +12,10 @@ O módulo de relatórios possui:
 
 A análise multivariável com 3 ou mais perguntas fica para roadmap futuro.
 
+Tambem esta aprovado para roadmap futuro um modulo separado chamado `Mapas
+Estrategicos`. Ele nao faz parte do escopo atual validado de relatorios simples
+e crosstab 2D.
+
 ## 2. Central de relatórios
 
 Rota Web:
@@ -232,3 +236,28 @@ Essa combinação 2 a 2 não é análise multivariável verdadeira.
 - Crosstab Sexo x Governador.
 - Crosstab Escolaridade x Faixa etária.
 - Usuário de outro tenant não acessa relatório.
+
+## 11. Roadmap - Mapas Estrategicos
+
+Modulo futuro aprovado, nao concluido:
+
+- Cobertura das Coletas.
+- Resultado por Setor.
+- Lideranca por Setor.
+- Distribuicao de Coletas.
+- escolha de setores.
+- filtros.
+- previa.
+- Relatorio Executivo de Mapas.
+
+Dependencias de dominio:
+
+- usar setores com finalidade `RELATORIO` ou `AMBOS` para analise territorial;
+- nao enviar setores exclusivamente `RELATORIO` ao Mobile como setores
+  operacionais;
+- classificar entrevistas no Backend/PostGIS, preferencialmente com
+  `ST_Covers`;
+- usar localizacao inicial da coleta como referencia principal e localizacao
+  final como fallback;
+- retornar/representar `SEM_SETOR` quando nao houver setor analitico;
+- resolver sobreposicao entre setores analiticos sem duplicar entrevistas.

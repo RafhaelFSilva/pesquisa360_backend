@@ -574,7 +574,7 @@ class CollectionIdempotencyTests(unittest.TestCase):
     def test_migration_has_exactly_one_new_head(self):
         config = Config("alembic.ini")
         heads = ScriptDirectory.from_config(config).get_heads()
-        self.assertEqual(heads, ["b1c2d3e4f5a6"])
+        self.assertEqual(heads, ["f2a3b4c5d6e7"])
 
 
 if __name__ == "__main__":

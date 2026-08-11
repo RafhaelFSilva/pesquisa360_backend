@@ -1608,6 +1608,14 @@ def get_relatorio_pesquisa(
         .order_by(models.Resposta.valor_resposta)\
         .all()
 
+        opcoes_ordenadas = sorted(
+            list(pergunta.opcoes or []),
+            key=lambda opcao: (
+                opcao.ordem if opcao.ordem is not None else 0,
+                opcao.id or 0,
+            ),
+        )
+
         if pergunta.eh_resposta_espontanea:
             reportable_counts = defaultdict(int)
             for valor_resposta, contagem in rows:
@@ -1624,22 +1632,64 @@ def get_relatorio_pesquisa(
         opcoes_resposta = {}
         resultados_opcoes = []
 
-        for valor_resposta, contagem in rows:
-            valor = "" if valor_resposta is None else str(valor_resposta)
-            quantidade = int(contagem or 0)
-            percentual = round((quantidade / total_pergunta) * 100, 2) if total_pergunta else 0.0
+        if pergunta.eh_resposta_espontanea:
+            for valor_resposta, contagem in rows:
+                valor = "" if valor_resposta is None else str(valor_resposta)
+                quantidade = int(contagem or 0)
+                percentual = round((quantidade / total_pergunta) * 100, 2) if total_pergunta else 0.0
 
-            opcoes_resposta[valor] = quantidade
-            dados.append({
-                "valor_resposta": valor,
-                "contagem": quantidade,
-                "percentual": percentual,
-            })
-            resultados_opcoes.append({
-                "opcao": valor,
-                "contagem": quantidade,
-                "percentual": percentual,
-            })
+                opcoes_resposta[valor] = quantidade
+                dados.append({
+                    "valor_resposta": valor,
+                    "contagem": quantidade,
+                    "percentual": percentual,
+                })
+                resultados_opcoes.append({
+                    "opcao": valor,
+                    "contagem": quantidade,
+                    "percentual": percentual,
+                })
+        elif opcoes_ordenadas:
+            contagens_por_opcao = defaultdict(int)
+            for valor_resposta, contagem in rows:
+                valor_normalizado = normalizar_resposta_espontanea(valor_resposta)
+                if not valor_normalizado:
+                    continue
+                contagens_por_opcao[valor_normalizado] += int(contagem or 0)
+
+            for opcao in opcoes_ordenadas:
+                chave_opcao = normalizar_resposta_espontanea(opcao.texto)
+                quantidade = int(contagens_por_opcao.get(chave_opcao, 0))
+                percentual = round((quantidade / total_pergunta) * 100, 2) if total_pergunta else 0.0
+
+                opcoes_resposta[opcao.texto] = quantidade
+                dados.append({
+                    "valor_resposta": opcao.texto,
+                    "contagem": quantidade,
+                    "percentual": percentual,
+                })
+                resultados_opcoes.append({
+                    "opcao": opcao.texto,
+                    "contagem": quantidade,
+                    "percentual": percentual,
+                })
+        else:
+            for valor_resposta, contagem in rows:
+                valor = "" if valor_resposta is None else str(valor_resposta)
+                quantidade = int(contagem or 0)
+                percentual = round((quantidade / total_pergunta) * 100, 2) if total_pergunta else 0.0
+
+                opcoes_resposta[valor] = quantidade
+                dados.append({
+                    "valor_resposta": valor,
+                    "contagem": quantidade,
+                    "percentual": percentual,
+                })
+                resultados_opcoes.append({
+                    "opcao": valor,
+                    "contagem": quantidade,
+                    "percentual": percentual,
+                })
 
         resultados.append({
             "pergunta_id": pergunta.id,

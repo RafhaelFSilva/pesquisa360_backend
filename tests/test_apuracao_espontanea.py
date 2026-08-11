@@ -75,6 +75,15 @@ class ApuracaoEspontaneaTests(unittest.TestCase):
                 )
             """))
             connection.execute(text("""
+                CREATE TABLE opcoes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    texto TEXT NOT NULL,
+                    ordem INTEGER NOT NULL DEFAULT 0,
+                    pergunta_id INTEGER,
+                    proxima_pergunta_id INTEGER
+                )
+            """))
+            connection.execute(text("""
                 CREATE TABLE coletas (
                     id INTEGER PRIMARY KEY, pesquisa_id INTEGER NOT NULL,
                     agente_id INTEGER NOT NULL, company_id INTEGER NOT NULL,
@@ -151,6 +160,7 @@ class ApuracaoEspontaneaTests(unittest.TestCase):
                 "mapeamentos_resposta_espontanea",
                 "categorias_resposta_espontanea",
                 "respostas",
+                "opcoes",
                 "coletas",
                 "perguntas",
                 "pesquisas",

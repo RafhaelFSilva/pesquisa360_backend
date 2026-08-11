@@ -1,6 +1,6 @@
 # pesquisa360/schemas.py (versão final simplificada)
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator, ConfigDict
 from typing import Optional, List, Any, Union, Dict, Literal
 from datetime import date, datetime
 from enum import StrEnum
@@ -577,6 +577,255 @@ class MapaPreviewRequest(BaseModel):
     agente_ids: Optional[List[int]] = None
     data_inicio: Optional[datetime] = None
     data_fim: Optional[datetime] = None
+
+
+class TipoRelatorioExecutivo(StrEnum):
+    MAPAS = "MAPAS"
+    EXECUTIVO = "EXECUTIVO"
+    SIMPLE = "SIMPLE"
+    CROSSTAB = "CROSSTAB"
+
+
+class TipoAnaliseRelatorioExecutivo(StrEnum):
+    MAPA_COBERTURA = "MAPA_COBERTURA"
+    MAPA_DISTRIBUICAO_SETOR = "MAPA_DISTRIBUICAO_SETOR"
+    MAPA_RESULTADO_SETOR = "MAPA_RESULTADO_SETOR"
+    MAPA_LIDERANCA_SETOR = "MAPA_LIDERANCA_SETOR"
+    MAPA_COMPARATIVO = "MAPA_COMPARATIVO"
+    SIMPLES = "SIMPLES"
+    CROSSTAB = "CROSSTAB"
+
+
+class ModoRespostaRelatorioExecutivo(StrEnum):
+    TODAS = "TODAS"
+    ESPECIFICA = "ESPECIFICA"
+
+
+class OrdenacaoRelatorioSimples(StrEnum):
+    DEFAULT = "default"
+    FORM = "form"
+    DESC = "desc"
+    ASC = "asc"
+    ALPHABETICAL = "alphabetical"
+    CUSTOM = "custom"
+
+
+class ParametrosOrdenacaoPerguntaSimples(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: int
+    mode: OrdenacaoRelatorioSimples = OrdenacaoRelatorioSimples.DEFAULT
+    custom_order: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def validate_custom_order(self):
+        if self.mode == OrdenacaoRelatorioSimples.CUSTOM and not self.custom_order:
+            raise ValueError("custom_order e obrigatoria para ordenacao custom.")
+        if self.mode != OrdenacaoRelatorioSimples.CUSTOM and self.custom_order is not None:
+            raise ValueError("custom_order so pode ser usada na ordenacao custom.")
+        return self
+
+
+class ParametrosParCrosstab(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    row_question_id: int
+    column_question_id: int
+
+    @model_validator(mode="after")
+    def validate_distinct_questions(self):
+        if self.row_question_id == self.column_question_id:
+            raise ValueError("As perguntas do cruzamento devem ser distintas.")
+        return self
+
+
+class ParametrosGeraisRelatorioExecutivo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    setor_ids: Optional[List[int]] = None
+    agente_ids: Optional[List[int]] = None
+    data_inicial: Optional[datetime] = None
+    data_final: Optional[datetime] = None
+    question_order: Optional[List[int]] = None
+    question_settings: Optional[List[ParametrosOrdenacaoPerguntaSimples]] = None
+    crosses: Optional[List[ParametrosParCrosstab]] = None
+    chart_type: Optional[str] = Field(default=None, max_length=30)
+
+    @model_validator(mode="after")
+    def validate_periodo(self):
+        if self.data_inicial and self.data_final and self.data_inicial > self.data_final:
+            raise ValueError("data_inicial deve ser anterior ou igual a data_final.")
+        return self
+
+
+class ParametrosMapaResultadoSetor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pergunta_id: int
+    modo_resposta: ModoRespostaRelatorioExecutivo
+    resposta: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_resposta(self):
+        if self.modo_resposta == ModoRespostaRelatorioExecutivo.ESPECIFICA:
+            if not self.resposta or not self.resposta.strip():
+                raise ValueError("resposta e obrigatoria no modo ESPECIFICA.")
+            self.resposta = self.resposta.strip()
+        elif self.resposta is not None:
+            raise ValueError("resposta deve ser ausente no modo TODAS.")
+        return self
+
+
+class ParametrosMapaPergunta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pergunta_id: int
+
+
+class ParametrosMapaComparativo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pergunta_a_id: int
+    pergunta_b_id: int
+
+    @model_validator(mode="after")
+    def validate_perguntas(self):
+        if self.pergunta_a_id == self.pergunta_b_id:
+            raise ValueError("As perguntas do comparativo devem ser distintas.")
+        return self
+
+
+class ConfiguracaoRelatorioExecutivoBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nome: str = Field(min_length=1, max_length=120)
+    descricao: Optional[str] = None
+    parametros_gerais: Optional[ParametrosGeraisRelatorioExecutivo] = None
+
+    @field_validator("nome", mode="before")
+    @classmethod
+    def normalize_nome(cls, value):
+        return str(value).strip() if value is not None else value
+
+
+class ConfiguracaoRelatorioExecutivoCreate(ConfiguracaoRelatorioExecutivoBase):
+    tipo_relatorio: TipoRelatorioExecutivo
+
+
+class ConfiguracaoRelatorioExecutivoUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nome: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    descricao: Optional[str] = None
+    parametros_gerais: Optional[ParametrosGeraisRelatorioExecutivo] = None
+
+    @field_validator("nome", mode="before")
+    @classmethod
+    def normalize_nome(cls, value):
+        return str(value).strip() if value is not None else value
+
+    @model_validator(mode="after")
+    def validate_nome_not_null(self):
+        if "nome" in self.model_fields_set and self.nome is None:
+            raise ValueError("nome nao pode ser nulo.")
+        return self
+
+
+class SecaoRelatorioExecutivoCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ordem: Optional[int] = Field(default=None, ge=0)
+    tipo_secao: str = Field(default="MAPAS", min_length=1, max_length=100)
+    titulo: Optional[str] = Field(default=None, max_length=255)
+
+
+class SecaoRelatorioExecutivoUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ordem: Optional[int] = Field(default=None, ge=0)
+    tipo_secao: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    titulo: Optional[str] = Field(default=None, max_length=255)
+
+
+class AnaliseRelatorioExecutivoCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ordem: Optional[int] = Field(default=None, ge=0)
+    tipo_analise: TipoAnaliseRelatorioExecutivo
+    titulo_customizado: Optional[str] = Field(default=None, max_length=255)
+    parametros: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_parametros(self):
+        validators = {
+            TipoAnaliseRelatorioExecutivo.MAPA_COBERTURA: lambda value: value or {},
+            TipoAnaliseRelatorioExecutivo.MAPA_DISTRIBUICAO_SETOR: lambda value: value or {},
+            TipoAnaliseRelatorioExecutivo.MAPA_RESULTADO_SETOR: lambda value: ParametrosMapaResultadoSetor.model_validate(value).model_dump(mode="json", exclude_none=True),
+            TipoAnaliseRelatorioExecutivo.MAPA_LIDERANCA_SETOR: lambda value: ParametrosMapaPergunta.model_validate(value).model_dump(mode="json"),
+            TipoAnaliseRelatorioExecutivo.MAPA_COMPARATIVO: lambda value: ParametrosMapaComparativo.model_validate(value).model_dump(mode="json"),
+        }
+        validator = validators.get(self.tipo_analise)
+        if validator is None:
+            raise ValueError(f"Tipo de analise {self.tipo_analise.value} ainda nao suportado.")
+        if self.tipo_analise in {
+            TipoAnaliseRelatorioExecutivo.MAPA_COBERTURA,
+            TipoAnaliseRelatorioExecutivo.MAPA_DISTRIBUICAO_SETOR,
+        } and self.parametros:
+            raise ValueError("Esta analise nao aceita parametros especificos.")
+        self.parametros = validator(self.parametros)
+        return self
+
+
+class AnaliseRelatorioExecutivoUpdate(AnaliseRelatorioExecutivoCreate):
+    ordem: Optional[int] = Field(default=None, ge=0)
+
+
+class OrdemRelatorioExecutivoItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    ordem: int = Field(ge=0)
+
+
+class ReordenarRelatorioExecutivoRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    itens: List[OrdemRelatorioExecutivoItem] = Field(min_length=1)
+
+
+class AnaliseRelatorioExecutivoRead(BaseModel):
+    id: int
+    secao_id: int
+    ordem: int
+    tipo_analise: TipoAnaliseRelatorioExecutivo
+    titulo_customizado: Optional[str] = None
+    parametros: Dict[str, Any]
+    ativo: bool
+
+
+class SecaoRelatorioExecutivoRead(BaseModel):
+    id: int
+    configuracao_id: int
+    ordem: int
+    tipo_secao: str
+    titulo: Optional[str] = None
+    ativo: bool
+    analises: List[AnaliseRelatorioExecutivoRead] = Field(default_factory=list)
+
+
+class ConfiguracaoRelatorioExecutivoRead(BaseModel):
+    id: int
+    pesquisa_id: int
+    tipo_relatorio: TipoRelatorioExecutivo
+    nome: str
+    descricao: Optional[str] = None
+    parametros_gerais: Optional[Dict[str, Any]] = None
+    ativo: bool
+    criado_por_id: int
+    atualizado_por_id: int
+    criado_em: datetime
+    atualizado_em: datetime
+    secoes: List[SecaoRelatorioExecutivoRead] = Field(default_factory=list)
 
 class Coordenada(BaseModel):
     lat: float = Field(ge=-90, le=90)

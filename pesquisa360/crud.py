@@ -1713,6 +1713,13 @@ FINALIDADES_ANALITICAS = ("RELATORIO", "AMBOS")
 TIPOS_PERGUNTA_CATEGORICA = {"ESCOLHA_SIMPLES", "MULTIPLA_ESCOLHA"}
 
 
+def is_analytical_categorical_question(pergunta) -> bool:
+    return bool(
+        pergunta.eh_resposta_espontanea
+        or normalize_question_type(pergunta.tipo_pergunta) in TIPOS_PERGUNTA_CATEGORICA
+    )
+
+
 def _coleta_ponto_referencia():
     return func.coalesce(models.Coleta.localizacao_inicio, models.Coleta.localizacao_fim)
 
@@ -1762,7 +1769,7 @@ def _validar_pergunta_mapa(
     ).first()
     if pergunta is None:
         raise HTTPException(status_code=404, detail="Pergunta nao encontrada.")
-    if obrigatoria and normalize_question_type(pergunta.tipo_pergunta) not in TIPOS_PERGUNTA_CATEGORICA:
+    if obrigatoria and not is_analytical_categorical_question(pergunta):
         raise HTTPException(status_code=422, detail="Pergunta deve ser categorica para este tipo de mapa.")
     return pergunta
 
@@ -1964,7 +1971,14 @@ def get_mapa_preview(
     )
 
     resposta_rows = []
+    spontaneous_mapping = {}
     if pergunta is not None and classificacao["classificados"]:
+        if pergunta.eh_resposta_espontanea:
+            spontaneous_mapping = get_active_spontaneous_mapping_for_report(
+                db=db,
+                pesquisa_id=pesquisa_id,
+                current_user=current_user,
+            )
         coleta_ids = list(classificacao["classificados"].keys())
         resposta_rows = db.query(
             models.Resposta.coleta_id,
@@ -1994,8 +2008,13 @@ def get_mapa_preview(
             setor_id = classificacao["classificados"].get(row.coleta_id)
             if setor_id is None:
                 continue
+            analytical_value = resolve_reportable_response_value(
+                pergunta=pergunta,
+                valor_resposta=row.valor_resposta,
+                spontaneous_mapping=spontaneous_mapping,
+            )
             contagens[setor_id]["__total__"] += 1
-            contagens[setor_id]["" if row.valor_resposta is None else str(row.valor_resposta)] += 1
+            contagens[setor_id][analytical_value] += 1
 
         dados = []
         for setor_id, item in resultado_por_setor.items():
@@ -2016,14 +2035,21 @@ def get_mapa_preview(
                     if opcao != "__total__"
                 ]
                 opcoes.sort(key=lambda row: (-row[1], row[0]))
-                lider = opcoes[0] if opcoes else (None, 0)
-                segundo = opcoes[1] if len(opcoes) > 1 else (None, 0)
+                maior_total = opcoes[0][1] if opcoes else 0
+                empatados = [opcao for opcao, total in opcoes if total == maior_total]
+                houve_empate = len(empatados) > 1
+                lider = ("Empate", maior_total) if houve_empate else (opcoes[0] if opcoes else (None, 0))
+                segundo = next(
+                    ((opcao, total) for opcao, total in opcoes if total < maior_total),
+                    (None, 0),
+                ) if houve_empate else (opcoes[1] if len(opcoes) > 1 else (None, 0))
                 lider_percentual = round((lider[1] / total_respostas) * 100, 2) if total_respostas else 0.0
                 segundo_percentual = round((segundo[1] / total_respostas) * 100, 2) if total_respostas else 0.0
                 dados.append({
                     **item,
                     "total_respostas_validas": total_respostas,
                     "lider": lider[0],
+                    "empatados": empatados if houve_empate else [],
                     "lider_total": int(lider[1]),
                     "lider_percentual": lider_percentual,
                     "segundo": segundo[0],
@@ -2044,6 +2070,462 @@ def get_mapa_preview(
         "pontos": pontos,
         "dados": dados,
     }
+
+
+TIPOS_ANALISE_MAPAS = {
+    schemas.TipoAnaliseRelatorioExecutivo.MAPA_COBERTURA,
+    schemas.TipoAnaliseRelatorioExecutivo.MAPA_DISTRIBUICAO_SETOR,
+    schemas.TipoAnaliseRelatorioExecutivo.MAPA_RESULTADO_SETOR,
+    schemas.TipoAnaliseRelatorioExecutivo.MAPA_LIDERANCA_SETOR,
+    schemas.TipoAnaliseRelatorioExecutivo.MAPA_COMPARATIVO,
+}
+
+
+def _get_configuracao_executiva(
+    db: Session,
+    pesquisa_id: int,
+    configuracao_id: int,
+    current_user: models.Usuario,
+    *,
+    somente_ativa: bool = True,
+):
+    query = db.query(models.ConfiguracaoRelatorioExecutivo).join(
+        models.Pesquisa,
+        models.Pesquisa.id == models.ConfiguracaoRelatorioExecutivo.pesquisa_id,
+    ).join(
+        models.Projeto,
+        models.Projeto.id == models.Pesquisa.projeto_id,
+    ).filter(
+        models.ConfiguracaoRelatorioExecutivo.id == configuracao_id,
+        models.ConfiguracaoRelatorioExecutivo.pesquisa_id == pesquisa_id,
+        models.Projeto.company_id == current_user.company_id,
+    )
+    if somente_ativa:
+        query = query.filter(models.ConfiguracaoRelatorioExecutivo.ativo.is_(True))
+    configuracao = query.first()
+    if configuracao is None:
+        raise HTTPException(status_code=404, detail="Configuracao de relatorio nao encontrada.")
+    return configuracao
+
+
+def _get_secao_executiva(db, pesquisa_id, configuracao_id, secao_id, current_user):
+    configuracao = _get_configuracao_executiva(db, pesquisa_id, configuracao_id, current_user)
+    secao = db.query(models.SecaoRelatorioExecutivo).filter(
+        models.SecaoRelatorioExecutivo.id == secao_id,
+        models.SecaoRelatorioExecutivo.configuracao_id == configuracao.id,
+        models.SecaoRelatorioExecutivo.ativo.is_(True),
+    ).first()
+    if secao is None:
+        raise HTTPException(status_code=404, detail="Secao de relatorio nao encontrada.")
+    return configuracao, secao
+
+
+def _get_analise_executiva(db, pesquisa_id, configuracao_id, secao_id, analise_id, current_user):
+    configuracao, secao = _get_secao_executiva(db, pesquisa_id, configuracao_id, secao_id, current_user)
+    analise = db.query(models.AnaliseRelatorioExecutivo).filter(
+        models.AnaliseRelatorioExecutivo.id == analise_id,
+        models.AnaliseRelatorioExecutivo.secao_id == secao.id,
+        models.AnaliseRelatorioExecutivo.ativo.is_(True),
+    ).first()
+    if analise is None:
+        raise HTTPException(status_code=404, detail="Analise de relatorio nao encontrada.")
+    return configuracao, secao, analise
+
+
+def _serialize_configuracao_executiva(configuracao):
+    secoes = []
+    for secao in sorted(
+        (item for item in configuracao.secoes if item.ativo),
+        key=lambda item: (item.ordem, item.id),
+    ):
+        analises = [
+            {
+                "id": analise.id,
+                "secao_id": analise.secao_id,
+                "ordem": analise.ordem,
+                "tipo_analise": analise.tipo_analise,
+                "titulo_customizado": analise.titulo_customizado,
+                "parametros": analise.parametros,
+                "ativo": analise.ativo,
+            }
+            for analise in sorted(
+                (item for item in secao.analises if item.ativo),
+                key=lambda item: (item.ordem, item.id),
+            )
+        ]
+        secoes.append({
+            "id": secao.id,
+            "configuracao_id": secao.configuracao_id,
+            "ordem": secao.ordem,
+            "tipo_secao": secao.tipo_secao,
+            "titulo": secao.titulo,
+            "ativo": secao.ativo,
+            "analises": analises,
+        })
+    return {
+        "id": configuracao.id,
+        "pesquisa_id": configuracao.pesquisa_id,
+        "tipo_relatorio": configuracao.tipo_relatorio,
+        "nome": configuracao.nome,
+        "descricao": configuracao.descricao,
+        "parametros_gerais": configuracao.parametros_gerais,
+        "ativo": configuracao.ativo,
+        "criado_por_id": configuracao.criado_por_id,
+        "atualizado_por_id": configuracao.atualizado_por_id,
+        "criado_em": configuracao.criado_em,
+        "atualizado_em": configuracao.atualizado_em,
+        "secoes": secoes,
+    }
+
+
+def _validar_parametros_gerais_executivo(
+    db, pesquisa_id, parametros, current_user, tipo_relatorio=schemas.TipoRelatorioExecutivo.MAPAS
+):
+    tipo = tipo_relatorio.value if hasattr(tipo_relatorio, "value") else str(tipo_relatorio)
+    if parametros is None:
+        if tipo in {
+            schemas.TipoRelatorioExecutivo.SIMPLE.value,
+            schemas.TipoRelatorioExecutivo.CROSSTAB.value,
+        }:
+            raise HTTPException(status_code=422, detail="Parametros da configuracao sao obrigatorios.")
+        return None
+    data = parametros.model_dump(mode="json", exclude_none=True)
+    setor_ids = set(data.get("setor_ids") or [])
+    if setor_ids:
+        validos = {
+            row.id for row in db.query(models.Setor.id).filter(
+                models.Setor.pesquisa_id == pesquisa_id,
+                models.Setor.id.in_(setor_ids),
+                models.Setor.finalidade.in_(FINALIDADES_ANALITICAS),
+            ).all()
+        }
+        if validos != setor_ids:
+            raise HTTPException(status_code=404, detail="Um ou mais setores nao pertencem ao contexto analitico da pesquisa.")
+    agente_ids = set(data.get("agente_ids") or [])
+    if agente_ids:
+        validos = {
+            row.id for row in db.query(models.Usuario.id).filter(
+                models.Usuario.id.in_(agente_ids),
+                models.Usuario.company_id == current_user.company_id,
+                models.Usuario.ativo.is_(True),
+            ).all()
+        }
+        if validos != agente_ids:
+            raise HTTPException(status_code=404, detail="Um ou mais agentes nao pertencem ao tenant.")
+
+    base_fields = {"setor_ids", "agente_ids", "data_inicial", "data_final"}
+    fields = set(data)
+    if tipo in {
+        schemas.TipoRelatorioExecutivo.MAPAS.value,
+        schemas.TipoRelatorioExecutivo.EXECUTIVO.value,
+    }:
+        if fields - base_fields:
+            raise HTTPException(status_code=422, detail="Parametros incompatíveis com o tipo de relatorio.")
+        return data
+
+    if tipo == schemas.TipoRelatorioExecutivo.SIMPLE.value:
+        if fields - (base_fields | {"question_order", "question_settings", "chart_type"}):
+            raise HTTPException(status_code=422, detail="Parametros incompatíveis com SIMPLE.")
+        question_ids = data.get("question_order") or []
+        if not question_ids or len(question_ids) != len(set(question_ids)):
+            raise HTTPException(status_code=422, detail="question_order deve conter perguntas unicas.")
+        settings = data.get("question_settings") or []
+        setting_ids = [item["question_id"] for item in settings]
+        if len(setting_ids) != len(set(setting_ids)) or not set(setting_ids).issubset(set(question_ids)):
+            raise HTTPException(status_code=422, detail="question_settings deve referenciar question_order sem duplicidade.")
+        if data.get("chart_type") not in {"pizza", "barras", "histograma", "nuvem"}:
+            raise HTTPException(status_code=422, detail="chart_type invalido para SIMPLE.")
+        _validar_perguntas_configuracao(db, pesquisa_id, set(question_ids))
+        return data
+
+    if tipo == schemas.TipoRelatorioExecutivo.CROSSTAB.value:
+        if fields - (base_fields | {"crosses", "chart_type"}):
+            raise HTTPException(status_code=422, detail="Parametros incompatíveis com CROSSTAB.")
+        crosses = data.get("crosses") or []
+        if not crosses:
+            raise HTTPException(status_code=422, detail="crosses deve conter ao menos um cruzamento.")
+        pair_keys = [
+            tuple(sorted((item["row_question_id"], item["column_question_id"])))
+            for item in crosses
+        ]
+        if len(pair_keys) != len(set(pair_keys)):
+            raise HTTPException(status_code=422, detail="crosses nao pode conter pares duplicados.")
+        if data.get("chart_type") not in {"bar", "pie", "doughnut"}:
+            raise HTTPException(status_code=422, detail="chart_type invalido para CROSSTAB.")
+        question_ids = {question_id for pair in pair_keys for question_id in pair}
+        perguntas = _validar_perguntas_configuracao(db, pesquisa_id, question_ids)
+        if not all(is_analytical_categorical_question(pergunta) for pergunta in perguntas):
+            raise HTTPException(status_code=422, detail="Crosstab exige perguntas categoricas.")
+        return data
+
+    raise HTTPException(status_code=422, detail="Tipo de relatorio ainda nao suportado.")
+
+
+def _validar_perguntas_configuracao(db, pesquisa_id, pergunta_ids):
+    perguntas = db.query(models.Pergunta).filter(
+        models.Pergunta.id.in_(pergunta_ids),
+        models.Pergunta.pesquisa_id == pesquisa_id,
+        models.Pergunta.ativo.is_(True),
+    ).all()
+    if {pergunta.id for pergunta in perguntas} != set(pergunta_ids):
+        raise HTTPException(status_code=404, detail="Uma ou mais perguntas nao pertencem a pesquisa.")
+    return perguntas
+
+
+def _validar_parametros_analise_executiva(db, pesquisa_id, configuracao, analise_in):
+    if configuracao.tipo_relatorio != schemas.TipoRelatorioExecutivo.MAPAS.value:
+        raise HTTPException(status_code=422, detail="Analises do relatorio EXECUTIVO ainda nao sao suportadas.")
+    if analise_in.tipo_analise not in TIPOS_ANALISE_MAPAS:
+        raise HTTPException(status_code=422, detail="Tipo de analise ainda nao suportado.")
+
+    parametros = analise_in.parametros
+    pergunta_ids = set()
+    if analise_in.tipo_analise in {
+        schemas.TipoAnaliseRelatorioExecutivo.MAPA_RESULTADO_SETOR,
+        schemas.TipoAnaliseRelatorioExecutivo.MAPA_LIDERANCA_SETOR,
+    }:
+        pergunta_ids.add(int(parametros["pergunta_id"]))
+    elif analise_in.tipo_analise == schemas.TipoAnaliseRelatorioExecutivo.MAPA_COMPARATIVO:
+        pergunta_ids.update([int(parametros["pergunta_a_id"]), int(parametros["pergunta_b_id"])])
+
+    if pergunta_ids:
+        perguntas = db.query(models.Pergunta).filter(
+            models.Pergunta.id.in_(pergunta_ids),
+            models.Pergunta.pesquisa_id == pesquisa_id,
+            models.Pergunta.ativo.is_(True),
+        ).all()
+        if {pergunta.id for pergunta in perguntas} != pergunta_ids:
+            raise HTTPException(status_code=404, detail="Uma ou mais perguntas nao pertencem a pesquisa.")
+        if not all(is_analytical_categorical_question(pergunta) for pergunta in perguntas):
+            raise HTTPException(status_code=422, detail="Pergunta deve ser categorica para analise territorial.")
+    return parametros
+
+
+def list_configuracoes_relatorio_executivo(db, pesquisa_id, current_user, tipo_relatorio=None):
+    _validar_pesquisa_relatorio(db, pesquisa_id, current_user)
+    query = db.query(models.ConfiguracaoRelatorioExecutivo).filter(
+        models.ConfiguracaoRelatorioExecutivo.pesquisa_id == pesquisa_id,
+        models.ConfiguracaoRelatorioExecutivo.ativo.is_(True),
+    )
+    if tipo_relatorio is not None:
+        query = query.filter(models.ConfiguracaoRelatorioExecutivo.tipo_relatorio == tipo_relatorio.value)
+    return [_serialize_configuracao_executiva(item) for item in query.order_by(
+        models.ConfiguracaoRelatorioExecutivo.nome,
+        models.ConfiguracaoRelatorioExecutivo.id,
+    ).all()]
+
+
+def get_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_id, current_user):
+    return _serialize_configuracao_executiva(
+        _get_configuracao_executiva(db, pesquisa_id, configuracao_id, current_user)
+    )
+
+
+def _validar_nome_configuracao_executiva(
+    db, pesquisa_id, tipo_relatorio, nome, configuracao_id=None
+):
+    query = db.query(models.ConfiguracaoRelatorioExecutivo.id).filter(
+        models.ConfiguracaoRelatorioExecutivo.pesquisa_id == pesquisa_id,
+        models.ConfiguracaoRelatorioExecutivo.tipo_relatorio == tipo_relatorio,
+        models.ConfiguracaoRelatorioExecutivo.ativo.is_(True),
+        func.lower(func.trim(models.ConfiguracaoRelatorioExecutivo.nome)) == nome.strip().lower(),
+    )
+    if configuracao_id is not None:
+        query = query.filter(models.ConfiguracaoRelatorioExecutivo.id != configuracao_id)
+    if query.first():
+        raise HTTPException(
+            status_code=409,
+            detail="Ja existe uma configuracao ativa com este nome para esta pesquisa.",
+        )
+
+
+def create_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_in, current_user):
+    _validar_pesquisa_relatorio(db, pesquisa_id, current_user)
+    _validar_nome_configuracao_executiva(
+        db, pesquisa_id, configuracao_in.tipo_relatorio.value, configuracao_in.nome
+    )
+    parametros = _validar_parametros_gerais_executivo(
+        db, pesquisa_id, configuracao_in.parametros_gerais, current_user, configuracao_in.tipo_relatorio
+    )
+    configuracao = models.ConfiguracaoRelatorioExecutivo(
+        pesquisa_id=pesquisa_id,
+        tipo_relatorio=configuracao_in.tipo_relatorio.value,
+        nome=configuracao_in.nome,
+        descricao=configuracao_in.descricao,
+        parametros_gerais=parametros,
+        ativo=True,
+        criado_por_id=current_user.id,
+        atualizado_por_id=current_user.id,
+    )
+    db.add(configuracao)
+    db.commit()
+    db.refresh(configuracao)
+    return _serialize_configuracao_executiva(configuracao)
+
+
+def update_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_id, configuracao_in, current_user):
+    configuracao = _get_configuracao_executiva(db, pesquisa_id, configuracao_id, current_user)
+    data = configuracao_in.model_dump(exclude_unset=True)
+    if "nome" in data:
+        _validar_nome_configuracao_executiva(
+            db,
+            pesquisa_id,
+            configuracao.tipo_relatorio,
+            data["nome"],
+            configuracao_id=configuracao.id,
+        )
+    if "parametros_gerais" in data:
+        configuracao.parametros_gerais = _validar_parametros_gerais_executivo(
+            db, pesquisa_id, configuracao_in.parametros_gerais, current_user, configuracao.tipo_relatorio
+        )
+    for field in ("nome", "descricao"):
+        if field in data:
+            setattr(configuracao, field, data[field])
+    configuracao.atualizado_por_id = current_user.id
+    configuracao.atualizado_em = func.now()
+    db.commit()
+    db.refresh(configuracao)
+    return _serialize_configuracao_executiva(configuracao)
+
+
+def delete_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_id, current_user):
+    configuracao = _get_configuracao_executiva(db, pesquisa_id, configuracao_id, current_user)
+    configuracao.ativo = False
+    configuracao.atualizado_por_id = current_user.id
+    configuracao.atualizado_em = func.now()
+    for secao in configuracao.secoes:
+        secao.ativo = False
+        for analise in secao.analises:
+            analise.ativo = False
+    db.commit()
+    return {"detail": "Configuracao desativada."}
+
+
+def create_secao_relatorio_executivo(db, pesquisa_id, configuracao_id, secao_in, current_user):
+    configuracao = _get_configuracao_executiva(db, pesquisa_id, configuracao_id, current_user)
+    ordem = secao_in.ordem
+    if ordem is None:
+        maior = db.query(func.max(models.SecaoRelatorioExecutivo.ordem)).filter(
+            models.SecaoRelatorioExecutivo.configuracao_id == configuracao.id,
+            models.SecaoRelatorioExecutivo.ativo.is_(True),
+        ).scalar()
+        ordem = int(maior or 0) + 1
+    secao = models.SecaoRelatorioExecutivo(
+        configuracao_id=configuracao.id,
+        ordem=ordem,
+        tipo_secao=secao_in.tipo_secao,
+        titulo=secao_in.titulo,
+        ativo=True,
+    )
+    db.add(secao)
+    configuracao.atualizado_por_id = current_user.id
+    configuracao.atualizado_em = func.now()
+    db.commit()
+    db.refresh(secao)
+    return get_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_id, current_user)
+
+
+def update_secao_relatorio_executivo(db, pesquisa_id, configuracao_id, secao_id, secao_in, current_user):
+    configuracao, secao = _get_secao_executiva(db, pesquisa_id, configuracao_id, secao_id, current_user)
+    for field, value in secao_in.model_dump(exclude_unset=True).items():
+        setattr(secao, field, value)
+    configuracao.atualizado_por_id = current_user.id
+    configuracao.atualizado_em = func.now()
+    db.commit()
+    return get_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_id, current_user)
+
+
+def delete_secao_relatorio_executivo(db, pesquisa_id, configuracao_id, secao_id, current_user):
+    configuracao, secao = _get_secao_executiva(db, pesquisa_id, configuracao_id, secao_id, current_user)
+    secao.ativo = False
+    for analise in secao.analises:
+        analise.ativo = False
+    configuracao.atualizado_por_id = current_user.id
+    configuracao.atualizado_em = func.now()
+    db.commit()
+    return {"detail": "Secao desativada."}
+
+
+def _reordenar_itens_executivos(itens, ids_validos, objetos_por_id):
+    ids = [item.id for item in itens]
+    if len(ids) != len(set(ids)) or set(ids) != ids_validos:
+        raise HTTPException(status_code=422, detail="A reordenacao deve conter todos os itens ativos, sem duplicidade.")
+    ordens = [item.ordem for item in itens]
+    if len(ordens) != len(set(ordens)):
+        raise HTTPException(status_code=422, detail="As ordens devem ser unicas.")
+    for item in itens:
+        objetos_por_id[item.id].ordem = item.ordem
+
+
+def reorder_secoes_relatorio_executivo(db, pesquisa_id, configuracao_id, payload, current_user):
+    configuracao = _get_configuracao_executiva(db, pesquisa_id, configuracao_id, current_user)
+    secoes = [item for item in configuracao.secoes if item.ativo]
+    _reordenar_itens_executivos(payload.itens, {item.id for item in secoes}, {item.id: item for item in secoes})
+    configuracao.atualizado_por_id = current_user.id
+    configuracao.atualizado_em = func.now()
+    db.commit()
+    return get_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_id, current_user)
+
+
+def create_analise_relatorio_executivo(db, pesquisa_id, configuracao_id, secao_id, analise_in, current_user):
+    configuracao, secao = _get_secao_executiva(db, pesquisa_id, configuracao_id, secao_id, current_user)
+    parametros = _validar_parametros_analise_executiva(db, pesquisa_id, configuracao, analise_in)
+    ordem = analise_in.ordem
+    if ordem is None:
+        maior = db.query(func.max(models.AnaliseRelatorioExecutivo.ordem)).filter(
+            models.AnaliseRelatorioExecutivo.secao_id == secao.id,
+            models.AnaliseRelatorioExecutivo.ativo.is_(True),
+        ).scalar()
+        ordem = int(maior or 0) + 1
+    analise = models.AnaliseRelatorioExecutivo(
+        secao_id=secao.id,
+        ordem=ordem,
+        tipo_analise=analise_in.tipo_analise.value,
+        titulo_customizado=analise_in.titulo_customizado,
+        parametros=parametros,
+        ativo=True,
+    )
+    db.add(analise)
+    configuracao.atualizado_por_id = current_user.id
+    configuracao.atualizado_em = func.now()
+    db.commit()
+    return get_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_id, current_user)
+
+
+def update_analise_relatorio_executivo(db, pesquisa_id, configuracao_id, secao_id, analise_id, analise_in, current_user):
+    configuracao, _secao, analise = _get_analise_executiva(
+        db, pesquisa_id, configuracao_id, secao_id, analise_id, current_user
+    )
+    analise.parametros = _validar_parametros_analise_executiva(db, pesquisa_id, configuracao, analise_in)
+    analise.tipo_analise = analise_in.tipo_analise.value
+    analise.titulo_customizado = analise_in.titulo_customizado
+    if analise_in.ordem is not None:
+        analise.ordem = analise_in.ordem
+    configuracao.atualizado_por_id = current_user.id
+    configuracao.atualizado_em = func.now()
+    db.commit()
+    return get_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_id, current_user)
+
+
+def delete_analise_relatorio_executivo(db, pesquisa_id, configuracao_id, secao_id, analise_id, current_user):
+    configuracao, _secao, analise = _get_analise_executiva(
+        db, pesquisa_id, configuracao_id, secao_id, analise_id, current_user
+    )
+    analise.ativo = False
+    configuracao.atualizado_por_id = current_user.id
+    configuracao.atualizado_em = func.now()
+    db.commit()
+    return {"detail": "Analise desativada."}
+
+
+def reorder_analises_relatorio_executivo(db, pesquisa_id, configuracao_id, secao_id, payload, current_user):
+    configuracao, secao = _get_secao_executiva(db, pesquisa_id, configuracao_id, secao_id, current_user)
+    analises = [item for item in secao.analises if item.ativo]
+    _reordenar_itens_executivos(payload.itens, {item.id for item in analises}, {item.id: item for item in analises})
+    configuracao.atualizado_por_id = current_user.id
+    configuracao.atualizado_em = func.now()
+    db.commit()
+    return get_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_id, current_user)
 
 def get_report_crosstab(
     db: Session,

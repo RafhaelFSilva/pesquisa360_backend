@@ -85,6 +85,177 @@ def read_mapa_preview(
         payload=payload,
     )
 
+
+@router.get(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/",
+    response_model=List[schemas.ConfiguracaoRelatorioExecutivoRead],
+)
+def list_configuracoes_executivas(
+    *, db: Session = Depends(get_db), pesquisa_id: int,
+    tipo_relatorio: schemas.TipoRelatorioExecutivo | None = None,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.list_configuracoes_relatorio_executivo(
+        db, pesquisa_id, current_user, tipo_relatorio
+    )
+
+
+@router.post(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/",
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_configuracao_executiva(
+    *, db: Session = Depends(get_db), pesquisa_id: int,
+    payload: schemas.ConfiguracaoRelatorioExecutivoCreate,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.create_configuracao_relatorio_executivo(db, pesquisa_id, payload, current_user)
+
+
+@router.get(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/",
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
+)
+def get_configuracao_executiva(
+    *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.get_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_id, current_user)
+
+
+@router.patch(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/",
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
+)
+def update_configuracao_executiva(
+    *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
+    payload: schemas.ConfiguracaoRelatorioExecutivoUpdate,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.update_configuracao_relatorio_executivo(
+        db, pesquisa_id, configuracao_id, payload, current_user
+    )
+
+
+@router.delete("/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/")
+def delete_configuracao_executiva(
+    *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.delete_configuracao_relatorio_executivo(db, pesquisa_id, configuracao_id, current_user)
+
+
+@router.post(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/",
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_secao_executiva(
+    *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
+    payload: schemas.SecaoRelatorioExecutivoCreate,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.create_secao_relatorio_executivo(
+        db, pesquisa_id, configuracao_id, payload, current_user
+    )
+
+
+@router.patch(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/",
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
+)
+def update_secao_executiva(
+    *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int, secao_id: int,
+    payload: schemas.SecaoRelatorioExecutivoUpdate,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.update_secao_relatorio_executivo(
+        db, pesquisa_id, configuracao_id, secao_id, payload, current_user
+    )
+
+
+@router.delete(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/"
+)
+def delete_secao_executiva(
+    *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int, secao_id: int,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.delete_secao_relatorio_executivo(
+        db, pesquisa_id, configuracao_id, secao_id, current_user
+    )
+
+
+@router.patch(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/reordenar-secoes/",
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
+)
+def reorder_secoes_executivas(
+    *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
+    payload: schemas.ReordenarRelatorioExecutivoRequest,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.reorder_secoes_relatorio_executivo(
+        db, pesquisa_id, configuracao_id, payload, current_user
+    )
+
+
+@router.post(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/analises/",
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_analise_executiva(
+    *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int, secao_id: int,
+    payload: schemas.AnaliseRelatorioExecutivoCreate,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.create_analise_relatorio_executivo(
+        db, pesquisa_id, configuracao_id, secao_id, payload, current_user
+    )
+
+
+@router.put(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/analises/{analise_id}/",
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
+)
+def update_analise_executiva(
+    *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
+    secao_id: int, analise_id: int, payload: schemas.AnaliseRelatorioExecutivoUpdate,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.update_analise_relatorio_executivo(
+        db, pesquisa_id, configuracao_id, secao_id, analise_id, payload, current_user
+    )
+
+
+@router.delete(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/analises/{analise_id}/"
+)
+def delete_analise_executiva(
+    *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
+    secao_id: int, analise_id: int,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.delete_analise_relatorio_executivo(
+        db, pesquisa_id, configuracao_id, secao_id, analise_id, current_user
+    )
+
+
+@router.patch(
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/reordenar-analises/",
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
+)
+def reorder_analises_executivas(
+    *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int, secao_id: int,
+    payload: schemas.ReordenarRelatorioExecutivoRequest,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    return crud.reorder_analises_relatorio_executivo(
+        db, pesquisa_id, configuracao_id, secao_id, payload, current_user
+    )
+
 @router.get("/relatorios/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa)
 @router.get("/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa)
 def read_relatorio_simples(

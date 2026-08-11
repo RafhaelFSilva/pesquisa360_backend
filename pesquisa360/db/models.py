@@ -141,6 +141,11 @@ class Pesquisa(Base):
         cascade="all, delete-orphan",
     )
     setores = relationship("Setor", back_populates="pesquisa", cascade="all, delete-orphan")
+    configuracoes_relatorio_executivo = relationship(
+        "ConfiguracaoRelatorioExecutivo",
+        back_populates="pesquisa",
+        cascade="all, delete-orphan",
+    )
 
 class Pergunta(Base):
     __tablename__ = "perguntas"
@@ -264,6 +269,81 @@ class AnaliseSalva(Base):
     
     apuracao_id = Column(Integer, ForeignKey("apuracoes.id"), nullable=False)
     apuracao = relationship("Apuracao", back_populates="analises")
+
+
+class ConfiguracaoRelatorioExecutivo(Base):
+    __tablename__ = "configuracoes_relatorio_executivo"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pesquisa_id = Column(Integer, ForeignKey("pesquisas.id", ondelete="CASCADE"), nullable=False, index=True)
+    tipo_relatorio = Column(String, nullable=False, index=True)
+    nome = Column(String, nullable=False)
+    descricao = Column(Text, nullable=True)
+    parametros_gerais = Column(JSONB, nullable=True)
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"), index=True)
+    criado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    atualizado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    pesquisa = relationship("Pesquisa", back_populates="configuracoes_relatorio_executivo")
+    criador = relationship("Usuario", foreign_keys=[criado_por_id])
+    atualizador = relationship("Usuario", foreign_keys=[atualizado_por_id])
+    secoes = relationship(
+        "SecaoRelatorioExecutivo",
+        back_populates="configuracao",
+        cascade="all, delete-orphan",
+        order_by="SecaoRelatorioExecutivo.ordem, SecaoRelatorioExecutivo.id",
+    )
+
+
+class SecaoRelatorioExecutivo(Base):
+    __tablename__ = "secoes_relatorio_executivo"
+    __table_args__ = (
+        Index("ix_secoes_relatorio_executivo_configuracao_ordem", "configuracao_id", "ordem"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    configuracao_id = Column(
+        Integer,
+        ForeignKey("configuracoes_relatorio_executivo.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ordem = Column(Integer, nullable=False)
+    tipo_secao = Column(String, nullable=False)
+    titulo = Column(String, nullable=True)
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"), index=True)
+
+    configuracao = relationship("ConfiguracaoRelatorioExecutivo", back_populates="secoes")
+    analises = relationship(
+        "AnaliseRelatorioExecutivo",
+        back_populates="secao",
+        cascade="all, delete-orphan",
+        order_by="AnaliseRelatorioExecutivo.ordem, AnaliseRelatorioExecutivo.id",
+    )
+
+
+class AnaliseRelatorioExecutivo(Base):
+    __tablename__ = "analises_relatorio_executivo"
+    __table_args__ = (
+        Index("ix_analises_relatorio_executivo_secao_ordem", "secao_id", "ordem"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    secao_id = Column(
+        Integer,
+        ForeignKey("secoes_relatorio_executivo.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ordem = Column(Integer, nullable=False)
+    tipo_analise = Column(String, nullable=False, index=True)
+    titulo_customizado = Column(String, nullable=True)
+    parametros = Column(JSONB, nullable=False)
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"), index=True)
+
+    secao = relationship("SecaoRelatorioExecutivo", back_populates="analises")
 
 
 class CategoriaRespostaEspontanea(Base):

@@ -111,6 +111,21 @@ def database():
             )
         """))
         connection.execute(text("""
+            CREATE TABLE categorias_resposta_espontanea (
+                id INTEGER PRIMARY KEY, pesquisa_id INTEGER, nome TEXT,
+                nome_normalizado TEXT, ativo BOOLEAN, criado_por_id INTEGER,
+                atualizado_por_id INTEGER, criado_em DATETIME, atualizado_em DATETIME
+            )
+        """))
+        connection.execute(text("""
+            CREATE TABLE mapeamentos_resposta_espontanea (
+                id INTEGER PRIMARY KEY, pesquisa_id INTEGER, categoria_id INTEGER,
+                chave_normalizada TEXT, texto_referencia TEXT, ativo BOOLEAN,
+                criado_por_id INTEGER, atualizado_por_id INTEGER,
+                criado_em DATETIME, atualizado_em DATETIME
+            )
+        """))
+        connection.execute(text("""
             CREATE TABLE setores (
                 id INTEGER PRIMARY KEY, nome TEXT, meta INTEGER, tolerancia INTEGER,
                 finalidade TEXT DEFAULT 'OPERACAO' NOT NULL,
@@ -126,7 +141,21 @@ def database():
         """))
         connection.execute(text("INSERT INTO projetos VALUES (100, 'Projeto A', NULL, 'Ativo', NULL, NULL, 1, 10), (200, 'Projeto B', NULL, 'Ativo', NULL, NULL, 1, 20)"))
         connection.execute(text("INSERT INTO pesquisas VALUES (1000, 'Pesquisa A', NULL, 1, 100, NULL, NULL), (2000, 'Pesquisa B', NULL, 1, 200, NULL, NULL)"))
-        connection.execute(text("INSERT INTO perguntas VALUES (100, 'Voto', 'ESCOLHA_SIMPLES', 1, 1, 0, 1, 1000)"))
+        connection.execute(text("""
+            INSERT INTO perguntas VALUES
+              (100, 'Voto', 'ESCOLHA_SIMPLES', 1, 1, 0, 1, 1000),
+              (101, 'Lembranca espontanea', 'TEXTO', 2, 0, 1, 1, 1000)
+        """))
+        connection.execute(text("""
+            INSERT INTO categorias_resposta_espontanea VALUES
+              (1, 1000, 'Clecio', 'clecio', 1, 1, 1, NULL, NULL),
+              (2, 1000, 'Outro candidato', 'outro candidato', 0, 1, 1, NULL, NULL)
+        """))
+        connection.execute(text("""
+            INSERT INTO mapeamentos_resposta_espontanea VALUES
+              (1, 1000, 1, 'clecio', 'Clecio', 1, 1, 1, NULL, NULL),
+              (2, 1000, 2, 'inativo', 'Inativo', 1, 1, 1, NULL, NULL)
+        """))
         connection.execute(text("""
             INSERT INTO setores VALUES
               (10, 'Operacional', 10, 50, 'OPERACAO', 'POLYGON ((-1 -1, -0.1 -1, -0.1 -0.1, -1 -0.1, -1 -1))', 1000, 2),
@@ -157,6 +186,12 @@ def database():
                 text("INSERT INTO respostas VALUES (:id, 100, :coleta_id, :resposta)"),
                 {"id": coleta_id, "coleta_id": coleta_id, "resposta": resposta},
             )
+        connection.execute(text("""
+            INSERT INTO respostas VALUES
+              (101, 101, 1, 'Clécio'),
+              (102, 101, 2, ' CLECIO '),
+              (103, 101, 6, 'Nome livre')
+        """))
 
     yield engine, Session
     engine.dispose()
@@ -243,9 +278,40 @@ def test_preview_lideranca_por_setor(client):
     dados = {item["setor_id"]: item for item in response.json()["dados"]}
     assert dados[11]["lider"] == "Sim"
     assert dados[11]["margem"] == 100.0
+    assert dados[12]["lider"] == "Empate"
+    assert dados[12]["empatados"] == ["Nao", "Sim"]
     assert dados[12]["lider_total"] == 1
-    assert dados[12]["segundo_total"] == 1
+    assert dados[12]["segundo_total"] == 0
     assert dados[12]["margem"] == 0.0
+
+
+def test_preview_resultado_espontaneo_agrega_categoria_normalizada(client):
+    response = client.post(
+        "/relatorios/pesquisas/1000/mapas/preview/",
+        json={"tipo_mapa": "RESULTADO_SETOR", "pergunta_id": 101, "resposta": "Clecio"},
+    )
+
+    assert response.status_code == 200
+    dados = {item["setor_id"]: item for item in response.json()["dados"]}
+    assert dados[11]["valor"] == 1
+    assert dados[11]["percentual"] == 100.0
+    assert dados[12]["valor"] == 1
+    assert dados[12]["total_respostas_validas"] == 2
+    assert dados[12]["percentual"] == 50.0
+
+
+def test_preview_lideranca_espontanea_preserva_nao_categorizada_e_empate(client):
+    response = client.post(
+        "/relatorios/pesquisas/1000/mapas/preview/",
+        json={"tipo_mapa": "LIDERANCA_SETOR", "pergunta_id": 101},
+    )
+
+    assert response.status_code == 200
+    dados = {item["setor_id"]: item for item in response.json()["dados"]}
+    assert dados[11]["lider"] == "Clecio"
+    assert dados[12]["lider"] == "Empate"
+    assert dados[12]["empatados"] == ["Clecio", "Não categorizada"]
+    assert dados[12]["total_respostas_validas"] == 2
 
 
 def test_preview_cobertura_retorna_pontos_sem_pii(client):

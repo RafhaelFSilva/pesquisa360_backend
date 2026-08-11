@@ -285,6 +285,55 @@ def test_preview_lideranca_por_setor(client):
     assert dados[12]["margem"] == 0.0
 
 
+@pytest.mark.parametrize(
+    ("contagens", "margem_esperada", "empatados_esperados"),
+    [
+        ({"A": 6, "B": 3, "C": 1}, 30.0, []),
+        ({"A": 1, "B": 1, "C": 0}, 0.0, ["A", "B"]),
+        ({"A": 4, "B": 4, "C": 2}, 0.0, ["A", "B"]),
+        ({"A": 3, "B": 3, "C": 3}, 0.0, ["A", "B", "C"]),
+    ],
+)
+def test_preview_lideranca_calcula_margem_do_primeiro_colocado(
+    client,
+    database,
+    contagens,
+    margem_esperada,
+    empatados_esperados,
+):
+    engine, _Session = database
+    started = datetime(2026, 1, 10, tzinfo=timezone.utc).isoformat()
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM respostas"))
+        connection.execute(text("DELETE FROM coletas"))
+        coleta_id = 100
+        for resposta, total in contagens.items():
+            for _ in range(total):
+                connection.execute(
+                    text("""
+                        INSERT INTO coletas VALUES
+                        (:id, 1000, 2, 10, :uuid, 0, NULL, 'ok', :started, :started,
+                         'POINT (1.75 0.5)', NULL, 0)
+                    """),
+                    {"id": coleta_id, "uuid": f"margem-{coleta_id}", "started": started},
+                )
+                connection.execute(
+                    text("INSERT INTO respostas VALUES (:id, 100, :coleta_id, :resposta)"),
+                    {"id": coleta_id, "coleta_id": coleta_id, "resposta": resposta},
+                )
+                coleta_id += 1
+
+    response = client.post(
+        "/relatorios/pesquisas/1000/mapas/preview/",
+        json={"tipo_mapa": "LIDERANCA_SETOR", "pergunta_id": 100},
+    )
+
+    assert response.status_code == 200
+    dados = {item["setor_id"]: item for item in response.json()["dados"]}
+    assert dados[12]["margem"] == margem_esperada
+    assert dados[12]["empatados"] == empatados_esperados
+
+
 def test_preview_resultado_espontaneo_agrega_categoria_normalizada(client):
     response = client.post(
         "/relatorios/pesquisas/1000/mapas/preview/",

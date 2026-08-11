@@ -2045,6 +2045,7 @@ def get_mapa_preview(
                 ) if houve_empate else (opcoes[1] if len(opcoes) > 1 else (None, 0))
                 lider_percentual = round((lider[1] / total_respostas) * 100, 2) if total_respostas else 0.0
                 segundo_percentual = round((segundo[1] / total_respostas) * 100, 2) if total_respostas else 0.0
+                margem = 0.0 if houve_empate else max(round(lider_percentual - segundo_percentual, 2), 0.0)
                 dados.append({
                     **item,
                     "total_respostas_validas": total_respostas,
@@ -2055,7 +2056,7 @@ def get_mapa_preview(
                     "segundo": segundo[0],
                     "segundo_total": int(segundo[1]),
                     "segundo_percentual": segundo_percentual,
-                    "margem": round(lider_percentual - segundo_percentual, 2),
+                    "margem": margem,
                 })
 
     return {

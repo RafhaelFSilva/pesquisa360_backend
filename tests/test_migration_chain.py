@@ -17,7 +17,21 @@ from alembic.script import ScriptDirectory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "f2a3b4c5d6e7"
+HEAD_REVISION = "a3b4c5d6e7f8"
+EXPECTED_LINEAGE = [
+    "91fbe6db1f17",
+    "3e4de16d893c",
+    "a22720ccccb4",
+    "28f012bafc15",
+    "6de806306450",
+    "b6f126cd7905",
+    "c8e4b1a2d9f0",
+    "d4e8a1b2c3f4",
+    "e7f9a2b3c4d5",
+    "b1c2d3e4f5a6",
+    "f2a3b4c5d6e7",
+    "a3b4c5d6e7f8",
+]
 
 
 class MigrationChainTests(unittest.TestCase):
@@ -133,6 +147,28 @@ class MigrationChainTests(unittest.TestCase):
             ScriptDirectory.from_config(Config("alembic.ini")).get_heads(),
             [HEAD_REVISION],
         )
+
+    def test_expected_revisions_are_in_single_lineage_to_head(self):
+        script = ScriptDirectory.from_config(Config("alembic.ini"))
+        revisions = {revision.revision: revision for revision in script.walk_revisions()}
+        self.assertEqual(script.get_heads(), [HEAD_REVISION])
+
+        lineage = []
+        current = HEAD_REVISION
+        while current is not None:
+            lineage.append(current)
+            down_revision = revisions[current].down_revision
+            self.assertFalse(
+                isinstance(down_revision, tuple),
+                f"Unexpected branch before head at {current}: {down_revision}",
+            )
+            current = down_revision
+
+        lineage_to_head = list(reversed(lineage))
+        for revision in EXPECTED_LINEAGE:
+            self.assertIn(revision, lineage_to_head)
+        positions = [lineage_to_head.index(revision) for revision in EXPECTED_LINEAGE]
+        self.assertEqual(positions, sorted(positions))
 
     def test_empty_database_upgrades_to_head_with_expected_constraints(self):
         with self.temporary_database() as (db_path, database_url):

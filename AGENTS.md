@@ -17,7 +17,8 @@ A multitenância já foi implementada na API. O backend é a fonte de verdade pa
 - empresa_id/tenant_id deve vir do usuário autenticado ou de regra explícita de Super Admin.
 - Não alterar contrato de API sem listar impacto em Web e Mobile.
 - Não criar migrations destrutivas sem confirmação.
-- Não acessar banco de produção.
+- Não acessar banco de produção por padrão. O acesso ao banco de produção é permitido somente quando a solicitação do administrador contiver explicitamente a string exata: `Administrador autoriza execução!`. Na ausência dessa string exata, qualquer acesso ao banco de produção, inclusive READ ONLY, permanece proibido.
+- Quando houver autorização explícita para produção, limitar a execução estritamente ao escopo solicitado, preservar as regras de multitenância e aplicar as salvaguardas descritas na tarefa.
 - Não usar SHA1 para senha. Usar bcrypt ou Argon2.
 - Não misturar refatoração ampla com correção de bug.
 
@@ -41,4 +42,3 @@ A multitenância já foi implementada na API. O backend é a fonte de verdade pa
 - Informar impacto no Mobile offline-first.
 - Rodar testes relevantes, se disponíveis.
 - Mostrar riscos restantes.
-

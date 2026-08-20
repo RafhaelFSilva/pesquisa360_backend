@@ -275,5 +275,35 @@ por vez, garantido por índice único parcial.
 
 A regra que um Projeto do tenant A não use base privada do tenant B não é
 expressa por constraint SQL: exigiria duplicar `company_id` na tabela de vínculo.
-Ela é contrato da camada de serviço, introduzida na Fase 3 junto com os endpoints,
-e está fixada por teste estrutural em `tests/test_base_eleitoral_schema.py`.
+Ela é contrato da camada de serviço, **implementado na Fase 3A** em
+`services/base_eleitoral._assegurar_base_elegivel_para_projeto`, que responde 404
+como se a base não existisse.
+
+### Complementos da Fase 3A
+
+- **Base para cálculo exige `VALIDADA`.** Existem duas operações distintas:
+  `obter_base_principal_projeto_para_conferencia` aceita qualquer status visível;
+  `obter_base_principal_projeto_para_calculo` recusa qualquer coisa diferente de
+  `VALIDADA` com `BaseEleitoralNaoValidadaError`. Leitura histórica de base
+  `SUBSTITUIDA` continua possível, mas nunca pela porta de cálculo.
+- **Validação é humana.** Importação com zero divergências termina em
+  `IMPORTADA`, nunca em `VALIDADA`. A promoção exige ação explícita e só é aceita
+  quando não resta nenhum território em `EM_CONFERENCIA`.
+- **Importação não sobrescreve versões.** O SHA-256 do arquivo é persistido em
+  `importacao_base_eleitoral.hash_arquivo`; hash repetido é recusado com
+  referência à importação anterior. Não há `UPDATE` em massa nem `DELETE` de
+  versão: conteúdo novo gera nova versão de base.
+- **Divergência não é reconciliada automaticamente.** Resumo diferente da soma
+  dos detalhes preserva o valor declarado, marca `eleitorado_apto_divergente` e
+  move o território para `EM_CONFERENCIA`, sem alterar nenhum filho. A resolução
+  humana registra valor anterior, valor final, justificativa, usuário e data em
+  `metadados`, e marca a divergência do lote como resolvida sem apagá-la.
+- **Permissões.** Base oficial (`company_id IS NULL`) só aceita escrita de
+  Superadmin; base privada aceita Gerente ou Superadmin do tenant proprietário.
+  Agente nunca importa nem valida. Nenhum perfil novo foi criado.
+- **Absorção do legado.** `services/base_eleitoral_legado` lê `bairros` e
+  `locais_votacao` sem alterá-los e produz uma base privada
+  `fonte = MIGRACAO_LEGADO`, sempre em `EM_CONFERENCIA`. Município de bairro só é
+  atribuído com evidência única em `locais_votacao`; zero ou múltiplas evidências
+  viram divergência. O campo legado `votos` nunca é tratado como
+  `eleitorado_apto`.

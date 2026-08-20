@@ -1532,6 +1532,109 @@ class ImportacaoBaseEleitoralResponse(BaseModel):
     executado_em: datetime
 
 
+
+
+# --- Contratos de API da Base Eleitoral (Fase 3A) ---------------------------
+# Nenhum request aceita company_id: o tenant vem sempre do JWT.
+
+
+class BaseEleitoralListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    nome: str
+    ano: int
+    uf: str
+    fonte: str
+    versao: str
+    data_referencia: date
+    status: StatusBaseEleitoral
+    eh_oficial: bool
+
+
+class BaseEleitoralDetalhe(BaseEleitoralListItem):
+    fonte_referencia: Optional[str] = None
+    substituida_por_id: Optional[int] = None
+    comparecimento_estimado: Optional[float] = None
+    percentual_votos_validos: Optional[float] = None
+    criado_por_id: int
+    criado_em: datetime
+    atualizado_em: datetime
+    total_territorios: int = 0
+    total_em_conferencia: int = 0
+
+
+class TerritorioEleitoralListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    base_eleitoral_id: int
+    tipo: TipoTerritorioEleitoral
+    codigo: Optional[str] = None
+    nome: str
+    nome_normalizado: str
+    parent_id: Optional[int] = None
+    municipio_id: Optional[int] = None
+    zona_eleitoral: Optional[int] = None
+    numero_secao: Optional[int] = None
+    eleitorado_apto: Optional[int] = None
+    eleitorado_apto_origem: Optional[int] = None
+    eleitorado_apto_divergente: bool
+    status_validacao: StatusBaseEleitoral
+    possui_geometria: bool
+
+
+class DivergenciaBaseEleitoralResponse(BaseModel):
+    """Espelha o JSON auditado do lote; o formato varia por tipo de divergencia."""
+
+    model_config = ConfigDict(extra="allow")
+
+    tipo_divergencia: str
+    importacao_id: int
+    arquivo_origem: str
+    resolvida: bool = False
+
+
+class ResolverDivergenciaRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    valor_final: int = Field(ge=0)
+    justificativa: str = Field(min_length=1)
+
+    @field_validator("justificativa")
+    @classmethod
+    def exigir_justificativa(cls, value: str) -> str:
+        texto = value.strip()
+        if not texto:
+            raise ValueError("justificativa e obrigatoria")
+        return texto
+
+
+class VincularBaseProjetoRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    principal: bool = True
+
+
+class VinculoProjetoBaseResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    projeto_id: int
+    base_eleitoral_id: int
+    principal: bool
+    vinculado_em: datetime
+
+
+class ResultadoValidacaoBase(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    status: StatusBaseEleitoral
+    total_territorios: int
+    total_em_conferencia: int
+
+
 # --- Atualização de referências ---
 # Garante que os schemas que se referenciam mutuamente sejam resolvidos
 Projeto.model_rebuild()

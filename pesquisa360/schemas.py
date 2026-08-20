@@ -1370,6 +1370,168 @@ class LocalVotacao(LocalVotacaoBase):
     class Config:
         from_attributes = True
 
+
+
+# ==============================================================================
+# BASE ELEITORAL VERSIONADA
+# ==============================================================================
+# Dominio proprio, independente dos Cruzamentos Estrategicos. NivelTerritorial
+# continua sendo o enum dos Cruzamentos (SETOR) e nao e reaproveitado aqui.
+
+
+class StatusBaseEleitoral(StrEnum):
+    IMPORTADA = "IMPORTADA"
+    EM_CONFERENCIA = "EM_CONFERENCIA"
+    VALIDADA = "VALIDADA"
+    SUBSTITUIDA = "SUBSTITUIDA"
+
+
+class TipoTerritorioEleitoral(StrEnum):
+    ESTADO = "ESTADO"
+    MUNICIPIO = "MUNICIPIO"
+    BAIRRO = "BAIRRO"
+    LOCALIDADE = "LOCALIDADE"
+    LOCAL_VOTACAO = "LOCAL_VOTACAO"
+    SECAO = "SECAO"
+
+
+class BaseEleitoralBase(BaseModel):
+    """Campos que o cliente pode informar. `company_id` nunca trafega aqui."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nome: str = Field(min_length=1)
+    ano: int = Field(ge=1900, le=2999)
+    uf: str = Field(min_length=2, max_length=2)
+    fonte: str = Field(min_length=1)
+    fonte_referencia: Optional[str] = None
+    versao: str = Field(min_length=1)
+    data_referencia: date
+    status: StatusBaseEleitoral = StatusBaseEleitoral.IMPORTADA
+    comparecimento_estimado: Optional[float] = Field(default=None, ge=0, le=1)
+    percentual_votos_validos: Optional[float] = Field(default=None, ge=0, le=1)
+
+    @field_validator("uf")
+    @classmethod
+    def normalizar_uf(cls, value: str) -> str:
+        normalizado = value.strip().upper()
+        if len(normalizado) != 2 or not normalizado.isalpha():
+            raise ValueError("uf deve conter exatamente duas letras")
+        return normalizado
+
+    @field_validator("nome", "fonte", "versao")
+    @classmethod
+    def exigir_texto(cls, value: str) -> str:
+        texto = value.strip()
+        if not texto:
+            raise ValueError("campo de texto obrigatorio nao pode ser vazio")
+        return texto
+
+
+class BaseEleitoralCreate(BaseEleitoralBase):
+    """Contrato do cliente: sem company_id, seguindo a regra de ouro do tenant."""
+
+
+class BaseEleitoralCreateInterno(BaseEleitoralBase):
+    """Uso interno (servico/importador). `company_id=None` cria base oficial."""
+
+    company_id: Optional[int] = None
+    criado_por_id: int
+
+
+class BaseEleitoralResponse(BaseEleitoralBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    substituida_por_id: Optional[int] = None
+    criado_por_id: int
+    criado_em: datetime
+    atualizado_em: datetime
+
+
+class TerritorioEleitoralBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tipo: TipoTerritorioEleitoral
+    nome: str = Field(min_length=1)
+    nome_normalizado: Optional[str] = None
+    codigo: Optional[str] = None
+    parent_id: Optional[int] = None
+    municipio_id: Optional[int] = None
+    zona_eleitoral: Optional[int] = Field(default=None, ge=0)
+    numero_secao: Optional[int] = Field(default=None, gt=0)
+    eleitorado_apto: Optional[int] = Field(default=None, ge=0)
+    eleitorado_apto_origem: Optional[int] = Field(default=None, ge=0)
+    eleitorado_apto_divergente: bool = False
+    status_validacao: StatusBaseEleitoral = StatusBaseEleitoral.IMPORTADA
+    metadados: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadados", mode="before")
+    @classmethod
+    def validar_metadados(cls, value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("metadados deve ser um objeto JSON")
+        return value
+
+    @model_validator(mode="after")
+    def validar_arvore(self):
+        # Espelha os CHECKs do banco: so ESTADO e raiz e SECAO exige numero.
+        if self.tipo != TipoTerritorioEleitoral.ESTADO and self.parent_id is None:
+            raise ValueError("apenas territorio do tipo ESTADO pode existir sem parent_id")
+        if self.tipo == TipoTerritorioEleitoral.SECAO and self.numero_secao is None:
+            raise ValueError("numero_secao e obrigatorio para territorio do tipo SECAO")
+        return self
+
+
+class TerritorioEleitoralCreate(TerritorioEleitoralBase):
+    base_eleitoral_id: int
+
+
+class TerritorioEleitoralResponse(TerritorioEleitoralBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    base_eleitoral_id: int
+    criado_em: datetime
+    atualizado_em: datetime
+
+
+class ProjetoBaseEleitoralBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_eleitoral_id: int
+    principal: bool = True
+
+
+class ProjetoBaseEleitoralCreate(ProjetoBaseEleitoralBase):
+    """O projeto_id vem da rota/servico, nunca do corpo enviado pelo cliente."""
+
+
+class ProjetoBaseEleitoralResponse(ProjetoBaseEleitoralBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    projeto_id: int
+    vinculado_em: datetime
+
+
+class ImportacaoBaseEleitoralResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    id: int
+    base_eleitoral_id: int
+    arquivo_origem: str
+    hash_arquivo: Optional[str] = None
+    total_linhas: int = Field(ge=0)
+    total_importadas: int = Field(ge=0)
+    total_divergencias: int = Field(ge=0)
+    divergencias: List[Any] = Field(default_factory=list)
+    executado_por_id: int
+    executado_em: datetime
+
+
 # --- Atualização de referências ---
 # Garante que os schemas que se referenciam mutuamente sejam resolvidos
 Projeto.model_rebuild()

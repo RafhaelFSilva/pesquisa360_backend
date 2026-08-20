@@ -245,3 +245,35 @@ Os Cruzamentos Estratégicos ficam na Central de Inteligência da pesquisa. A
 Central de Relatórios mantém Resumo e Crosstab 2D, e a rota global
 `/inteligencia` continua dedicada ao contexto territorial. O modo Relatório
 usa impressão nativa do navegador em HTML/SVG/CSS A4.
+
+## ADR-023 — Base Eleitoral oficial e privada, fixada pelo Projeto
+
+A Base Eleitoral é dado de referência versionado, independente dos setores
+operacionais e das ondas de campo.
+
+```text
+base_eleitoral.company_id IS NULL   -> base oficial/global
+base_eleitoral.company_id = N       -> base privada do tenant N
+```
+
+Consequências:
+
+- a base oficial é única por `uf + ano + versao` e legível por todos os tenants;
+- a base privada é única por `uf + ano + versao + company_id`;
+- a visibilidade de leitura é `company_id IS NULL OR company_id = current_user.company_id`;
+- base privada de outro tenant é invisível, e acesso inválido retorna 404 (ADR-001);
+- o Web e o Mobile nunca informam `company_id` ao criar ou consultar base eleitoral;
+- o vínculo com a campanha é `Projeto -> ProjetoBaseEleitoral -> BaseEleitoral`;
+- não existe vínculo direto `Pesquisa -> BaseEleitoral`.
+
+Motivo do vínculo no Projeto: `Projeto` é a campanha e `Pesquisa` é a onda. Todas
+as ondas de uma campanha devem comparar contra a mesma versão eleitoral, senão
+indicadores territoriais entre ondas ficam incomparáveis.
+
+Um Projeto pode manter histórico de vínculos, mas apenas uma base é `principal`
+por vez, garantido por índice único parcial.
+
+A regra que um Projeto do tenant A não use base privada do tenant B não é
+expressa por constraint SQL: exigiria duplicar `company_id` na tabela de vínculo.
+Ela é contrato da camada de serviço, introduzida na Fase 3 junto com os endpoints,
+e está fixada por teste estrutural em `tests/test_base_eleitoral_schema.py`.

@@ -1,5 +1,5 @@
 # pesquisa360/db/models.py
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_, Float, Index, UniqueConstraint, text, JSON
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_, Float, Index, UniqueConstraint, CheckConstraint, ForeignKeyConstraint, Numeric, text, JSON
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.dialects.postgresql import JSONB
 from geoalchemy2 import Geometry
@@ -414,3 +414,290 @@ class MapeamentoRespostaEspontanea(Base):
     categoria = relationship("CategoriaRespostaEspontanea", back_populates="mapeamentos")
     criador = relationship("Usuario", foreign_keys=[criado_por_id])
     atualizador = relationship("Usuario", foreign_keys=[atualizado_por_id])
+
+
+# ==============================================================================
+# BASE ELEITORAL VERSIONADA
+# ==============================================================================
+# Dado de referencia eleitoral, independente dos setores operacionais.
+# `company_id IS NULL` marca a base oficial/global; `company_id` preenchido
+# marca uma base privada do tenant. O vinculo com a campanha e feito pelo
+# Projeto (projeto_base_eleitoral), nunca pela Pesquisa.
+
+STATUS_BASE_ELEITORAL = ("IMPORTADA", "EM_CONFERENCIA", "VALIDADA", "SUBSTITUIDA")
+TIPOS_TERRITORIO_ELEITORAL = (
+    "ESTADO",
+    "MUNICIPIO",
+    "BAIRRO",
+    "LOCALIDADE",
+    "LOCAL_VOTACAO",
+    "SECAO",
+)
+
+
+def _sql_in(coluna: str, valores) -> str:
+    """Monta `coluna IN ('A','B')` para CHECKs portateis entre PostgreSQL e SQLite."""
+    return "{} IN ({})".format(coluna, ", ".join("'{}'".format(item) for item in valores))
+
+
+class BaseEleitoral(Base):
+    __tablename__ = "base_eleitoral"
+    __table_args__ = (
+        CheckConstraint(_sql_in("status", STATUS_BASE_ELEITORAL), name="ck_base_eleitoral_status"),
+        CheckConstraint(
+            "comparecimento_estimado IS NULL OR (comparecimento_estimado >= 0 AND comparecimento_estimado <= 1)",
+            name="ck_base_eleitoral_comparecimento",
+        ),
+        CheckConstraint(
+            "percentual_votos_validos IS NULL OR (percentual_votos_validos >= 0 AND percentual_votos_validos <= 1)",
+            name="ck_base_eleitoral_votos_validos",
+        ),
+        # NULL nao participa de UNIQUE no PostgreSQL: duas bases oficiais passariam
+        # por UNIQUE(uf, ano, versao, company_id). Por isso sao dois indices parciais.
+        Index(
+            "uq_base_eleitoral_oficial",
+            "uf",
+            "ano",
+            "versao",
+            unique=True,
+            postgresql_where=text("company_id IS NULL"),
+            sqlite_where=text("company_id IS NULL"),
+        ),
+        Index(
+            "uq_base_eleitoral_privada",
+            "uf",
+            "ano",
+            "versao",
+            "company_id",
+            unique=True,
+            postgresql_where=text("company_id IS NOT NULL"),
+            sqlite_where=text("company_id IS NOT NULL"),
+        ),
+        Index("ix_base_eleitoral_uf_ano", "uf", "ano"),
+        Index("ix_base_eleitoral_company_id", "company_id"),
+        Index("ix_base_eleitoral_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    nome = Column(String, nullable=False)
+    ano = Column(Integer, nullable=False)
+    uf = Column(String(2), nullable=False)
+    fonte = Column(String, nullable=False)
+    fonte_referencia = Column(String, nullable=True)
+    versao = Column(String, nullable=False)
+    data_referencia = Column(Date, nullable=False)
+    status = Column(String, nullable=False, default="IMPORTADA", server_default=text("'IMPORTADA'"))
+    substituida_por_id = Column(Integer, ForeignKey("base_eleitoral.id"), nullable=True)
+
+    # NULL = base oficial/global, visivel por todos os tenants.
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
+
+    # Parametros de projecao. O produto eleitorado x comparecimento x validos
+    # NAO e calculado nesta fase; aqui apenas persistimos os parametros.
+    comparecimento_estimado = Column(Numeric(5, 4), nullable=True)
+    percentual_votos_validos = Column(Numeric(5, 4), nullable=True)
+
+    criado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    company = relationship("Company", foreign_keys=[company_id])
+    criado_por = relationship("Usuario", foreign_keys=[criado_por_id])
+    substituida_por = relationship(
+        "BaseEleitoral", remote_side=[id], foreign_keys=[substituida_por_id]
+    )
+    territorios = relationship(
+        "TerritorioEleitoral",
+        back_populates="base_eleitoral",
+        foreign_keys="TerritorioEleitoral.base_eleitoral_id",
+        passive_deletes=True,
+    )
+    projetos_vinculados = relationship(
+        "ProjetoBaseEleitoral", back_populates="base_eleitoral"
+    )
+    importacoes = relationship(
+        "ImportacaoBaseEleitoral", back_populates="base_eleitoral", passive_deletes=True
+    )
+
+
+class TerritorioEleitoral(Base):
+    __tablename__ = "territorio_eleitoral"
+    __table_args__ = (
+        # Alvo das FKs compostas: amarra cada no a uma unica versao de base.
+        UniqueConstraint("id", "base_eleitoral_id", name="uq_territorio_eleitoral_id_base"),
+        ForeignKeyConstraint(
+            ["parent_id", "base_eleitoral_id"],
+            ["territorio_eleitoral.id", "territorio_eleitoral.base_eleitoral_id"],
+            name="fk_territorio_parent_mesma_base",
+        ),
+        ForeignKeyConstraint(
+            ["municipio_id", "base_eleitoral_id"],
+            ["territorio_eleitoral.id", "territorio_eleitoral.base_eleitoral_id"],
+            name="fk_territorio_municipio_mesma_base",
+        ),
+        CheckConstraint(_sql_in("tipo", TIPOS_TERRITORIO_ELEITORAL), name="ck_territorio_tipo"),
+        CheckConstraint(
+            _sql_in("status_validacao", STATUS_BASE_ELEITORAL),
+            name="ck_territorio_status_validacao",
+        ),
+        CheckConstraint(
+            "parent_id IS NOT NULL OR tipo = 'ESTADO'", name="ck_territorio_raiz"
+        ),
+        CheckConstraint(
+            "tipo <> 'SECAO' OR numero_secao IS NOT NULL", name="ck_territorio_secao"
+        ),
+        CheckConstraint(
+            "eleitorado_apto IS NULL OR eleitorado_apto >= 0",
+            name="ck_territorio_eleitorado_apto",
+        ),
+        CheckConstraint(
+            "eleitorado_apto_origem IS NULL OR eleitorado_apto_origem >= 0",
+            name="ck_territorio_eleitorado_origem",
+        ),
+        # GeometryType() e funcao PostGIS: nao existe em SQLite, onde a suite de
+        # migrations roda. `ddl_if` mantem o CHECK no metadata sem emiti-lo fora
+        # do PostgreSQL; a migration aplica a mesma condicao por dialeto.
+        CheckConstraint(
+            "geometria IS NULL"
+            " OR (tipo IN ('LOCAL_VOTACAO', 'SECAO') AND GeometryType(geometria) = 'POINT')"
+            " OR (tipo IN ('ESTADO', 'MUNICIPIO', 'BAIRRO', 'LOCALIDADE')"
+            " AND GeometryType(geometria) IN ('POLYGON', 'MULTIPOLYGON'))",
+            name="ck_territorio_geometria_tipo",
+        ).ddl_if(dialect="postgresql"),
+        Index("ix_territorio_base_tipo", "base_eleitoral_id", "tipo"),
+        Index("ix_territorio_parent", "parent_id"),
+        Index("ix_territorio_municipio", "municipio_id"),
+        Index("ix_territorio_nome_norm", "base_eleitoral_id", "nome_normalizado"),
+        Index("ix_territorio_zona", "zona_eleitoral"),
+        Index(
+            "uq_territorio_base_tipo_codigo",
+            "base_eleitoral_id",
+            "tipo",
+            "codigo",
+            unique=True,
+            postgresql_where=text("codigo IS NOT NULL"),
+            sqlite_where=text("codigo IS NOT NULL"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    base_eleitoral_id = Column(
+        Integer, ForeignKey("base_eleitoral.id", ondelete="CASCADE"), nullable=False
+    )
+    parent_id = Column(Integer, nullable=True)
+    tipo = Column(String, nullable=False)
+    codigo = Column(String, nullable=True)
+    nome = Column(String, nullable=False)
+    nome_normalizado = Column(String, nullable=False)
+    municipio_id = Column(Integer, nullable=True)
+    zona_eleitoral = Column(Integer, nullable=True)
+    numero_secao = Column(Integer, nullable=True)
+
+    # eleitorado_apto e o valor em uso; _origem preserva o valor bruto da fonte.
+    # Divergencia entre resumo e detalhe NAO e reconciliada automaticamente.
+    eleitorado_apto = Column(Integer, nullable=True)
+    eleitorado_apto_origem = Column(Integer, nullable=True)
+    eleitorado_apto_divergente = Column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    status_validacao = Column(
+        String, nullable=False, default="IMPORTADA", server_default=text("'IMPORTADA'")
+    )
+
+    # GEOMETRY generico: poligonos para ESTADO/MUNICIPIO/BAIRRO/LOCALIDADE e
+    # pontos para LOCAL_VOTACAO/SECAO. Nulo porque a fonte pode nao trazer geometria.
+    geometria = Column(Geometry(geometry_type="GEOMETRY", srid=4326), nullable=True)
+    metadados = Column(
+        JSON().with_variant(JSONB, "postgresql"),
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'"),
+    )
+
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    base_eleitoral = relationship(
+        "BaseEleitoral", back_populates="territorios", foreign_keys=[base_eleitoral_id]
+    )
+    # As auto-relacoes compartilham base_eleitoral_id entre as duas FKs compostas,
+    # o que impede o ORM de separar lado local e remoto. Como `id` e chave primaria,
+    # o join por id ja identifica o no; a base comum fica garantida pelas FKs no banco.
+    parent = relationship(
+        "TerritorioEleitoral",
+        primaryjoin="foreign(TerritorioEleitoral.parent_id) == remote(TerritorioEleitoral.id)",
+        viewonly=True,
+    )
+    children = relationship(
+        "TerritorioEleitoral",
+        primaryjoin="remote(foreign(TerritorioEleitoral.parent_id)) == TerritorioEleitoral.id",
+        viewonly=True,
+    )
+    municipio = relationship(
+        "TerritorioEleitoral",
+        primaryjoin="foreign(TerritorioEleitoral.municipio_id) == remote(TerritorioEleitoral.id)",
+        viewonly=True,
+    )
+
+
+class ProjetoBaseEleitoral(Base):
+    __tablename__ = "projeto_base_eleitoral"
+    __table_args__ = (
+        UniqueConstraint("projeto_id", "base_eleitoral_id", name="uq_projeto_base"),
+        Index("ix_projeto_base_projeto", "projeto_id"),
+        # Historico livre de vinculos, mas apenas uma base principal por projeto.
+        Index(
+            "uq_projeto_base_principal",
+            "projeto_id",
+            unique=True,
+            postgresql_where=text("principal IS TRUE"),
+            sqlite_where=text("principal = 1"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    projeto_id = Column(Integer, ForeignKey("projetos.id"), nullable=False)
+    base_eleitoral_id = Column(Integer, ForeignKey("base_eleitoral.id"), nullable=False)
+    principal = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    vinculado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    projeto = relationship("Projeto", foreign_keys=[projeto_id])
+    base_eleitoral = relationship(
+        "BaseEleitoral", back_populates="projetos_vinculados", foreign_keys=[base_eleitoral_id]
+    )
+
+
+class ImportacaoBaseEleitoral(Base):
+    __tablename__ = "importacao_base_eleitoral"
+    __table_args__ = (
+        CheckConstraint("total_linhas >= 0", name="ck_importacao_total_linhas"),
+        CheckConstraint("total_importadas >= 0", name="ck_importacao_total_importadas"),
+        CheckConstraint("total_divergencias >= 0", name="ck_importacao_total_divergencias"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    base_eleitoral_id = Column(
+        Integer, ForeignKey("base_eleitoral.id", ondelete="CASCADE"), nullable=False
+    )
+    arquivo_origem = Column(String, nullable=False)
+    hash_arquivo = Column(String, nullable=True)
+    total_linhas = Column(Integer, nullable=False)
+    total_importadas = Column(Integer, nullable=False)
+    total_divergencias = Column(Integer, nullable=False)
+    divergencias = Column(
+        JSON().with_variant(JSONB, "postgresql"),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'"),
+    )
+    executado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    executado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    base_eleitoral = relationship(
+        "BaseEleitoral", back_populates="importacoes", foreign_keys=[base_eleitoral_id]
+    )
+    executado_por = relationship("Usuario", foreign_keys=[executado_por_id])

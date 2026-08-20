@@ -192,6 +192,33 @@ Setores exclusivamente `RELATORIO` devem respeitar o mesmo isolamento por
 tenant, mas nao devem aparecer em fluxos operacionais, Mobile ou monitoramento
 operacional.
 
+## 6.1 Base Eleitoral (dado de referência)
+
+A Base Eleitoral não segue a cadeia `Projeto -> company_id`: ela carrega o tenant
+diretamente, e `NULL` tem significado próprio.
+
+| Valor | Significado | Quem enxerga |
+|---|---|---|
+| `base_eleitoral.company_id IS NULL` | base oficial/global | todos os tenants |
+| `base_eleitoral.company_id = N` | base privada do tenant N | somente o tenant N |
+
+Expressão canônica de visibilidade:
+
+```python
+BaseEleitoral.company_id.is_(None) | (BaseEleitoral.company_id == current_user.company_id)
+```
+
+Proibido:
+
+```text
+SELECT * FROM base_eleitoral sem filtro de visibilidade
+company_id vindo do payload do cliente
+projeto de um tenant vinculado a base privada de outro tenant
+```
+
+O Projeto fixa a versão usada via `projeto_base_eleitoral`. A Pesquisa não se
+vincula à base eleitoral. Acesso inválido retorna 404, como no restante do projeto.
+
 ## 7. Testes obrigatórios Empresa A x Empresa B
 
 | Cenário | Resultado esperado |

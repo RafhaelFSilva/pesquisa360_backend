@@ -17,6 +17,11 @@ Funcionalidades validadas:
 - setores e agentes;
 - relatórios simples;
 - crosstab 2D;
+- motor de Cruzamentos Estratégicos de 2 a N dimensões;
+- metadados analíticos configuráveis por pergunta;
+- Central de Inteligência com modos Explorar e Relatório;
+- filtros por resposta sem renormalização dos percentuais;
+- categorização compartilhada de respostas espontâneas;
 - monitoramento de coletas;
 - online/offline;
 - endereço estimado;
@@ -154,7 +159,12 @@ Classificacao espacial futura:
 
 ## 5. Futuro
 
-- Análise multivariável.
+- semântica de opções e candidato canônico;
+- Potencial de Crescimento;
+- Consolidação da Base;
+- Resistência;
+- Indecisos;
+- Tracking Inteligente;
 - Heatmap.
 - Cluster de marcadores.
 - Portal do cliente.
@@ -176,7 +186,6 @@ Classificacao espacial futura:
 
 - Reescrever backend inteiro.
 - Migrar stack.
-- Implementar multivariável antes do mobile.
 - Chamar OpenStreetMap em massa na tela.
 - Criar tempo real antes do monitoramento básico estar estável.
 - Mudar contratos validados sem versionamento.
@@ -189,3 +198,24 @@ Classificacao espacial futura:
 - Documentação atualizada.
 - Checkpoint/tag nos três repositórios.
 - Matriz Empresa A x Empresa B validada.
+
+## 9. Cruzamentos Estratégicos
+
+Concluído neste marco:
+
+- motor descritivo de 2 a N dimensões, com limites de segurança e isolamento por tenant;
+- endpoint de opções e cardinalidade para configuração da seleção;
+- configuração de papel e metadados analíticos na Web;
+- seleção ordenada, filtros por resposta e tratamento de “Sem resposta”;
+- categorização compartilhada de respostas espontâneas, sem fuzzy matching;
+- modos Explorar e Relatório, gráficos, detalhes responsivos e impressão A4 pelo navegador.
+
+Permanece para evolução futura:
+
+- interpretação estratégica assistida e indicadores eleitorais derivados;
+- persistência de análises e acompanhamento histórico inteligente;
+- exportação PDF dedicada no backend, se necessária;
+- revisão da granularidade da categorização espontânea, hoje vinculada à pesquisa.
+
+O resultado atual é evidência descritiva. Ele não afirma causalidade nem produz
+interpretação eleitoral automática.

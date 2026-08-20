@@ -5,6 +5,10 @@ from typing import List
 from pesquisa360 import crud, schemas
 from pesquisa360.db import models
 from pesquisa360.core.dependencies import get_db, get_current_user
+from pesquisa360.services.multidimensional_cross import (
+    build_multidimensional_cross,
+    get_multidimensional_cross_options,
+)
 
 router = APIRouter()
 
@@ -383,3 +387,36 @@ def read_relatorio_crosstab(
         "pergunta_coluna": str(pergunta_coluna),
         "dados": dados
     }
+
+
+@router.post(
+    "/relatorios/pesquisas/{pesquisa_id}/cruzamentos-multidimensionais/",
+    response_model=schemas.CruzamentoMultidimensionalResponse,
+)
+@router.post(
+    "/pesquisas/{pesquisa_id}/cruzamentos-multidimensionais/",
+    response_model=schemas.CruzamentoMultidimensionalResponse,
+)
+def read_cruzamento_multidimensional(
+    *,
+    db: Session = Depends(get_db),
+    pesquisa_id: int,
+    payload: schemas.CruzamentoMultidimensionalRequest,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    check_access(db, pesquisa_id, current_user)
+    return build_multidimensional_cross(db, pesquisa_id, payload, current_user)
+
+
+@router.get(
+    "/relatorios/pesquisas/{pesquisa_id}/cruzamentos-multidimensionais/opcoes/",
+    response_model=schemas.CruzamentoOpcoesResponse,
+)
+def read_cruzamento_multidimensional_opcoes(
+    *,
+    db: Session = Depends(get_db),
+    pesquisa_id: int,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    check_access(db, pesquisa_id, current_user)
+    return get_multidimensional_cross_options(db, pesquisa_id, current_user)

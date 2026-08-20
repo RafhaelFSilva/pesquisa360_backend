@@ -220,5 +220,53 @@ Futuro - Mapas Estrategicos:
 - [ ] Fluxos principais sem erro no console.
 - [ ] Checkpoint git criado.
 - [ ] Tags criadas.
-- [ ] Documentação atualizada.
-- [ ] Scripts temporários removidos ou documentados.
+
+## 14. Cruzamentos Estratégicos
+
+Backend:
+
+- [x] Payload legado de pergunta mantém defaults `null` e `{}`.
+- [x] Metadados aceitam somente objeto e podem ser limpos com `{}`.
+- [x] Duas, três e N dimensões respeitam ordem e profundidade.
+- [x] Junção por `coleta_id`, contagem distinta e ausência de produto cartesiano.
+- [x] Base válida, base pai, percentuais e base zero validados.
+- [x] Sem resposta e múltipla escolha validadas.
+- [x] Duplicidades são deduplicadas e geram aviso.
+- [x] Perguntas inativas, estrangeiras e não categóricas são rejeitadas.
+- [x] Outro tenant recebe 404 e o payload não aceita `company_id`.
+- [x] Contrato do crosstab 2D permanece disponível.
+- [x] Endpoint de opções retorna metadados, cardinalidade, contagem e origem.
+- [x] Respostas espontâneas usam a categorização compartilhada, sem fuzzy matching.
+- [x] Valor espontâneo não mapeado aparece como “Não categorizada”.
+- [x] Filtros por resposta preservam bases e percentuais sem renormalização.
+- [x] Caso de base 100 preserva A = 40% e B = 30% ao ocultar C = 30%.
+
+Web/E2E:
+
+- [x] Central de Inteligência contextual abre os Cruzamentos Estratégicos.
+- [x] Central de Relatórios mantém Resumo e Crosstab 2D e não exibe card de Cruzamentos Estratégicos.
+- [x] Seletor aceita múltiplas perguntas por checkbox e preserva a ordem.
+- [x] Setas reordenam dimensões; detalhes expandem opções e cardinalidade.
+- [x] Selecionar todas e Limpar funcionam nos filtros de resposta.
+- [x] Opções com contagem zero continuam selecionáveis.
+- [x] Modo Explorar usa cache de profundidades, breadcrumb e troca BAR/PIE/DONUT sem nova requisição.
+- [x] Gráficos usam `percentual_pai` e exibem o contexto do caminho.
+- [x] Modo Relatório agrupa nodos por caminho pai em segmentos.
+- [x] Detalhes são opcionais e ficam ocultos por padrão.
+- [x] Desktop usa tabela; mobile usa cards; não há scroll interno no relatório.
+- [x] Impressão abre pelo navegador com HTML/SVG/CSS preparado para A4.
+- [x] Fluxos desktop e mobile não geram resposta HTTP 4xx/5xx.
+
+Execução validada:
+
+```text
+Backend compileall: PASS
+Backend pytest focado: 62 passed, 23 warnings, 4 subtests passed
+Web node --test tests/*.test.mjs: 125 passed
+Web npm run lint: PASS
+Web npm run build: PASS
+E2E CDP consolidado: PASS, zero respostas HTTP >= 400
+```
+
+No E2E, os únicos avisos observados foram os avisos preexistentes de flags
+futuras do React Router.

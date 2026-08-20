@@ -89,8 +89,15 @@ class CollectionIdempotencyTests(unittest.TestCase):
                     id INTEGER PRIMARY KEY, texto_pergunta TEXT NOT NULL,
                     tipo_pergunta TEXT NOT NULL, ordem INTEGER NOT NULL,
                     eh_obrigatoria BOOLEAN NOT NULL, eh_resposta_espontanea BOOLEAN NOT NULL DEFAULT 0,
+                    papel_analitico VARCHAR(50), metadados_analiticos JSON NOT NULL DEFAULT '{}',
                     ativo BOOLEAN NOT NULL,
                     pesquisa_id INTEGER NOT NULL
+                )
+            """))
+            connection.execute(text("""
+                CREATE TABLE opcoes (
+                    id INTEGER PRIMARY KEY, texto TEXT NOT NULL, ordem INTEGER,
+                    pergunta_id INTEGER, proxima_pergunta_id INTEGER
                 )
             """))
             connection.execute(text("""
@@ -574,7 +581,7 @@ class CollectionIdempotencyTests(unittest.TestCase):
     def test_migration_has_exactly_one_new_head(self):
         config = Config("alembic.ini")
         heads = ScriptDirectory.from_config(config).get_heads()
-        self.assertEqual(heads, ["f2a3b4c5d6e7"])
+        self.assertEqual(heads, ["c4d5e6f7a8b9"])
 
 
 if __name__ == "__main__":

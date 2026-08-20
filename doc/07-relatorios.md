@@ -1,16 +1,18 @@
 # Pesquisa360 — Relatórios
 
-**Status:** resumo simples e crosstab 2D validados  
+**Status:** relatórios clássicos e Cruzamentos Estratégicos validados
 **Objetivo:** documentar contratos, regras e limites dos relatórios.
 
 ## 1. Escopo atual
 
-O módulo de relatórios possui:
+O produto mantém dois contextos complementares:
 
-1. Resumo das Respostas.
-2. Cruzamento de Dados / Crosstab.
+1. **Central de Relatórios:** Resumo das Respostas e Cruzamento de Dados / Crosstab 2D.
+2. **Central de Inteligência:** Cruzamentos Estratégicos nos modos Explorar e Relatório.
 
-A análise multivariável com 3 ou mais perguntas fica para roadmap futuro.
+O crosstab 2D e o cruzamento multidimensional são recursos distintos. O
+primeiro compara pares; o segundo percorre de 2 a N dimensões categóricas
+ordenadas sem alterar o contrato clássico.
 
 Tambem esta aprovado para roadmap futuro um modulo separado chamado `Mapas
 Estrategicos`. Ele nao faz parte do escopo atual validado de relatorios simples
@@ -170,7 +172,7 @@ Escolaridade x Presidente:
 }
 ```
 
-## 7. Crosstab vs multivariável
+## 7. Crosstab 2D versus Cruzamentos Estratégicos
 
 Crosstab atual:
 
@@ -178,13 +180,15 @@ Crosstab atual:
 Pergunta A x Pergunta B
 ```
 
-Multivariável futura:
+Cruzamento estratégico:
 
 ```text
-Sexo + Faixa Etária x Governador
+Sexo -> Faixa Etária -> Governador -> Avaliação
 ```
 
-Não misturar no mesmo endpoint sem redesenhar contrato.
+Os dois fluxos permanecem separados: o crosstab gera comparações 2 a 2; o
+cruzamento estratégico preserva a ordem escolhida e produz uma árvore de
+caminhos observados.
 
 ## 8. Backend
 
@@ -225,7 +229,8 @@ gera combinações 2 a 2
 5 perguntas = 10 gráficos
 ```
 
-Essa combinação 2 a 2 não é análise multivariável verdadeira.
+Essa combinação 2 a 2 pertence ao crosstab clássico. Para análise hierárquica
+de 2 a N dimensões, usar a Central de Inteligência.
 
 ## 10. Testes mínimos
 
@@ -261,3 +266,61 @@ Dependencias de dominio:
   final como fallback;
 - retornar/representar `SEM_SETOR` quando nao houver setor analitico;
 - resolver sobreposicao entre setores analiticos sem duplicar entrevistas.
+
+## 12. Motor dos Cruzamentos Estratégicos
+
+O crosstab 2D permanece inalterado. O novo motor recebe duas ou mais perguntas
+categóricas ordenadas e cruza exclusivamente respostas da mesma `coleta_id`.
+Ele materializa apenas caminhos observados e retorna os prefixos de todos os
+níveis para navegação hierárquica.
+
+- `total_entrevistas`: coletas distintas da pesquisa segundo a política atual.
+- `base_valida`: coletas com valor utilizável em todas as dimensões processadas;
+  com `incluir_sem_resposta=true`, inclui a categoria `__SEM_RESPOSTA__`.
+- `base_pai`: entrevistas do prefixo anterior; no nível 1, a base válida.
+- `percentual_pai`: contagem do nodo dividida pela base pai.
+- `percentual_total`: contagem do nodo dividida pela base válida.
+
+Arrays JSON são expandidos somente em perguntas de múltipla escolha. A entrevista
+é contada no máximo uma vez por caminho, mas pode pertencer a vários filhos;
+portanto, percentuais de filhos podem exceder 100%. Strings legadas permanecem
+uma categoria e não há fuzzy matching.
+
+Limites configuráveis: `P360_CROSS_MAX_DIMENSIONS` (8),
+`P360_CROSS_MAX_NODES` (5000) e `P360_CROSS_MAX_COMBINATIONS` (100000).
+O tenant sempre vem de `current_user.company_id`, validado por
+`Pesquisa -> Projeto.company_id` e pelas coletas consultadas.
+
+O motor entrega evidência descritiva, não inferência causal nem interpretação
+eleitoral automática. A UI Web consome esse contrato nos modos Explorar e
+Relatório; a impressão é feita pelo navegador com HTML, SVG e CSS para A4, sem
+geração de PDF no backend.
+
+### Respostas espontâneas
+
+Respostas espontâneas são transformadas por `get_active_spontaneous_mapping_for_report` e `resolve_reportable_response_value`. Na modelagem atual, a categorização é ativa e vinculada à pesquisa; respostas sem mapeamento seguem a semântica comum dos relatórios e aparecem como “Não categorizada”. A seleção de categorias é apenas um recorte de exibição/ramificação e preserva os denominadores brutos calculados.
+
+### Filtros e denominadores
+
+`filtros_respostas` seleciona os ramos exibidos depois do cálculo de bases,
+contagens e percentuais. Não há renormalização: em uma base de 100 entrevistas,
+se A = 40, B = 30 e C = 30, exibir apenas A e B mantém 40% e 30%.
+
+O Web envia `incluir_sem_resposta=true`. A categoria técnica usa a chave
+`__SEM_RESPOSTA__` e o rótulo “Sem resposta”. O endpoint aceita o valor legado
+`false` para compatibilidade.
+
+### Interface Web
+
+- rota contextual: `/projetos/:projectId/pesquisas/:surveyId/inteligencia/cruzamentos`;
+- seletor compartilhado com checkboxes, ordem ajustável, detalhes e filtros por resposta;
+- modo Explorar com navegação progressiva, breadcrumb e cache das profundidades já carregadas;
+- gráficos de barras, pizza ou rosca, usando `percentual_pai` como métrica principal e sem nova consulta ao trocar a visualização;
+- bases do segmento e total permanecem disponíveis junto às contagens e percentuais retornados pelo backend;
+- modo Relatório com parametrização prévia de profundidade, respostas, segmentos, gráfico e detalhes;
+- nodos agrupados por caminho pai em seções, em vez de um gráfico independente por nodo;
+- detalhes ocultos por padrão; quando abertos, usam tabela no desktop e cards no mobile, sem scroll interno;
+- o gráfico ocupa a largura disponível quando os detalhes estão ocultos;
+- impressão pelo navegador, com `window.print()`, gráficos SVG, tabelas condicionais, controles administrativos ocultos e CSS A4;
+- o fluxo não depende de `jsPDF` ou `html2canvas`;
+- a rota global `/inteligencia` continua dedicada à inteligência territorial.

@@ -1,5 +1,5 @@
 # pesquisa360/db/models.py
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_, Float, Index, UniqueConstraint, text
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_, Float, Index, UniqueConstraint, text, JSON
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.dialects.postgresql import JSONB
 from geoalchemy2 import Geometry
@@ -155,6 +155,13 @@ class Pergunta(Base):
     ordem = Column(Integer, nullable=False)
     eh_obrigatoria = Column(Boolean, default=True, nullable=False)
     eh_resposta_espontanea = Column(Boolean, default=False, nullable=False)
+    papel_analitico = Column(String(50), nullable=True, index=True)
+    metadados_analiticos = Column(
+        JSON().with_variant(JSONB, "postgresql"),
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'"),
+    )
     
     ativo = Column(Boolean, default=True, nullable=False)
     pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False)

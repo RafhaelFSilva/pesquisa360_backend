@@ -61,6 +61,7 @@ pesquisa360/
   utils/
     geocoding.py
   services/
+    multidimensional_cross.py
     setor_shapefile_import.py
   crud.py
   schemas.py
@@ -81,6 +82,7 @@ scripts/
 | `dependencies.py` | `get_db`, `get_current_user`, validações de autenticação |
 | `security.py` | Hash de senha, criação e validação de token |
 | `utils/geocoding.py` | Geocoding reverso por coordenadas |
+| `services/multidimensional_cross.py` | Motor multidimensional, opções analíticas, caminhos, bases, percentuais e filtros de categorias |
 | `services/setor_shapefile_import.py` | Validacao e conversao pura de Shapefile para Polygon EPSG:4326 |
 | `scripts/importar_setor_shapefile.*` | Importacao administrativa que reutiliza o CRUD de setores |
 
@@ -121,12 +123,18 @@ src/
     SectorManager.tsx
     ColetasMap.tsx
     ProtectedRoute.tsx
+    AnalyticConfigurationPanel.tsx
+    StrategicDimensionSelector.tsx
+    StrategicCrossVisualization.tsx
+    StrategicCrossingsReport.tsx
   pages/
     LoginPage.tsx
     ProjectsPage.tsx
     ProjectDetailPage.tsx
     SurveyDetailPage.tsx
     ReportsPage.tsx
+    SurveyIntelligencePage.tsx
+    StrategicCrossingsPage.tsx
     StatisticsReportPage.tsx
     CrosstabReportPage.tsx
     MonitoringPage.tsx
@@ -186,7 +194,8 @@ O mobile é **offline-first**. Toda coleta deve poder ocorrer sem internet e ser
 | Coletas | Respostas + GPS + status de sync |
 | Geofence | Cerca global da pesquisa |
 | Setores | Subdivisao operacional e cotas no estado atual; separacao futura entre territorio operacional e analitico |
-| Relatórios | Resumo e crosstab |
+| Relatórios clássicos | Resumo das Respostas e Crosstab 2D |
+| Inteligência | Configuração Analítica e Cruzamentos Estratégicos nos modos Explorar e Relatório |
 | Monitoramento | Visualização de coletas em mapa |
 
 ## 6. Riscos conhecidos
@@ -195,7 +204,7 @@ O mobile é **offline-first**. Toda coleta deve poder ocorrer sem internet e ser
 2. Mobile ainda precisa ser revalidado contra multitenancy.
 3. Geocoding existe, mas precisa de política controlada para evitar chamadas em massa.
 4. Monitoramento atual é de coletas sincronizadas, não heartbeat em tempo real do agente.
-5. Relatórios multivariáveis ficam fora do ciclo atual.
+5. Cruzamentos Estratégicos entregam evidência descritiva; causalidade, propensão, conversão, oportunidade, migração e previsão continuam fora do ciclo atual.
 6. A finalidade territorial `OPERACAO` / `RELATORIO` / `AMBOS` esta aprovada,
    mas ainda nao implementada no contrato atual.
 
@@ -209,3 +218,34 @@ O mobile é **offline-first**. Toda coleta deve poder ocorrer sem internet e ser
 - Evoluir monitoramento em duas fases: polling Web e heartbeat Mobile.
 - Implementar a separacao entre setores operacionais e analiticos preservando
   compatibilidade: todos os setores existentes devem iniciar como `OPERACAO`.
+
+## 8. Arquitetura dos Cruzamentos Estratégicos
+
+```text
+Resposta.valor_resposta
+  -> get_active_spontaneous_mapping_for_report
+  -> resolve_reportable_response_value
+  -> valor analítico/categoria ativa
+  -> services/multidimensional_cross.py
+  -> nodos, bases e percentuais
+  -> filtro das categorias retornadas sem renormalização
+```
+
+O motor une respostas pela mesma `coleta_id`, materializa somente caminhos
+observados e preserva o Crosstab 2D em contrato separado. Não existe fuzzy
+matching dentro do motor. Na modelagem atual, categorias e mapeamentos
+espontâneos ativos pertencem à pesquisa.
+
+No Web, a Central de Inteligência contextual à pesquisa leva a uma página de
+Cruzamentos Estratégicos com dois consumidores do mesmo contrato:
+
+```text
+Central de Inteligência
+  -> Cruzamentos Estratégicos
+       -> Modo Explorar
+       -> Modo Relatório
+```
+
+A Configuração Analítica permanece na pesquisa e fornece
+`papel_analitico` e `metadados_analiticos`. A rota global `/inteligencia`
+continua sendo a Inteligência Territorial, distinta da central contextual.

@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 #from shapely.wkb import loads # <-- NOVA IMPORTAÇÃO
 
 from .question_types import normalize_question_type
+from .analytics import PapelAnalitico
 
 # --- Esquemas para Respostas e Coletas ---
 class RespostaBase(BaseModel):
@@ -103,12 +104,28 @@ class PerguntaBase(BaseModel):
     ordem: int
     eh_obrigatoria: bool = True
     eh_resposta_espontanea: bool = False
+    papel_analitico: Optional[PapelAnalitico] = None
+    metadados_analiticos: Dict[str, Any] = Field(default_factory=dict)
     opcoes: Optional[List[OpcaoCreate]] = None # <--- Alterado para OpcaoCreate
 
     @field_validator("tipo_pergunta")
     @classmethod
     def normalize_tipo_pergunta(cls, value: str) -> str:
         return normalize_question_type(value)
+
+    @field_validator("papel_analitico", mode="before")
+    @classmethod
+    def normalize_papel_analitico(cls, value):
+        if value is None:
+            return None
+        return str(value).strip().upper()
+
+    @field_validator("metadados_analiticos", mode="before")
+    @classmethod
+    def validate_metadados_analiticos(cls, value):
+        if not isinstance(value, dict):
+            raise ValueError("metadados_analiticos deve ser um objeto JSON")
+        return value
 
 class PerguntaCreate(PerguntaBase):
     ordem: Optional[int] = None
@@ -119,6 +136,8 @@ class PerguntaUpdate(BaseModel):
     ordem: Optional[int] = None
     eh_obrigatoria: Optional[bool] = None
     eh_resposta_espontanea: Optional[bool] = None
+    papel_analitico: Optional[PapelAnalitico] = None
+    metadados_analiticos: Optional[Dict[str, Any]] = None
     opcoes: Optional[List[Any]] = None
     ativo: Optional[bool] = None
 
@@ -128,6 +147,20 @@ class PerguntaUpdate(BaseModel):
         if value is None:
             return None
         return normalize_question_type(value)
+
+    @field_validator("papel_analitico", mode="before")
+    @classmethod
+    def normalize_papel_analitico(cls, value):
+        if value is None:
+            return None
+        return str(value).strip().upper()
+
+    @field_validator("metadados_analiticos", mode="before")
+    @classmethod
+    def validate_metadados_analiticos(cls, value):
+        if not isinstance(value, dict):
+            raise ValueError("metadados_analiticos deve ser um objeto JSON")
+        return value
 
 class PerguntaReordenarItem(BaseModel):
     id: int
@@ -563,6 +596,291 @@ class CrosstabResponse(BaseModel):
     pergunta_coluna: str
     dados: List[CrosstabRow]
 
+
+class NivelTerritorial(StrEnum):
+    """Niveis territoriais suportados. Hoje apenas SETOR e operacional."""
+
+    SETOR = "SETOR"
+
+
+class TipoDimensaoCruzamento(StrEnum):
+    PERGUNTA = "PERGUNTA"
+    TERRITORIO = "TERRITORIO"
+
+
+class CruzamentoDimensaoConfig(BaseModel):
+    """Descriptor de uma posicao da sequencia analitica. Sem ID sentinela."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tipo: TipoDimensaoCruzamento
+    pergunta_id: Optional[int] = None
+    nivel: Optional[NivelTerritorial] = None
+
+    @model_validator(mode="after")
+    def validate_dimensao(self):
+        if self.tipo == TipoDimensaoCruzamento.PERGUNTA:
+            if self.pergunta_id is None:
+                raise ValueError("pergunta_id e obrigatorio para dimensao do tipo PERGUNTA")
+            if self.nivel is not None:
+                raise ValueError("nivel nao se aplica a dimensao do tipo PERGUNTA")
+        else:
+            if self.pergunta_id is not None:
+                raise ValueError("pergunta_id nao se aplica a dimensao do tipo TERRITORIO")
+            if self.nivel is None:
+                self.nivel = NivelTerritorial.SETOR
+        return self
+
+
+class CruzamentoFiltroTerritorial(BaseModel):
+    """Restringe o universo antes do cruzamento. Guarda referencias, nunca geometria."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nivel: NivelTerritorial = NivelTerritorial.SETOR
+    setor_ids: List[int] = Field(default_factory=list)
+    incluir_sem_setor: bool = False
+
+    @model_validator(mode="after")
+    def validate_filtro(self):
+        if len(self.setor_ids) != len(set(self.setor_ids)):
+            raise ValueError("setor_ids nao pode conter itens duplicados")
+        return self
+
+    @property
+    def ativo(self) -> bool:
+        return bool(self.setor_ids) or self.incluir_sem_setor
+
+
+class ModoAlvoCruzamento(StrEnum):
+    FULL_DISTRIBUTION = "FULL_DISTRIBUTION"
+    ONE_VS_REST = "ONE_VS_REST"
+
+
+def _normalizar_lista_alvo(valores, campo: str) -> list[str]:
+    normalizados = [str(item).strip() for item in valores]
+    if any(not item for item in normalizados):
+        raise ValueError(f"{campo} nao pode conter valores vazios")
+    if len(normalizados) != len(set(normalizados)):
+        raise ValueError(f"{campo} nao pode conter itens duplicados")
+    return normalizados
+
+
+def _validar_regras_alvo(alvo):
+    """Regras comuns ao alvo do request e ao alvo persistido na visao salva."""
+    valor = alvo.valor.strip() if isinstance(alvo.valor, str) else alvo.valor
+    excluidos = _normalizar_lista_alvo(alvo.valores_excluidos, "valores_excluidos")
+    preservados = _normalizar_lista_alvo(alvo.valores_preservados, "valores_preservados")
+    if set(excluidos) & set(preservados):
+        raise ValueError("um valor nao pode ser excluido e preservado ao mesmo tempo")
+    if alvo.modo == ModoAlvoCruzamento.ONE_VS_REST:
+        if not valor:
+            raise ValueError("valor e obrigatorio no modo ONE_VS_REST")
+        if valor in excluidos:
+            raise ValueError("valor do alvo nao pode estar em valores_excluidos")
+        if valor in preservados:
+            raise ValueError("valor do alvo nao pode estar em valores_preservados")
+    elif valor:
+        raise ValueError("valor deve ser ausente no modo FULL_DISTRIBUTION")
+    alvo.valor = valor
+    alvo.valores_excluidos = excluidos
+    alvo.valores_preservados = preservados
+    return alvo
+
+
+class CruzamentoAlvo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pergunta_id: int
+    modo: ModoAlvoCruzamento = ModoAlvoCruzamento.FULL_DISTRIBUTION
+    valor: Optional[str] = None
+    valores_excluidos: List[str] = Field(default_factory=list)
+    valores_preservados: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_alvo(self):
+        return _validar_regras_alvo(self)
+
+
+class CruzamentoFiltroResposta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pergunta_id: int
+    valores: List[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_values(self):
+        normalized = [value.strip() for value in self.valores]
+        if any(not value for value in normalized):
+            raise ValueError("valores nao pode conter valores vazios")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("valores nao pode conter itens duplicados")
+        self.valores = normalized
+        return self
+
+
+class CruzamentoMultidimensionalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # min_length=1 porque a sequencia pode combinar uma pergunta com a dimensao
+    # territorial; sem `dimensoes` o minimo de duas perguntas continua valendo.
+    pergunta_ids: List[int] = Field(min_length=1)
+    incluir_sem_resposta: bool = False
+    profundidade_maxima: Optional[int] = Field(default=None, ge=1)
+    filtros_respostas: List[CruzamentoFiltroResposta] = Field(default_factory=list)
+    alvo: Optional[CruzamentoAlvo] = None
+    dimensoes: Optional[List[CruzamentoDimensaoConfig]] = None
+    filtro_territorial: Optional[CruzamentoFiltroTerritorial] = None
+
+    @model_validator(mode="after")
+    def validate_dimensions(self):
+        if len(self.pergunta_ids) != len(set(self.pergunta_ids)):
+            raise ValueError("pergunta_ids nao pode conter IDs duplicados")
+        # A sequencia analitica e [alvo] + dimensoes de aprofundamento.
+        if self.dimensoes is not None:
+            total_dimensoes = len(self.dimensoes) + (1 if self.alvo is not None else 0)
+        else:
+            total_dimensoes = len(self.pergunta_ids)
+        if total_dimensoes < 2:
+            raise ValueError("o cruzamento exige ao menos duas dimensoes")
+        if self.profundidade_maxima is not None and self.profundidade_maxima > total_dimensoes:
+            raise ValueError("profundidade_maxima nao pode exceder a quantidade de dimensoes")
+        filter_ids = [item.pergunta_id for item in self.filtros_respostas]
+        if len(filter_ids) != len(set(filter_ids)):
+            raise ValueError("filtros_respostas nao pode repetir pergunta_id")
+        if not set(filter_ids).issubset(self.pergunta_ids):
+            raise ValueError("filtros_respostas deve usar apenas IDs de pergunta_ids")
+        if self.alvo is not None and self.alvo.pergunta_id not in self.pergunta_ids:
+            raise ValueError("alvo.pergunta_id deve estar em pergunta_ids")
+        alvo_id = self.alvo.pergunta_id if self.alvo is not None else None
+        if self.dimensoes is not None:
+            territoriais = [
+                item for item in self.dimensoes
+                if item.tipo == TipoDimensaoCruzamento.TERRITORIO
+            ]
+            if len(territoriais) > 1:
+                raise ValueError("dimensoes aceita no maximo uma dimensao territorial")
+            perguntas = [
+                item.pergunta_id for item in self.dimensoes
+                if item.tipo == TipoDimensaoCruzamento.PERGUNTA
+            ]
+            if alvo_id is not None:
+                # O alvo e a raiz da arvore: nunca se repete entre as dimensoes de
+                # aprofundamento. A ordem das dimensoes e livre e definida pelo usuario.
+                if alvo_id in perguntas:
+                    raise ValueError("o alvo nao pode aparecer em dimensoes")
+                esperado = [item for item in self.pergunta_ids if item != alvo_id]
+                if sorted(perguntas) != sorted(esperado):
+                    raise ValueError("dimensoes deve conter as perguntas de pergunta_ids exceto o alvo")
+            elif perguntas != self.pergunta_ids:
+                # pergunta_ids continua sendo o contrato canonico para consumidores antigos.
+                raise ValueError("dimensoes deve conter as mesmas perguntas de pergunta_ids, na mesma ordem")
+        return self
+
+
+class CruzamentoOpcaoValor(BaseModel):
+    valor_chave: str
+    rotulo: str
+    ordem: Optional[int] = None
+    contagem_entrevistas: int
+    origem: str
+
+
+class CruzamentoOpcaoDimensao(BaseModel):
+    pergunta_id: int
+    ordem: int
+    texto_pergunta: str
+    tipo_pergunta: str
+    eh_resposta_espontanea: bool
+    papel_analitico: Optional[PapelAnalitico] = None
+    metadados_analiticos: Dict[str, Any] = Field(default_factory=dict)
+    cardinalidade_observada: int
+    valores: List[CruzamentoOpcaoValor]
+
+
+class CruzamentoOpcaoTerritorioValor(BaseModel):
+    setor_id: Optional[int] = None
+    valor_chave: str
+    rotulo: str
+    contagem_entrevistas: int
+    origem: str
+
+
+class CruzamentoOpcaoTerritorio(BaseModel):
+    nivel: NivelTerritorial
+    valores: List[CruzamentoOpcaoTerritorioValor] = Field(default_factory=list)
+
+
+class CruzamentoOpcoesResponse(BaseModel):
+    pesquisa_id: int
+    dimensoes: List[CruzamentoOpcaoDimensao]
+    territorios: List[CruzamentoOpcaoTerritorio] = Field(default_factory=list)
+
+
+class CruzamentoValorCaminho(BaseModel):
+    pergunta_id: Optional[int] = None
+    valor_chave: str
+    rotulo: str
+    tipo: TipoDimensaoCruzamento = TipoDimensaoCruzamento.PERGUNTA
+    nivel_territorial: Optional[NivelTerritorial] = None
+
+
+class CruzamentoDimensao(BaseModel):
+    posicao: int
+    pergunta_id: Optional[int] = None
+    tipo: TipoDimensaoCruzamento = TipoDimensaoCruzamento.PERGUNTA
+    nivel_territorial: Optional[NivelTerritorial] = None
+    ordem: int
+    texto_pergunta: str
+    tipo_pergunta: str
+    eh_obrigatoria: bool
+    eh_resposta_espontanea: bool
+    papel_analitico: Optional[PapelAnalitico] = None
+    metadados_analiticos: Dict[str, Any] = Field(default_factory=dict)
+    cardinalidade_observada: int
+    eh_multipla_resposta: bool
+
+
+class CruzamentoNodo(BaseModel):
+    nivel: int
+    caminho: List[CruzamentoValorCaminho]
+    contagem_entrevistas: int
+    base_pai: int
+    percentual_pai: float
+    percentual_total: float
+    tem_filhos: bool
+
+
+class CruzamentoAlvoMetadados(BaseModel):
+    pergunta_id: int
+    modo: ModoAlvoCruzamento
+    valor: Optional[str] = None
+    valores_excluidos: List[str] = Field(default_factory=list)
+    valores_preservados: List[str] = Field(default_factory=list)
+
+
+class CruzamentoMetadadosExecucao(BaseModel):
+    quantidade_dimensoes_solicitadas: int
+    quantidade_dimensoes_processadas: int
+    profundidade_maxima: int
+    quantidade_nodos: int
+    incluir_sem_resposta: bool
+    possui_multipla_resposta: bool
+    somatorio_percentuais_pode_exceder_100: bool
+    alvo: Optional[CruzamentoAlvoMetadados] = None
+    filtro_territorial: Optional[CruzamentoFiltroTerritorial] = None
+    dimensao_territorial: Optional[NivelTerritorial] = None
+
+
+class CruzamentoMultidimensionalResponse(BaseModel):
+    pesquisa_id: int
+    total_entrevistas: int
+    base_valida: int
+    dimensoes: List[CruzamentoDimensao]
+    nodos: List[CruzamentoNodo]
+    metadados_execucao: CruzamentoMetadadosExecucao
+    avisos: List[str]
+
 class TipoMapaEstrategico(StrEnum):
     COBERTURA = "COBERTURA"
     DISTRIBUICAO_SETOR = "DISTRIBUICAO_SETOR"
@@ -584,6 +902,7 @@ class TipoRelatorioExecutivo(StrEnum):
     EXECUTIVO = "EXECUTIVO"
     SIMPLE = "SIMPLE"
     CROSSTAB = "CROSSTAB"
+    CRUZAMENTOS = "CRUZAMENTOS"
 
 
 class TipoAnaliseRelatorioExecutivo(StrEnum):
@@ -639,6 +958,41 @@ class ParametrosParCrosstab(BaseModel):
         return self
 
 
+class ParametrosFiltroRespostaCruzamento(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pergunta_id: int
+    valores: List[str] = Field(min_length=1)
+
+
+class ParametrosAlvoCruzamento(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pergunta_id: int
+    modo: ModoAlvoCruzamento
+    valor: Optional[str] = None
+    valores_excluidos: List[str] = Field(default_factory=list)
+    valores_preservados: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_alvo(self):
+        return _validar_regras_alvo(self)
+
+
+class ParametrosCruzamentoEstrategico(BaseModel):
+    """Visao salva dos Cruzamentos Estrategicos: guarda configuracao, nunca resultados."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pergunta_ids: List[int] = Field(min_length=2)
+    filtros_respostas: List[ParametrosFiltroRespostaCruzamento] = Field(default_factory=list)
+    profundidade_maxima: Optional[int] = Field(default=None, ge=1)
+    incluir_sem_resposta: bool = True
+    alvo: Optional[ParametrosAlvoCruzamento] = None
+    dimensoes: Optional[List[CruzamentoDimensaoConfig]] = None
+    filtro_territorial: Optional[CruzamentoFiltroTerritorial] = None
+
+
 class ParametrosGeraisRelatorioExecutivo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -649,6 +1003,7 @@ class ParametrosGeraisRelatorioExecutivo(BaseModel):
     question_order: Optional[List[int]] = None
     question_settings: Optional[List[ParametrosOrdenacaoPerguntaSimples]] = None
     crosses: Optional[List[ParametrosParCrosstab]] = None
+    cruzamento: Optional[ParametrosCruzamentoEstrategico] = None
     chart_type: Optional[str] = Field(default=None, max_length=30)
 
     @model_validator(mode="after")

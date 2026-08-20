@@ -18,7 +18,7 @@ from shapely.geometry import Point, Polygon
 from .db import models
 from . import schemas
 from .core import security
-from .question_types import normalize_question_type
+from .question_types import is_categorical_question_type, normalize_question_type
 from .utils.response_normalization import normalizar_resposta_espontanea
 
 # ==============================================================================
@@ -1710,13 +1710,10 @@ def get_relatorio_pesquisa(
     }
 
 FINALIDADES_ANALITICAS = ("RELATORIO", "AMBOS")
-TIPOS_PERGUNTA_CATEGORICA = {"ESCOLHA_SIMPLES", "MULTIPLA_ESCOLHA"}
-
-
 def is_analytical_categorical_question(pergunta) -> bool:
     return bool(
         pergunta.eh_resposta_espontanea
-        or normalize_question_type(pergunta.tipo_pergunta) in TIPOS_PERGUNTA_CATEGORICA
+        or is_categorical_question_type(pergunta.tipo_pergunta)
     )
 
 
@@ -1863,6 +1860,24 @@ def _classificar_coletas_territorio(
         "sem_setor": sem_setor,
         "conflito_setor": conflito,
     }
+
+
+def classificar_coletas_por_setor(
+    db: Session,
+    pesquisa_id: int,
+    current_user: models.Usuario,
+    setor_ids: Optional[List[int]] = None,
+):
+    """Classificacao territorial reutilizavel (Mapas Estrategicos e Cruzamentos).
+
+    Valida tenant/pesquisa e finalidade analitica dos setores; devolve os buckets
+    classificados / sem setor / conflito / sem coordenada.
+    """
+    payload = schemas.MapaPreviewRequest(
+        tipo_mapa=schemas.TipoMapaEstrategico.DISTRIBUICAO_SETOR,
+        setor_ids=list(setor_ids) if setor_ids else None,
+    )
+    return _classificar_coletas_territorio(db, pesquisa_id, current_user, payload)
 
 
 def get_mapa_territorio_diagnostico(
@@ -2187,6 +2202,7 @@ def _validar_parametros_gerais_executivo(
         if tipo in {
             schemas.TipoRelatorioExecutivo.SIMPLE.value,
             schemas.TipoRelatorioExecutivo.CROSSTAB.value,
+            schemas.TipoRelatorioExecutivo.CRUZAMENTOS.value,
         }:
             raise HTTPException(status_code=422, detail="Parametros da configuracao sao obrigatorios.")
         return None
@@ -2257,6 +2273,59 @@ def _validar_parametros_gerais_executivo(
         perguntas = _validar_perguntas_configuracao(db, pesquisa_id, question_ids)
         if not all(is_analytical_categorical_question(pergunta) for pergunta in perguntas):
             raise HTTPException(status_code=422, detail="Crosstab exige perguntas categoricas.")
+        return data
+
+    if tipo == schemas.TipoRelatorioExecutivo.CRUZAMENTOS.value:
+        if fields - (base_fields | {"cruzamento", "chart_type"}):
+            raise HTTPException(status_code=422, detail="Parametros incompatíveis com CRUZAMENTOS.")
+        cruzamento = data.get("cruzamento")
+        if not cruzamento:
+            raise HTTPException(status_code=422, detail="cruzamento e obrigatorio para CRUZAMENTOS.")
+        pergunta_ids = cruzamento.get("pergunta_ids") or []
+        if not pergunta_ids or len(pergunta_ids) != len(set(pergunta_ids)):
+            raise HTTPException(status_code=422, detail="cruzamento.pergunta_ids deve conter perguntas unicas.")
+        sequencia = cruzamento.get("dimensoes")
+        if sequencia is not None:
+            territoriais = [item for item in sequencia if item["tipo"] == "TERRITORIO"]
+            if len(territoriais) > 1:
+                raise HTTPException(status_code=422, detail="dimensoes aceita no maximo uma dimensao territorial.")
+            perguntas_da_sequencia = [item["pergunta_id"] for item in sequencia if item["tipo"] == "PERGUNTA"]
+            if perguntas_da_sequencia != pergunta_ids:
+                raise HTTPException(status_code=422, detail="dimensoes deve conter as mesmas perguntas de pergunta_ids, na mesma ordem.")
+        total_dimensoes = len(sequencia) if sequencia is not None else len(pergunta_ids)
+        if total_dimensoes < 2:
+            raise HTTPException(status_code=422, detail="A visao exige ao menos duas dimensoes.")
+        profundidade = cruzamento.get("profundidade_maxima")
+        if profundidade is not None and profundidade > total_dimensoes:
+            raise HTTPException(status_code=422, detail="profundidade_maxima nao pode exceder a quantidade de dimensoes.")
+        filtro_territorial = cruzamento.get("filtro_territorial") or {}
+        setor_ids_visao = set(filtro_territorial.get("setor_ids") or [])
+        if setor_ids_visao:
+            # A visao guarda referencias territoriais; a geometria continua no cadastro.
+            validos = {
+                row.id for row in db.query(models.Setor.id).join(models.Pesquisa).join(models.Projeto).filter(
+                    models.Setor.id.in_(setor_ids_visao),
+                    models.Setor.pesquisa_id == pesquisa_id,
+                    models.Projeto.company_id == current_user.company_id,
+                    models.Setor.finalidade.in_(FINALIDADES_ANALITICAS),
+                ).all()
+            }
+            if validos != setor_ids_visao:
+                raise HTTPException(status_code=404, detail="Setor analitico nao encontrado para esta pesquisa.")
+        filtro_ids = [item["pergunta_id"] for item in cruzamento.get("filtros_respostas") or []]
+        if len(filtro_ids) != len(set(filtro_ids)) or not set(filtro_ids).issubset(set(pergunta_ids)):
+            raise HTTPException(status_code=422, detail="filtros_respostas deve referenciar pergunta_ids sem duplicidade.")
+        alvo = cruzamento.get("alvo")
+        if alvo is not None and alvo["pergunta_id"] not in pergunta_ids:
+            raise HTTPException(status_code=422, detail="alvo.pergunta_id deve estar em cruzamento.pergunta_ids.")
+        if data.get("chart_type") not in {"BAR", "PIE", "DONUT"}:
+            raise HTTPException(status_code=422, detail="chart_type invalido para CRUZAMENTOS.")
+        perguntas = _validar_perguntas_configuracao(db, pesquisa_id, set(pergunta_ids))
+        if not all(
+            pergunta.eh_resposta_espontanea or is_analytical_categorical_question(pergunta)
+            for pergunta in perguntas
+        ):
+            raise HTTPException(status_code=422, detail="Cruzamentos exigem perguntas categoricas ou espontaneas.")
         return data
 
     raise HTTPException(status_code=422, detail="Tipo de relatorio ainda nao suportado.")

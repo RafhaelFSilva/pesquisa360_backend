@@ -15,7 +15,9 @@ A plataforma Web é usada por coordenadores, gerentes e supervisores para:
 - cadastro de setores e agentes;
 - monitoramento de coletas;
 - relatórios simples;
-- crosstab.
+- crosstab;
+- Configuração Analítica;
+- Central de Inteligência e Cruzamentos Estratégicos.
 
 ## 2. Estrutura recomendada
 
@@ -30,22 +32,31 @@ src/
     GeofenceMap.tsx
     SectorManager.tsx
     ColetasMap.tsx
+    AnalyticConfigurationPanel.tsx
+    StrategicDimensionSelector.tsx
+    StrategicCrossVisualization.tsx
+    StrategicCrossingsReport.tsx
   pages/
     LoginPage.tsx
     ProjectsPage.tsx
     ProjectDetailPage.tsx
     SurveyDetailPage.tsx
     ReportsPage.tsx
+    SurveyIntelligencePage.tsx
+    StrategicCrossingsPage.tsx
     StatisticsReportPage.tsx
     CrosstabReportPage.tsx
     MonitoringPage.tsx
   lib/
     axios.ts
+    analyticConfiguration.ts
+    strategicCrossings.ts
   store/
     authStore.ts
   types/
     project.ts
     question.ts
+    strategicCrossings.ts
 ```
 
 ## 3. Autenticação
@@ -76,7 +87,10 @@ Proibido:
 /projetos/:projectId/pesquisas/:surveyId/relatorios
 /projetos/:projectId/pesquisas/:surveyId/relatorios/simples
 /projetos/:projectId/pesquisas/:surveyId/relatorios/crosstab
+/projetos/:projectId/pesquisas/:surveyId/inteligencia
+/projetos/:projectId/pesquisas/:surveyId/inteligencia/cruzamentos
 /projetos/:projectId/pesquisas/:surveyId/monitoramento
+/inteligencia
 ```
 
 No React Router:
@@ -103,7 +117,17 @@ Services principais:
 |---|---|
 | `authService` | login e `/usuarios/me/` |
 | `projectsService` | projetos, pesquisas, perguntas, geofence, setores, monitoramento |
-| `reportsService` | relatório simples e crosstab |
+| `reportsService` | relatórios clássicos, mapas e cruzamentos multidimensionais |
+
+Métodos dos Cruzamentos Estratégicos:
+
+```ts
+reportsService.getMultidimensionalCross(pesquisaId, payload)
+reportsService.getMultidimensionalCrossOptions(pesquisaId)
+```
+
+O Web não envia `company_id`; o backend resolve o tenant pelo usuário
+autenticado.
 
 ## 6. Geoespacial no Web
 
@@ -152,6 +176,8 @@ Central:
 CENTRAL DE RELATÓRIOS
 Resumo das Respostas
 Cruzamento de Dados
+Mapas Estratégicos
+Relatório Executivo
 ```
 
 Crosstab deve aceitar perguntas categóricas:
@@ -170,6 +196,9 @@ Renderizar texto com:
 ```ts
 question.texto_pergunta
 ```
+
+O Crosstab 2D continua separado dos Cruzamentos Estratégicos. A Central de
+Relatórios não contém o card de Cruzamentos.
 
 ## 9. Monitoramento
 
@@ -198,3 +227,65 @@ npm run build
 - Não causa scroll horizontal?
 - Não chama API em loop?
 - Não duplica controles Leaflet?
+
+## 12. Central de Inteligência e Cruzamentos Estratégicos
+
+A Central de Inteligência contextual à pesquisa usa:
+
+```text
+/projetos/:projectId/pesquisas/:surveyId/inteligencia
+```
+
+Ela é distinta da Central de Relatórios e da Inteligência Territorial global
+em `/inteligencia`. O card implementado abre:
+
+```text
+/projetos/:projectId/pesquisas/:surveyId/inteligencia/cruzamentos
+```
+
+`StrategicDimensionSelector` é compartilhado pelos modos Explorar e Relatório.
+Ele recebe do backend as categorias analíticas já resolvidas e oferece:
+
+- checkbox para perguntas e seleção múltipla;
+- ordem inicial do questionário e reordenação por setas;
+- expansão das perguntas;
+- multiseleção das respostas;
+- ações Selecionar todas e Limpar;
+- bloqueio de execução quando uma dimensão fica sem respostas.
+
+O Web não normaliza respostas espontâneas, não aplica fuzzy matching e não
+reconstrói categorias combinando opções e respostas brutas.
+
+### Modo Explorar
+
+Executa profundidade progressiva, mantém breadcrumb e reutiliza níveis já
+carregados em memória. Exibe base do segmento, `percentual_pai` e
+`percentual_total`. Barras, Pizza e Rosca são alternativas puramente visuais e
+não geram nova chamada ao backend.
+
+### Modo Relatório
+
+Permite definir profundidade, segmentos, respostas, tipo único de gráfico para
+o documento e Detalhes/tabela. O agrupamento é feito por caminho pai:
+
+```text
+nodos do backend -> filhos do mesmo caminho pai -> seção do relatório
+```
+
+Detalhes são opcionais e ficam ocultos por padrão. Sem a tabela, o gráfico usa
+toda a largura disponível. Quando habilitados, desktop usa tabela fluida e
+mobile usa linhas empilhadas, sem scroll horizontal ou vertical interno.
+
+A impressão usa HTML/SVG nativos, CSS A4 e `window.print()`. Configuradores e
+controles administrativos são ocultados em print; a tabela respeita a escolha
+do usuário. Não são usados `jsPDF` ou `html2canvas` neste fluxo.
+
+### Tipos principais
+
+```text
+MultidimensionalCrossRequest / MultidimensionalCrossResponse
+MultidimensionalCrossOptionsResponse
+CrossOptionDimension / CrossOptionValue
+CrossDimension / CrossNode / CrossPathItem
+StrategicResponseFilters / StrategicReportConfig / StrategicChartType
+```

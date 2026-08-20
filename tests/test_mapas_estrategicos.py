@@ -91,6 +91,7 @@ def database():
             CREATE TABLE perguntas (
                 id INTEGER PRIMARY KEY, texto_pergunta TEXT, tipo_pergunta TEXT,
                 ordem INTEGER, eh_obrigatoria BOOLEAN, eh_resposta_espontanea BOOLEAN,
+                papel_analitico VARCHAR(50), metadados_analiticos JSON NOT NULL DEFAULT '{}',
                 ativo BOOLEAN, pesquisa_id INTEGER
             )
         """))
@@ -143,8 +144,8 @@ def database():
         connection.execute(text("INSERT INTO pesquisas VALUES (1000, 'Pesquisa A', NULL, 1, 100, NULL, NULL), (2000, 'Pesquisa B', NULL, 1, 200, NULL, NULL)"))
         connection.execute(text("""
             INSERT INTO perguntas VALUES
-              (100, 'Voto', 'ESCOLHA_SIMPLES', 1, 1, 0, 1, 1000),
-              (101, 'Lembranca espontanea', 'TEXTO', 2, 0, 1, 1, 1000)
+              (100, 'Voto', 'ESCOLHA_SIMPLES', 1, 1, 0, NULL, '{}', 1, 1000),
+              (101, 'Lembranca espontanea', 'TEXTO', 2, 0, 1, NULL, '{}', 1, 1000)
         """))
         connection.execute(text("""
             INSERT INTO categorias_resposta_espontanea VALUES

@@ -17,7 +17,7 @@ from alembic.script import ScriptDirectory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "a3b4c5d6e7f8"
+HEAD_REVISION = "c4d5e6f7a8b9"
 EXPECTED_LINEAGE = [
     "91fbe6db1f17",
     "3e4de16d893c",
@@ -31,6 +31,7 @@ EXPECTED_LINEAGE = [
     "b1c2d3e4f5a6",
     "f2a3b4c5d6e7",
     "a3b4c5d6e7f8",
+    "c4d5e6f7a8b9",
 ]
 
 
@@ -195,6 +196,9 @@ class MigrationChainTests(unittest.TestCase):
                 pergunta_columns = {
                     row[1]: row for row in connection.execute("PRAGMA table_info(perguntas)")
                 }
+                pergunta_indexes = connection.execute(
+                    "PRAGMA index_list(perguntas)"
+                ).fetchall()
                 setor_columns = {
                     row[1]: row for row in connection.execute("PRAGMA table_info(setores)")
                 }
@@ -219,6 +223,13 @@ class MigrationChainTests(unittest.TestCase):
             self.assertEqual(coleta_columns["company_id"][3], 1)
             self.assertEqual(coleta_columns["client_uuid"][3], 1)
             self.assertEqual(pergunta_columns["eh_resposta_espontanea"][3], 1)
+            self.assertEqual(pergunta_columns["papel_analitico"][3], 0)
+            self.assertEqual(pergunta_columns["metadados_analiticos"][3], 1)
+            self.assertEqual(pergunta_columns["metadados_analiticos"][4], "'{}'")
+            self.assertIn(
+                "ix_perguntas_papel_analitico",
+                {index[1] for index in pergunta_indexes},
+            )
             self.assertEqual(setor_columns["finalidade"][3], 1)
             self.assertEqual(setor_columns["finalidade"][4], "'OPERACAO'")
             self.assertIn(

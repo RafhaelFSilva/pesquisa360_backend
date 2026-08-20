@@ -70,8 +70,11 @@ class RelatorioSimplesOpcoesVaziasTests(unittest.TestCase):
                 CREATE TABLE pesquisas (
                     id INTEGER PRIMARY KEY,
                     titulo TEXT NOT NULL,
+                    tipo_pesquisa TEXT,
                     ativo BOOLEAN NOT NULL,
-                    projeto_id INTEGER NOT NULL
+                    projeto_id INTEGER NOT NULL,
+                    cerca_eletronica TEXT,
+                    tolerancia_metros INTEGER
                 )
             """))
             connection.execute(text("""
@@ -82,6 +85,8 @@ class RelatorioSimplesOpcoesVaziasTests(unittest.TestCase):
                     ordem INTEGER NOT NULL,
                     eh_obrigatoria BOOLEAN NOT NULL,
                     eh_resposta_espontanea BOOLEAN NOT NULL DEFAULT 0,
+                    papel_analitico VARCHAR(50),
+                    metadados_analiticos JSON NOT NULL DEFAULT '{}',
                     ativo BOOLEAN NOT NULL,
                     pesquisa_id INTEGER NOT NULL
                 )

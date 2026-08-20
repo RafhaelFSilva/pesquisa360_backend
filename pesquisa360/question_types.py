@@ -24,12 +24,16 @@ QUESTION_TYPE_ALIASES = {
     "INTEIRO": "NUMERO",
     "RADIO": "ESCOLHA_SIMPLES",
     "RADIO_BUTTON": "ESCOLHA_SIMPLES",
+    "ESCOLHA_UNICA": "ESCOLHA_SIMPLES",
+    "UNICA_ESCOLHA": "ESCOLHA_SIMPLES",
+    "MULTIPLA_ESCOLHA_UNICA": "ESCOLHA_SIMPLES",
     "SINGLE_CHOICE": "ESCOLHA_SIMPLES",
     "UNICA": "ESCOLHA_SIMPLES",
     "CHECKBOX": "MULTIPLA_ESCOLHA",
     "CHECKBOXES": "MULTIPLA_ESCOLHA",
     "MULTIPLE_CHOICE": "MULTIPLA_ESCOLHA",
     "MULTIPLA": "MULTIPLA_ESCOLHA",
+    "MULTIPLA_ESCOLHA_MULTIPLA": "MULTIPLA_ESCOLHA",
     "DATE": "DATA",
     "DATA_HORA": "DATA",
     "DATETIME": "DATA",
@@ -51,7 +55,8 @@ QUESTION_TYPE_MAP = {
 
 
 def question_type_key(raw: str) -> str:
-    value = str(raw or "").strip().upper().replace("-", "_")
+    value = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(raw or "").strip())
+    value = value.upper().replace("-", "_")
     value = re.sub(r"\s+", "_", value)
     value = unicodedata.normalize("NFKD", value)
     value = "".join(ch for ch in value if not unicodedata.combining(ch))
@@ -61,3 +66,14 @@ def question_type_key(raw: str) -> str:
 def normalize_question_type(raw: str) -> str:
     key = question_type_key(raw)
     return QUESTION_TYPE_MAP.get(key, key)
+
+
+CATEGORICAL_QUESTION_TYPES = frozenset({"ESCOLHA_SIMPLES", "MULTIPLA_ESCOLHA"})
+
+
+def is_categorical_question_type(raw: str) -> bool:
+    return normalize_question_type(raw) in CATEGORICAL_QUESTION_TYPES
+
+
+def is_multiple_response_question_type(raw: str) -> bool:
+    return normalize_question_type(raw) == "MULTIPLA_ESCOLHA"

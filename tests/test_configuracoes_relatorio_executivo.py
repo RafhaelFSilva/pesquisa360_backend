@@ -1,9 +1,11 @@
+import json
 from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, text
+from pydantic import ValidationError
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
@@ -12,7 +14,6 @@ from sqlalchemy.pool import StaticPool
 from pesquisa360 import crud, schemas
 from pesquisa360.api.endpoints import relatorios
 from pesquisa360.core.dependencies import get_current_user, get_db
-from pesquisa360.main import app as application
 
 
 @compiles(JSONB, "sqlite")
@@ -40,7 +41,7 @@ def db():
     statements = [
         "CREATE TABLE projetos (id INTEGER PRIMARY KEY, nome TEXT, descricao TEXT, status TEXT, data_inicio DATE, data_fim DATE, coordenador_id INTEGER, company_id INTEGER)",
         "CREATE TABLE pesquisas (id INTEGER PRIMARY KEY, titulo TEXT, tipo_pesquisa TEXT, ativo BOOLEAN, projeto_id INTEGER, cerca_eletronica BLOB, tolerancia_metros INTEGER)",
-        "CREATE TABLE perguntas (id INTEGER PRIMARY KEY, texto_pergunta TEXT, tipo_pergunta TEXT, ordem INTEGER, eh_obrigatoria BOOLEAN, eh_resposta_espontanea BOOLEAN, ativo BOOLEAN, pesquisa_id INTEGER)",
+        "CREATE TABLE perguntas (id INTEGER PRIMARY KEY, texto_pergunta TEXT, tipo_pergunta TEXT, ordem INTEGER, eh_obrigatoria BOOLEAN, eh_resposta_espontanea BOOLEAN, papel_analitico VARCHAR(50), metadados_analiticos JSON NOT NULL DEFAULT '{}', ativo BOOLEAN, pesquisa_id INTEGER)",
         "CREATE TABLE usuarios (id INTEGER PRIMARY KEY, email TEXT, nome TEXT, senha_hash TEXT, ativo BOOLEAN, perfil_id INTEGER, company_id INTEGER)",
         "CREATE TABLE setores (id INTEGER PRIMARY KEY, nome TEXT, meta INTEGER, tolerancia INTEGER, finalidade TEXT, geometria BLOB, pesquisa_id INTEGER, agente_id INTEGER)",
         """CREATE TABLE configuracoes_relatorio_executivo (
@@ -64,7 +65,7 @@ def db():
         connection.execute(text("INSERT INTO projetos VALUES (1, 'A', NULL, 'Ativo', NULL, NULL, 1, 10), (2, 'B', NULL, 'Ativo', NULL, NULL, 2, 20), (3, 'C', NULL, 'Ativo', NULL, NULL, 1, 10)"))
         connection.execute(text("INSERT INTO pesquisas VALUES (9, 'Pesquisa A', NULL, 1, 1, NULL, NULL), (10, 'Pesquisa B', NULL, 1, 2, NULL, NULL), (11, 'Pesquisa C', NULL, 1, 3, NULL, NULL)"))
         connection.execute(text("INSERT INTO usuarios VALUES (1, 'a@a', 'A', 'x', 1, 1, 10), (2, 'b@b', 'B', 'x', 1, 1, 20)"))
-        connection.execute(text("INSERT INTO perguntas VALUES (42, 'Voto', 'ESCOLHA_SIMPLES', 1, 1, 0, 1, 9), (43, 'Espontanea', 'TEXTO', 2, 0, 1, 1, 9), (44, 'Perfil', 'ESCOLHA_SIMPLES', 3, 0, 0, 1, 9), (99, 'Outra', 'ESCOLHA_SIMPLES', 1, 1, 0, 1, 10)"))
+        connection.execute(text("INSERT INTO perguntas VALUES (42, 'Voto', 'ESCOLHA_SIMPLES', 1, 1, 0, NULL, '{}', 1, 9), (43, 'Espontanea', 'TEXTO', 2, 0, 1, NULL, '{}', 1, 9), (44, 'Perfil', 'ESCOLHA_SIMPLES', 3, 0, 0, NULL, '{}', 1, 9), (99, 'Outra', 'ESCOLHA_SIMPLES', 1, 1, 0, NULL, '{}', 1, 10)"))
         connection.execute(text("INSERT INTO setores VALUES (7, 'Analitico', 0, 0, 'RELATORIO', NULL, 9, NULL)"))
     session = Session()
     try:
@@ -100,6 +101,12 @@ def make_client(db, current_user=None):
 
 
 def test_rotas_estao_registradas_na_aplicacao(db):
+    # Import tardio: `pesquisa360.main` congela UPLOAD_DIRECTORY em variavel de
+    # modulo no momento do import. Importar no topo faria este arquivo vencer a
+    # corrida contra tests/test_secure_upload.py, que ajusta o ambiente antes de
+    # importar a aplicacao.
+    from pesquisa360.main import app as application
+
     paths = {
         (route.path, method)
         for route in application.routes
@@ -560,3 +567,208 @@ def test_configuracao_crosstab_preserva_pares_ordem_e_valida_contexto(db):
             user(),
         )
     assert duplicate_pair.value.status_code == 422
+def test_configuracao_cruzamentos_preserva_ordem_filtros_alvo_e_crud(db):
+    payload = schemas.ConfiguracaoRelatorioExecutivoCreate(
+        tipo_relatorio="CRUZAMENTOS",
+        nome="Nao-X Senado - Perfil",
+        parametros_gerais={
+            "chart_type": "DONUT",
+            "cruzamento": {
+                "pergunta_ids": [42, 43],
+                "incluir_sem_resposta": True,
+                "filtros_respostas": [{"pergunta_id": 42, "valores": ["M"]}],
+                "alvo": {
+                    "pergunta_id": 43,
+                    "modo": "ONE_VS_REST",
+                    "valor": "A",
+                    "valores_excluidos": ["NS/NR"],
+                    "valores_preservados": ["Branco/Nulo", "Indeciso"],
+                },
+            },
+        },
+    )
+    created = crud.create_configuracao_relatorio_executivo(db, 9, payload, user())
+    assert created["tipo_relatorio"] == "CRUZAMENTOS"
+
+    salvo = created["parametros_gerais"]["cruzamento"]
+    assert salvo["pergunta_ids"] == [42, 43]
+    assert salvo["filtros_respostas"] == [{"pergunta_id": 42, "valores": ["M"]}]
+    assert salvo["alvo"] == {
+        "pergunta_id": 43,
+        "modo": "ONE_VS_REST",
+        "valor": "A",
+        "valores_excluidos": ["NS/NR"],
+        "valores_preservados": ["Branco/Nulo", "Indeciso"],
+    }
+    # Visao viva: a configuracao e persistida, os resultados nunca.
+    assert not {"nodos", "base_valida", "total_entrevistas"} & set(salvo)
+
+    listed = crud.list_configuracoes_relatorio_executivo(
+        db, 9, user(), schemas.TipoRelatorioExecutivo.CRUZAMENTOS
+    )
+    assert [item["id"] for item in listed] == [created["id"]]
+    assert crud.list_configuracoes_relatorio_executivo(
+        db, 9, user(), schemas.TipoRelatorioExecutivo.SIMPLE
+    ) == []
+
+    updated = crud.update_configuracao_relatorio_executivo(
+        db,
+        9,
+        created["id"],
+        schemas.ConfiguracaoRelatorioExecutivoUpdate(
+            nome="Distribuicao completa",
+            parametros_gerais={
+                "chart_type": "BAR",
+                "cruzamento": {
+                    "pergunta_ids": [43, 42],
+                    "alvo": {"pergunta_id": 42, "modo": "FULL_DISTRIBUTION"},
+                },
+            },
+        ),
+        user(),
+    )
+    assert updated["parametros_gerais"]["cruzamento"]["pergunta_ids"] == [43, 42]
+    assert updated["parametros_gerais"]["cruzamento"]["alvo"]["modo"] == "FULL_DISTRIBUTION"
+
+    with pytest.raises(HTTPException) as tenant_error:
+        crud.get_configuracao_relatorio_executivo(db, 9, created["id"], user(company_id=20))
+    assert tenant_error.value.status_code == 404
+
+    crud.delete_configuracao_relatorio_executivo(db, 9, created["id"], user())
+    assert crud.list_configuracoes_relatorio_executivo(
+        db, 9, user(), schemas.TipoRelatorioExecutivo.CRUZAMENTOS
+    ) == []
+
+
+def test_configuracao_cruzamentos_aceita_visao_antiga_sem_valores_preservados(db):
+    created = crud.create_configuracao_relatorio_executivo(
+        db,
+        9,
+        schemas.ConfiguracaoRelatorioExecutivoCreate(
+            tipo_relatorio="CRUZAMENTOS",
+            nome="Visao legada",
+            parametros_gerais={
+                "chart_type": "BAR",
+                "cruzamento": {
+                    "pergunta_ids": [42, 43],
+                    "alvo": {"pergunta_id": 43, "modo": "ONE_VS_REST", "valor": "A", "valores_excluidos": ["NS/NR"]},
+                },
+            },
+        ),
+        user(),
+    )
+    # Ausencia de valores_preservados equivale a lista vazia: nenhuma visao antiga quebra.
+    assert created["parametros_gerais"]["cruzamento"]["alvo"]["valores_preservados"] == []
+
+
+def test_configuracao_cruzamentos_persiste_territorio_e_valida_tenant(db):
+    parametros = {
+        "chart_type": "DONUT",
+        "cruzamento": {
+            "pergunta_ids": [42, 43],
+            "dimensoes": [
+                {"tipo": "PERGUNTA", "pergunta_id": 42},
+                {"tipo": "TERRITORIO", "nivel": "SETOR"},
+                {"tipo": "PERGUNTA", "pergunta_id": 43},
+            ],
+            "filtro_territorial": {"nivel": "SETOR", "setor_ids": [7], "incluir_sem_setor": True},
+            "alvo": {"pergunta_id": 43, "modo": "ONE_VS_REST", "valor": "A"},
+        },
+    }
+    created = crud.create_configuracao_relatorio_executivo(
+        db,
+        9,
+        schemas.ConfiguracaoRelatorioExecutivoCreate(
+            tipo_relatorio="CRUZAMENTOS", nome="Nao-X por setor", parametros_gerais=parametros
+        ),
+        user(),
+    )
+    salvo = created["parametros_gerais"]["cruzamento"]
+    assert [item["tipo"] for item in salvo["dimensoes"]] == ["PERGUNTA", "TERRITORIO", "PERGUNTA"]
+    assert salvo["dimensoes"][1]["nivel"] == "SETOR"
+    assert salvo["filtro_territorial"] == {"nivel": "SETOR", "setor_ids": [7], "incluir_sem_setor": True}
+    # A visao guarda referencia, nunca geometria.
+    assert "geometria" not in json.dumps(salvo)
+    assert "coordinates" not in json.dumps(salvo)
+
+    with pytest.raises(HTTPException) as tenant_error:
+        crud.get_configuracao_relatorio_executivo(db, 9, created["id"], user(company_id=20))
+    assert tenant_error.value.status_code == 404
+
+
+def test_configuracao_cruzamentos_rejeita_setor_fora_do_contexto_analitico(db):
+    with pytest.raises(HTTPException) as error:
+        crud.create_configuracao_relatorio_executivo(
+            db,
+            9,
+            schemas.ConfiguracaoRelatorioExecutivoCreate(
+                tipo_relatorio="CRUZAMENTOS",
+                nome="Setor invalido",
+                parametros_gerais={
+                    "chart_type": "BAR",
+                    "cruzamento": {
+                        "pergunta_ids": [42, 43],
+                        "filtro_territorial": {"nivel": "SETOR", "setor_ids": [99999]},
+                    },
+                },
+            ),
+            user(),
+        )
+    assert error.value.status_code == 404
+
+
+def test_configuracao_cruzamentos_antiga_sem_territorio_continua_valida(db):
+    created = crud.create_configuracao_relatorio_executivo(
+        db,
+        9,
+        schemas.ConfiguracaoRelatorioExecutivoCreate(
+            tipo_relatorio="CRUZAMENTOS",
+            nome="Sem territorio",
+            parametros_gerais={"chart_type": "BAR", "cruzamento": {"pergunta_ids": [42, 43]}},
+        ),
+        user(),
+    )
+    salvo = created["parametros_gerais"]["cruzamento"]
+    assert salvo.get("dimensoes") is None
+    assert salvo.get("filtro_territorial") is None
+
+
+@pytest.mark.parametrize("alvo", [
+    {"pergunta_id": 43, "modo": "ONE_VS_REST", "valor": "A", "valores_preservados": ["A"]},
+    {"pergunta_id": 43, "modo": "ONE_VS_REST", "valor": "A", "valores_excluidos": ["B"], "valores_preservados": ["B"]},
+])
+def test_configuracao_cruzamentos_rejeita_tratamento_conflitante(db, alvo):
+    with pytest.raises((HTTPException, ValidationError)):
+        crud.create_configuracao_relatorio_executivo(
+            db,
+            9,
+            schemas.ConfiguracaoRelatorioExecutivoCreate(
+                tipo_relatorio="CRUZAMENTOS",
+                nome="Conflitante",
+                parametros_gerais={"chart_type": "BAR", "cruzamento": {"pergunta_ids": [42, 43], "alvo": alvo}},
+            ),
+            user(),
+        )
+
+
+@pytest.mark.parametrize("parametros", [
+    None,
+    {"chart_type": "pizza", "cruzamento": {"pergunta_ids": [42, 43]}},
+    {"chart_type": "BAR", "cruzamento": {"pergunta_ids": [42]}},
+    {"chart_type": "BAR", "cruzamento": {"pergunta_ids": [42, 42]}},
+    {"chart_type": "BAR", "cruzamento": {"pergunta_ids": [42, 43], "alvo": {"pergunta_id": 99, "modo": "FULL_DISTRIBUTION"}}},
+    {"chart_type": "BAR", "cruzamento": {"pergunta_ids": [42, 43], "profundidade_maxima": 5}},
+    {"chart_type": "BAR", "question_order": [42, 43], "cruzamento": {"pergunta_ids": [42, 43]}},
+])
+def test_configuracao_cruzamentos_rejeita_parametros_invalidos(db, parametros):
+    with pytest.raises((HTTPException, ValidationError)) as error:
+        crud.create_configuracao_relatorio_executivo(
+            db,
+            9,
+            schemas.ConfiguracaoRelatorioExecutivoCreate(
+                tipo_relatorio="CRUZAMENTOS", nome="Invalida", parametros_gerais=parametros
+            ),
+            user(),
+        )
+    if isinstance(error.value, HTTPException):
+        assert error.value.status_code in (404, 422)

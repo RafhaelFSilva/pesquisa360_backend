@@ -95,6 +95,8 @@ class ImportQaApuracaoEspontaneaTests(unittest.TestCase):
                     ordem INTEGER NOT NULL,
                     eh_obrigatoria BOOLEAN NOT NULL,
                     eh_resposta_espontanea BOOLEAN NOT NULL DEFAULT 0,
+                    papel_analitico VARCHAR(50),
+                    metadados_analiticos JSON NOT NULL DEFAULT '{}',
                     ativo BOOLEAN NOT NULL,
                     pesquisa_id INTEGER NOT NULL
                 )

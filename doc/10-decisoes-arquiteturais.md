@@ -87,15 +87,14 @@ criação/backfill -> calcula endereço
 monitoramento -> retorna endereço salvo
 ```
 
-## ADR-009 — Crosstab 2D antes de multivariável
+## ADR-009 — Crosstab 2D separado dos Cruzamentos Estratégicos
 
-O crosstab atual cruza duas perguntas categóricas.
+O crosstab cruza duas perguntas categóricas e mantém seu contrato estável. Os
+Cruzamentos Estratégicos usam endpoint e schemas próprios para 2 a N dimensões
+ordenadas, ligadas pela mesma `coleta_id`.
 
-Fora do escopo atual:
-
-```text
-Sexo + Faixa etária x Governador
-```
+Nenhum dos fluxos substitui o outro: combinações pareadas continuam no
+crosstab; navegação hierárquica pertence à Central de Inteligência.
 
 ## ADR-010 — Frontend usa services para API
 
@@ -207,3 +206,42 @@ Regras aprovadas:
 - Importacao e edicao futuras devem reutilizar a infraestrutura existente de
   setores/Shapefile, acrescentando a escolha de finalidade sem criar tenant no
   cliente.
+
+## ADR-018 — Motor multidimensional descritivo separado
+
+- O crosstab 2D permanece estável e com contrato inalterado.
+- O cruzamento multidimensional possui endpoint e schemas próprios.
+- A Central de Inteligência consome `papel_analitico` e
+  `metadados_analiticos` das perguntas sem exigir enum nativo no banco.
+- O motor atual entrega somente evidência descritiva bruta, baseada em
+  entrevistas distintas ligadas pela mesma `coleta_id`.
+- A separação evita que a evolução de navegação, IA ou interpretação altere
+  relatórios já validados.
+
+## ADR-019 — Categorização espontânea compartilhada
+
+Os Cruzamentos Estratégicos reutilizam
+`get_active_spontaneous_mapping_for_report` e
+`resolve_reportable_response_value`. Não há fuzzy matching. Valores sem
+mapeamento aparecem como “Não categorizada”. Na modelagem atual, a
+categorização ativa é vinculada à pesquisa, não individualmente à pergunta.
+
+## ADR-020 — Filtros não renormalizam percentuais
+
+`filtros_respostas` é aplicado depois do cálculo da árvore, das bases e dos
+percentuais. O filtro reduz os ramos exibidos, mas preserva `base_valida`,
+`base_pai`, `percentual_total` e `percentual_pai` originais.
+
+## ADR-021 — “Sem resposta” é categoria técnica explícita
+
+Quando solicitado, o backend representa ausência pela chave
+`__SEM_RESPOSTA__` e pelo rótulo “Sem resposta”. O Web envia
+`incluir_sem_resposta=true`; o default legado `false` continua aceito pelo
+contrato.
+
+## ADR-022 — Inteligência contextual separada de Relatórios
+
+Os Cruzamentos Estratégicos ficam na Central de Inteligência da pesquisa. A
+Central de Relatórios mantém Resumo e Crosstab 2D, e a rota global
+`/inteligencia` continua dedicada ao contexto territorial. O modo Relatório
+usa impressão nativa do navegador em HTML/SVG/CSS A4.

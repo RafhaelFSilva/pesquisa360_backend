@@ -1,0 +1,11 @@
+from enum import StrEnum
+
+
+class PapelAnalitico(StrEnum):
+    INTENCAO_VOTO = "INTENCAO_VOTO"
+    REJEICAO = "REJEICAO"
+    SEGUNDA_OPCAO = "SEGUNDA_OPCAO"
+    DECISAO_VOTO = "DECISAO_VOTO"
+    PERFIL = "PERFIL"
+    TERRITORIO = "TERRITORIO"
+    OUTRO = "OUTRO"

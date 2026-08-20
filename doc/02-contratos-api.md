@@ -392,3 +392,149 @@ Resposta:
 6. Manter nomenclatura estável:
    - Web: `projectId`, `surveyId`
    - Backend: `projeto_id`, `pesquisa_id`
+
+## 13. Cruzamentos Estratégicos — contrato multidimensional
+
+### POST `/relatorios/pesquisas/{pesquisa_id}/cruzamentos-multidimensionais/`
+
+Alias curto preservado:
+
+```http
+POST /pesquisas/{pesquisa_id}/cruzamentos-multidimensionais/
+```
+
+Payload completo:
+
+```json
+{
+  "pergunta_ids": [46, 42, 43],
+  "incluir_sem_resposta": true,
+  "profundidade_maxima": 3,
+  "filtros_respostas": [
+    {
+      "pergunta_id": 46,
+      "valores": ["Dr. Furlan", "Clécio Luís", "__SEM_RESPOSTA__"]
+    },
+    {
+      "pergunta_id": 42,
+      "valores": ["Feminino"]
+    }
+  ]
+}
+```
+
+Regras do request:
+
+- `pergunta_ids` exige pelo menos duas perguntas únicas; a ordem define a
+  hierarquia `A -> B -> C -> ... -> N`;
+- `profundidade_maxima` é opcional, deve ser positiva e não pode superar o
+  número de perguntas;
+- `filtros_respostas` é opcional; cada pergunta aparece no máximo uma vez,
+  deve pertencer a `pergunta_ids` e precisa conter ao menos um valor único e
+  não vazio;
+- filtros só podem usar dimensões processadas pela profundidade solicitada;
+- valores desconhecidos retornam `422`;
+- `incluir_sem_resposta` permanece no contrato por compatibilidade e aceita
+  `false`; o Web de Cruzamentos Estratégicos sempre envia `true`;
+- `company_id` e `projeto_id` não são aceitos no corpo.
+
+A resposta contém `total_entrevistas`, `base_valida`, `dimensoes`, `nodos`,
+`metadados_execucao` e `avisos`. Cada nodo informa `caminho`, contagem distinta
+de entrevistas, `base_pai`, `percentual_pai`, `percentual_total` e
+`tem_filhos`.
+
+### Semântica dos filtros
+
+Os filtros controlam quais categorias e ramificações são retornadas. Eles são
+aplicados depois da construção das bases e do cálculo dos percentuais, sem
+renormalização:
+
+```text
+Base = 100
+A = 40%, B = 30%, C = 30%
+
+Filtro = A e B
+Resultado = A 40%, B 30%
+Não resulta em 57,14% / 42,86%.
+```
+
+Nos níveis seguintes, `percentual_pai` continua usando todas as entrevistas do
+segmento pai calculado, inclusive categorias que não foram selecionadas para
+retorno.
+
+### GET `/relatorios/pesquisas/{pesquisa_id}/cruzamentos-multidimensionais/opcoes/`
+
+Fonte única usada pelo Web para configurar todas as dimensões elegíveis em uma
+chamada. Não existe uma requisição por pergunta.
+
+Resposta resumida:
+
+```json
+{
+  "pesquisa_id": 9,
+  "dimensoes": [
+    {
+      "pergunta_id": 42,
+      "ordem": 2,
+      "texto_pergunta": "Sexo",
+      "tipo_pergunta": "escolha_simples",
+      "eh_resposta_espontanea": false,
+      "papel_analitico": "PERFIL",
+      "metadados_analiticos": { "dimensao": "PERFIL", "subtipo": "SEXO" },
+      "cardinalidade_observada": 2,
+      "valores": [
+        {
+          "valor_chave": "Feminino",
+          "rotulo": "Feminino",
+          "ordem": 1,
+          "contagem_entrevistas": 137,
+          "origem": "OPCAO"
+        },
+        {
+          "valor_chave": "__SEM_RESPOSTA__",
+          "rotulo": "Sem resposta",
+          "ordem": null,
+          "contagem_entrevistas": 0,
+          "origem": "SEM_RESPOSTA"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Perguntas fechadas preservam opções configuradas e sua ordem, inclusive opções
+com zero entrevistas. Valores espontâneos usam `origem` igual a
+`CATEGORIA_ESPONTANEA`; o valor técnico ausente usa `SEM_RESPOSTA`.
+
+### Respostas espontâneas
+
+O endpoint de opções e o motor usam o mesmo pipeline dos demais relatórios:
+
+```text
+Resposta bruta
+  -> normalização da Apuração de Respostas Espontâneas
+  -> get_active_spontaneous_mapping_for_report
+  -> resolve_reportable_response_value
+  -> categoria ativa ou “Não categorizada”
+  -> motor multidimensional
+```
+
+Não existe fuzzy matching ou normalização paralela nos Cruzamentos
+Estratégicos. Variantes brutas deixam de ser nodos separados quando o
+mapeamento ativo as resolve para a mesma categoria. Na modelagem atual, os
+mapeamentos ativos são vinculados à pesquisa.
+
+### Sem resposta, validação e tenant
+
+```text
+valor_chave = __SEM_RESPOSTA__
+rotulo = Sem resposta
+```
+
+O valor técnico pode ser usado em `filtros_respostas`. Pesquisas fora do tenant
+autenticado retornam `404`; perguntas inválidas, filtros inválidos e limites
+excedidos retornam `422`. O tenant é derivado de
+`current_user.company_id -> Projeto -> Pesquisa`.
+
+Limites padrão configuráveis: 8 dimensões, 5.000 nodos e 100.000 combinações.

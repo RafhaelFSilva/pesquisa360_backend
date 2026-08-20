@@ -1803,6 +1803,33 @@ class StatusGapPlus(StrEnum):
     META_ATINGIDA = "META_ATINGIDA"
 
 
+class PontoGeoJSON(BaseModel):
+    """Ponto no contrato geografico vigente (ADR-004).
+
+    `coordinates` segue a ordem GeoJSON: [longitude, latitude]. E o mesmo
+    formato em que os Setores chegam ao mapa, evitando dois contratos
+    geograficos na mesma tela.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["Point"]
+    coordinates: List[float] = Field(min_length=2, max_length=2)
+
+    @field_validator("coordinates")
+    @classmethod
+    def validar_coordenadas(cls, value: List[float]) -> List[float]:
+        longitude, latitude = value
+        # NaN/Infinity passam por qualquer comparacao de faixa.
+        if not math.isfinite(longitude) or not math.isfinite(latitude):
+            raise ValueError("coordinates deve conter numeros finitos")
+        if not -180 <= longitude <= 180:
+            raise ValueError("longitude deve estar entre -180 e 180")
+        if not -90 <= latitude <= 90:
+            raise ValueError("latitude deve estar entre -90 e 90")
+        return value
+
+
 class LiderancaPoliticaCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1822,6 +1849,8 @@ class LiderancaPoliticaUpdate(BaseModel):
 
     nome: Optional[str] = Field(default=None, min_length=1)
     ativo: Optional[bool] = None
+    # Campo ausente mantem a posicao; null explicito remove.
+    localizacao: Optional[PontoGeoJSON] = None
 
     @field_validator("nome")
     @classmethod
@@ -1866,6 +1895,8 @@ class LiderancaPoliticaResponse(BaseModel):
     ativo: bool
     criado_em: datetime
     atualizado_em: datetime
+    # NULL e estado valido: lideranca sem ponto no mapa.
+    localizacao: Optional[PontoGeoJSON] = None
     territorios: List[LiderancaTerritorioItem] = Field(default_factory=list)
     configs: List[LiderancaPesquisaConfigResponse] = Field(default_factory=list)
 

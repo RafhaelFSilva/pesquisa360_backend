@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from pesquisa360 import schemas
 from pesquisa360.core.dependencies import get_current_user, get_db
+from pesquisa360.core.utils import wkb_to_geojson_point
 from pesquisa360.db import models
 from pesquisa360.services import lideranca as service
 from pesquisa360.services import lideranca_analytics as analytics
@@ -33,6 +34,8 @@ def _lideranca_response(db: Session, lideranca: models.LiderancaPolitica) -> dic
         "ativo": lideranca.ativo,
         "criado_em": lideranca.criado_em,
         "atualizado_em": lideranca.atualizado_em,
+        # Nunca a geometria PostGIS crua (ADR-004).
+        "localizacao": wkb_to_geojson_point(lideranca.localizacao),
         "territorios": [
             _territorio_item(territorio)
             for territorio in service.listar_territorios(db, lideranca.id)
@@ -111,6 +114,11 @@ def atualizar_lideranca(
     payload: schemas.LiderancaPoliticaUpdate,
     current_user: models.Usuario = Depends(get_current_user),
 ):
+    # Campo ausente mantem a posicao; null explicito remove o ponto do mapa.
+    informados = payload.model_dump(exclude_unset=True)
+    extras = (
+        {"localizacao": informados["localizacao"]} if "localizacao" in informados else {}
+    )
     lideranca = service.atualizar_lideranca(
         db,
         projeto_id,
@@ -118,6 +126,7 @@ def atualizar_lideranca(
         current_user,
         nome=payload.nome,
         ativo=payload.ativo,
+        **extras,
     )
     return _lideranca_response(db, lideranca)
 

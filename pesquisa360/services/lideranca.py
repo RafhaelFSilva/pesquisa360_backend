@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Optional, Sequence
 
 from fastapi import HTTPException, status
+from geoalchemy2.shape import from_shape
+from shapely.geometry import Point
 from sqlalchemy.orm import Session
 
 from pesquisa360.core.dependencies import _get_profile_name, _is_manager_name, _is_superadmin_name
@@ -98,6 +100,22 @@ def criar_lideranca(
     return lideranca
 
 
+# Sentinela: distingue "campo ausente no PATCH" (manter) de "null" (remover).
+NAO_INFORMADO = object()
+
+
+def _ponto_para_geometria(ponto):
+    """Point do contrato -> geometria persistivel.
+
+    A validacao de tipo e de faixa vive no schema; aqui so traduzimos. Nunca
+    inventamos coordenada: `None` significa lideranca sem ponto no mapa.
+    """
+    if ponto is None:
+        return None
+    longitude, latitude = ponto["coordinates"]
+    return from_shape(Point(longitude, latitude), srid=4326)
+
+
 def atualizar_lideranca(
     db: Session,
     projeto_id: int,
@@ -106,6 +124,7 @@ def atualizar_lideranca(
     *,
     nome: Optional[str] = None,
     ativo: Optional[bool] = None,
+    localizacao=NAO_INFORMADO,
 ) -> models.LiderancaPolitica:
     lideranca = obter_lideranca(db, projeto_id, lideranca_id, current_user)
     assegurar_permissao_escrita(db, current_user)
@@ -113,6 +132,9 @@ def atualizar_lideranca(
         lideranca.nome = nome.strip()
     if ativo is not None:
         lideranca.ativo = ativo
+    if localizacao is not NAO_INFORMADO:
+        # Nao toca em setor, cota, bairros nem config da onda.
+        lideranca.localizacao = _ponto_para_geometria(localizacao)
     db.add(lideranca)
     try:
         db.commit()

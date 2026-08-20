@@ -377,3 +377,40 @@ absolutos nem Gap/Plus — e adicionar um filtro **não altera** o
 
 `LIDERANCA_SETOR` e `MAPA_LIDERANCA_SETOR` continuam significando a opção mais
 votada em um setor, sem qualquer relação com esta entidade.
+
+## ADR-025 — Parâmetros de projeção são decisão humana, editáveis em base validada
+
+**Contexto.** `comparecimento_estimado` e `percentual_votos_validos` convertem
+eleitores aptos em votos válidos projetados:
+
+```
+aptos × comparecimento_estimado × percentual_votos_validos = votos válidos projetados
+```
+
+Sem eles, a Gestão de Lideranças não projeta votos nem calcula Gap/Plus.
+
+**Decisão.** Os dois parâmetros são configurados explicitamente por
+`PATCH /base-eleitoral/{base_id}/parametros-projecao`, restrito a
+Gerente/Superadmin (base oficial exige Superadmin). O sistema **nunca** os
+preenche por convenção, nem no import, nem por inferência a partir da pesquisa,
+nem por consulta externa. `NULL` é o estado legítimo de "não configurado" e
+produz `PARAMETROS_ELEITORAIS_AUSENTES`, jamais 1.0 ou 100%.
+
+**Base VALIDADA aceita a alteração.** São parâmetros de projeção: não alteram
+território, eleitorado operacional, hierarquia, divergências, `data_referencia`,
+hash nem a conferência da fonte, e por isso não invalidam a base nem mudam seu
+status. A UI avisa que a mudança afeta imediatamente as projeções. Base
+`SUBSTITUIDA` é uma versão morta e recusa a escrita.
+
+**Forma canônica.** O banco guarda a fração em `Numeric(5,4)` (`0.8000`), nunca
+o percentual inteiro (`80`). A UI conversa em percentual e converte na borda.
+
+**Distinção.** Peso Eleitoral mede participação territorial no universo
+operacional; os parâmetros de projeção transformam aptos em votos. São conceitos
+diferentes e ocupam blocos distintos do Workspace.
+
+**Lacuna conhecida.** O projeto não possui infraestrutura de auditoria de
+alterações administrativas. A mudança destes parâmetros, portanto, **não é
+historiada** — apenas `atualizado_em` muda. Guardar histórico em campo
+inadequado seria pior que a ausência; a trilha depende de uma decisão futura
+sobre auditoria transversal.

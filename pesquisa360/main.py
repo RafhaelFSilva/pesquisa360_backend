@@ -1,7 +1,12 @@
 # pesquisa360/main.py
 
+import math
+
 from fastapi import FastAPI, UploadFile, File, Depends
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import os
 import uuid
@@ -84,6 +89,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # --- FIM DA CONFIGURAÇÃO DO CORS ---
+
+
+def _sanitizar_nao_finitos(valor):
+    """Troca NaN/Infinity por texto para o corpo do erro ser JSON valido.
+
+    NaN e Infinity nao existem em JSON (RFC 8259), mas json.loads os aceita como
+    extensao. Sem isso o handler padrao do FastAPI ecoa o valor recebido em
+    `input`, falha ao serializar e devolve 500 no lugar do 422 correto.
+    """
+    if isinstance(valor, float) and not math.isfinite(valor):
+        return repr(valor)
+    if isinstance(valor, dict):
+        return {chave: _sanitizar_nao_finitos(item) for chave, item in valor.items()}
+    if isinstance(valor, (list, tuple)):
+        return [_sanitizar_nao_finitos(item) for item in valor]
+    return valor
+
+
+@app.exception_handler(RequestValidationError)
+async def erro_de_validacao(_request: Request, exc: RequestValidationError):
+    """Mesma forma do handler padrao; apenas sobrevive a valores nao finitos."""
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": _sanitizar_nao_finitos(jsonable_encoder(exc.errors()))},
+    )
 
 @app.post("/upload")
 async def upload_file(

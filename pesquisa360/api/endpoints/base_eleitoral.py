@@ -306,6 +306,37 @@ def validar_base_eleitoral(
     }
 
 
+@router.patch(
+    "/base-eleitoral/{base_id}/parametros-projecao",
+    response_model=schemas.BaseEleitoralDetalheCompleto,
+)
+def definir_parametros_projecao(
+    *,
+    db: Session = Depends(get_db),
+    base_id: int,
+    payload: schemas.ParametrosProjecaoRequest,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    """Configura comparecimento estimado e percentual de votos validos.
+
+    Decisao metodologica humana: o sistema nunca preenche estes valores por
+    convencao. Campo omitido no corpo mantem o valor atual; campo enviado como
+    null limpa a configuracao.
+    """
+    informados = payload.model_dump(exclude_unset=True)
+    base = service.definir_parametros_projecao(
+        db,
+        base_id,
+        current_user,
+        **{
+            campo: informados[campo]
+            for campo in ("comparecimento_estimado", "percentual_votos_validos")
+            if campo in informados
+        },
+    )
+    return _detalhe_completo(db, base)
+
+
 @router.post(
     "/base-eleitoral/territorios/{territorio_id}/resolver-divergencia",
     response_model=schemas.TerritorioEleitoralListItem,

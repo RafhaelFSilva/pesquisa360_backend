@@ -14,6 +14,7 @@ Regras fixadas aqui (ADR-023):
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -724,3 +725,70 @@ def _marcar_divergencia_resolvida(
             # Nova lista para o SQLAlchemy detectar a mudanca do JSON.
             importacao.divergencias = novos
             db.add(importacao)
+
+
+# --- Parametros de projecao eleitoral -----------------------------------------
+#
+# comparecimento_estimado  = proporcao dos aptos que se espera comparecer;
+# percentual_votos_validos = proporcao dos comparecidos que sera voto valido.
+#
+# Ambos sao decisao metodologica humana. O sistema NUNCA os preenche por
+# convencao: sem eles, a projecao de votos simplesmente nao existe.
+
+_ESCALA_PARAMETRO = Decimal("0.0001")
+
+# Sentinela: distingue "campo ausente no PATCH" (manter) de "null" (limpar).
+_NAO_INFORMADO = object()
+
+
+def _normalizar_parametro(valor) -> Optional[Decimal]:
+    if valor is None:
+        return None
+    decimal = Decimal(str(valor))
+    if not decimal.is_finite():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Parametro de projecao deve ser um numero finito entre 0 e 1.",
+        )
+    if decimal < 0 or decimal > 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Parametro de projecao deve estar entre 0 e 1.",
+        )
+    # Numeric(5,4) e a forma canonica: 0.8 vira 0.8000, nunca 80.
+    return decimal.quantize(_ESCALA_PARAMETRO, rounding=ROUND_HALF_UP)
+
+
+def definir_parametros_projecao(
+    db: Session,
+    base_id: int,
+    current_user: models.Usuario,
+    comparecimento_estimado=_NAO_INFORMADO,
+    percentual_votos_validos=_NAO_INFORMADO,
+) -> models.BaseEleitoral:
+    """Configura os parametros de projecao da base.
+
+    Permitido mesmo com a base VALIDADA (ADR-025): sao parametros de projecao,
+    nao alteram territorio, eleitorado, hierarquia nem a conferencia da fonte.
+    Base SUBSTITUIDA e uma versao morta e nao aceita escrita.
+
+    Nao toca em nenhum outro campo da base nem em nenhum territorio.
+    """
+    base = obter_base_eleitoral_visivel(db, base_id, current_user)
+    assegurar_permissao_escrita_base(db, base, current_user)
+
+    if base.status == STATUS_SUBSTITUIDA:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Base substituida nao aceita alteracao de parametros.",
+        )
+
+    if comparecimento_estimado is not _NAO_INFORMADO:
+        base.comparecimento_estimado = _normalizar_parametro(comparecimento_estimado)
+    if percentual_votos_validos is not _NAO_INFORMADO:
+        base.percentual_votos_validos = _normalizar_parametro(percentual_votos_validos)
+
+    db.add(base)
+    db.commit()
+    db.refresh(base)
+    return base

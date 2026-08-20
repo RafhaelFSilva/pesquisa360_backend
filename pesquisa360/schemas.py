@@ -5,6 +5,7 @@ from typing import Optional, List, Any, Union, Dict, Literal
 from datetime import date, datetime
 from enum import StrEnum
 from uuid import UUID
+import math
 import re
 from urllib.parse import urlparse
 #from geoalchemy2.elements import WKBElement # <-- NOVA IMPORTAÇÃO
@@ -1629,6 +1630,30 @@ class DivergenciaBaseEleitoralResponse(BaseModel):
     resolvida: bool = False
     territorio_id: Optional[int] = None
     composicao_valor_final: Optional[ComposicaoValorFinalResponse] = None
+
+
+class ParametrosProjecaoRequest(BaseModel):
+    """PATCH dos dois parametros de projecao, e nada mais.
+
+    Campo ausente -> mantem o valor atual.
+    Campo explicitamente null -> limpa (volta a "nao configurado").
+
+    Somente estes dois campos existem: company_id, status, eleitorado, versao e
+    fonte nao entram por aqui.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    comparecimento_estimado: Optional[float] = Field(default=None, ge=0, le=1)
+    percentual_votos_validos: Optional[float] = Field(default=None, ge=0, le=1)
+
+    @field_validator("comparecimento_estimado", "percentual_votos_validos")
+    @classmethod
+    def exigir_numero_finito(cls, value):
+        # ge/le ja barram fora de faixa, mas NaN passa por qualquer comparacao.
+        if value is not None and not math.isfinite(value):
+            raise ValueError("parametro deve ser um numero finito entre 0 e 1")
+        return value
 
 
 class ResolverDivergenciaRequest(BaseModel):

@@ -307,3 +307,73 @@ como se a base não existisse.
   atribuído com evidência única em `locais_votacao`; zero ou múltiplas evidências
   viram divergência. O campo legado `votos` nunca é tratado como
   `eleitorado_apto`.
+
+## ADR-024 — Liderança política é do Projeto; setor e cota são da onda
+
+`LiderancaPolitica` (pessoa cadastrada para a campanha) tem raiz em `Projeto`.
+
+```text
+Projeto
+  └── LiderancaPolitica          nome, localizacao (POINT, uso futuro), ativo
+       ├── LiderancaPesquisaConfig    por onda: setor_id + cota_votos_validos
+       └── LiderancaTerritorioEleitoral   bairros da Base Eleitoral (N:N)
+```
+
+Motivo: `Projeto` é a campanha e `Pesquisa` é a onda. Um `setor_id` direto na
+liderança a prenderia ao setor de uma onda específica — e `Setor` tem delete
+físico e `cascade delete-orphan` a partir da Pesquisa. Por isso setor e cota
+vivem em `lideranca_pesquisa_config`, com `UNIQUE(lideranca_id, pesquisa_id)`:
+renegociar a meta na Onda 2 não reescreve a Onda 1.
+
+Consequências:
+
+- o tenant deriva de `LiderancaPolitica -> Projeto -> company_id`; o cliente
+  nunca envia `company_id`, e recurso de outro tenant responde 404;
+- `setor_id` usa `ON DELETE SET NULL`: apagar o setor não apaga o histórico;
+- exclusão de liderança é soft delete (`ativo=false`);
+- os bairros são a âncora territorial **estável**, porque sobrevivem às ondas.
+
+### Setor e Bairro são dimensões complementares
+
+`Setor` define o universo **amostral** (quais coletas entram na taxa).
+`Bairros` definem o universo **eleitoral** (quantos aptos a liderança
+representa). O sistema não infere um do outro: sem geometria de bairro na Base,
+qualquer casamento espacial ou textual seria adivinhação. A associação é
+administrada pelo usuário; `setor_territorio_eleitoral` continua não existindo.
+
+Sem setor configurado, o escopo amostral é a Pesquisa inteira, e a resposta
+declara `escopo_amostral: PESQUISA` — a UI não pode fingir recorte territorial.
+
+### Cota é em votos válidos, não em aptos
+
+`cota_votos_validos` é deliberadamente distinto de `Setor.meta`, que significa
+meta de **coletas**. A projeção é:
+
+```text
+aptos_dos_bairros × comparecimento_estimado × percentual_votos_validos
+  = votos_validos_projetados
+votos_validos_projetados × taxa_da_resposta_alvo
+  = votos_projetados_alvo
+gap_plus = votos_projetados_alvo − cota_votos_validos
+```
+
+Sem `comparecimento_estimado` ou `percentual_votos_validos` na Base, não há
+projeção: o resultado vem `null` com motivo `PARAMETROS_ELEITORAIS_AUSENTES`.
+Assumir 100% transformaria aptos em votos válidos — exatamente o erro que a
+modelagem se propôs a impedir. Os demais motivos são `SEM_COTA`,
+`SEM_TERRITORIO_ELEITORAL`, `BASE_ELEITORAL_NAO_VALIDADA`,
+`SEM_RESPOSTAS_VALIDAS` e `PERGUNTA_ALVO_INVALIDA`.
+
+Gap/Plus **não é persistido**: depende da onda, da pergunta alvo, da cota e dos
+parâmetros da Base, então gravar produziria dado stale.
+
+### Filtros adicionais são diagnósticos, não projetivos
+
+O alvo (pergunta + resposta) é o desempenho medido. Filtros adicionais
+(sexo, idade…) recortam uma subamostra cuja população no território é
+desconhecida. Por isso `recorte_filtrado` devolve **apenas taxas** — nunca votos
+absolutos nem Gap/Plus — e adicionar um filtro **não altera** o
+`resultado_principal`. Há teste de regressão dedicado a essa garantia.
+
+`LIDERANCA_SETOR` e `MAPA_LIDERANCA_SETOR` continuam significando a opção mais
+votada em um setor, sem qualquer relação com esta entidade.

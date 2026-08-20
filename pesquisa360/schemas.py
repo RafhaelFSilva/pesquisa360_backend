@@ -1716,6 +1716,203 @@ class TerritorioEleitoralPage(BaseModel):
     offset: int
 
 
+
+
+# --- Gestao de Liderancas (Fase 6A) -----------------------------------------
+# Nenhum request aceita company_id: o tenant vem do JWT.
+
+
+class MotivoIndisponibilidadeLideranca(StrEnum):
+    SEM_COTA = "SEM_COTA"
+    SEM_TERRITORIO_ELEITORAL = "SEM_TERRITORIO_ELEITORAL"
+    BASE_ELEITORAL_NAO_VALIDADA = "BASE_ELEITORAL_NAO_VALIDADA"
+    PARAMETROS_ELEITORAIS_AUSENTES = "PARAMETROS_ELEITORAIS_AUSENTES"
+    SEM_RESPOSTAS_VALIDAS = "SEM_RESPOSTAS_VALIDAS"
+    PERGUNTA_ALVO_INVALIDA = "PERGUNTA_ALVO_INVALIDA"
+
+
+class EscopoAmostralLideranca(StrEnum):
+    SETOR = "SETOR"
+    PESQUISA = "PESQUISA"
+
+
+class StatusGapPlus(StrEnum):
+    GAP = "GAP"
+    PLUS = "PLUS"
+    META_ATINGIDA = "META_ATINGIDA"
+
+
+class LiderancaPoliticaCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nome: str = Field(min_length=1)
+
+    @field_validator("nome")
+    @classmethod
+    def exigir_nome(cls, value: str) -> str:
+        texto = value.strip()
+        if not texto:
+            raise ValueError("nome e obrigatorio")
+        return texto
+
+
+class LiderancaPoliticaUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nome: Optional[str] = Field(default=None, min_length=1)
+    ativo: Optional[bool] = None
+
+    @field_validator("nome")
+    @classmethod
+    def validar_nome(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        texto = value.strip()
+        if not texto:
+            raise ValueError("nome nao pode ser vazio")
+        return texto
+
+
+class LiderancaTerritorioItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    nome: str
+    eleitorado_apto: Optional[int] = None
+
+
+class LiderancaSetorItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    nome: str
+
+
+class LiderancaPesquisaConfigResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    pesquisa_id: int
+    setor_id: Optional[int] = None
+    # Cota em VOTOS VALIDOS; NULL significa nao configurada, diferente de zero.
+    cota_votos_validos: Optional[int] = None
+
+
+class LiderancaPoliticaResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    nome: str
+    ativo: bool
+    criado_em: datetime
+    atualizado_em: datetime
+    territorios: List[LiderancaTerritorioItem] = Field(default_factory=list)
+    configs: List[LiderancaPesquisaConfigResponse] = Field(default_factory=list)
+
+
+class LiderancaConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    setor_id: Optional[int] = None
+    cota_votos_validos: Optional[int] = Field(default=None, ge=0)
+
+
+class LiderancaTerritoriosRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    territorio_ids: List[int] = Field(default_factory=list)
+
+    @field_validator("territorio_ids")
+    @classmethod
+    def sem_duplicados(cls, value: List[int]) -> List[int]:
+        if len(value) != len(set(value)):
+            raise ValueError("territorio_ids nao pode conter duplicados")
+        return value
+
+
+class LiderancaAnaliseAlvo(BaseModel):
+    """Resposta cujo desempenho eleitoral esta sendo medido."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pergunta_id: int
+    valores: List[str] = Field(min_length=1)
+
+    @field_validator("valores")
+    @classmethod
+    def normalizar(cls, valores: List[str]) -> List[str]:
+        limpos = [item.strip() for item in valores]
+        if any(not item for item in limpos):
+            raise ValueError("valores nao pode conter itens vazios")
+        if len(limpos) != len(set(limpos)):
+            raise ValueError("valores nao pode conter duplicados")
+        return limpos
+
+
+class LiderancaAnaliseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pesquisa_id: int
+    alvo: LiderancaAnaliseAlvo
+    # Recortes diagnosticos: OR entre valores da mesma pergunta, AND entre perguntas.
+    filtros_respostas: List[CruzamentoFiltroResposta] = Field(default_factory=list)
+    lideranca_ids: Optional[List[int]] = None
+
+    @model_validator(mode="after")
+    def validar(self):
+        ids = [item.pergunta_id for item in self.filtros_respostas]
+        if len(ids) != len(set(ids)):
+            raise ValueError("filtros_respostas nao pode repetir pergunta_id")
+        if self.alvo.pergunta_id in ids:
+            raise ValueError("a pergunta alvo nao pode ser usada como filtro adicional")
+        return self
+
+
+class LiderancaUniversoEleitoral(BaseModel):
+    eleitorado_apto: Optional[int] = None
+    votos_validos_projetados: Optional[int] = None
+
+
+class LiderancaResultadoPrincipal(BaseModel):
+    escopo_amostral: EscopoAmostralLideranca
+    total_entrevistas: int
+    base_valida: int
+    respostas_alvo: int
+    taxa_alvo: Optional[float] = None
+    votos_projetados_alvo: Optional[int] = None
+    gap_plus: Optional[int] = None
+    status: Optional[StatusGapPlus] = None
+    atingimento_percentual: Optional[float] = None
+
+
+class LiderancaRecorteFiltrado(BaseModel):
+    """Somente taxas: sem calibracao populacional do segmento nao ha projecao."""
+
+    total_entrevistas: int
+    base_valida: int
+    respostas_alvo: int
+    taxa_alvo: Optional[float] = None
+
+
+class LiderancaAnaliseItem(BaseModel):
+    id: int
+    nome: str
+    setor: Optional[LiderancaSetorItem] = None
+    territorios: List[LiderancaTerritorioItem] = Field(default_factory=list)
+    cota_votos_validos: Optional[int] = None
+    universo_eleitoral: LiderancaUniversoEleitoral
+    resultado_principal: LiderancaResultadoPrincipal
+    recorte_filtrado: Optional[LiderancaRecorteFiltrado] = None
+    indisponibilidade: Optional[MotivoIndisponibilidadeLideranca] = None
+
+
+class LiderancaAnaliseResponse(BaseModel):
+    projeto_id: int
+    pesquisa_id: int
+    alvo: LiderancaAnaliseAlvo
+    filtros_respostas: List[CruzamentoFiltroResposta] = Field(default_factory=list)
+    liderancas: List[LiderancaAnaliseItem] = Field(default_factory=list)
+
+
 # --- Atualização de referências ---
 # Garante que os schemas que se referenciam mutuamente sejam resolvidos
 Projeto.model_rebuild()

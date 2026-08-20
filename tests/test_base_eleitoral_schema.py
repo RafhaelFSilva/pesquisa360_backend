@@ -673,21 +673,18 @@ class RegressaoEscopoFase2Tests(unittest.TestCase):
         )
 
     def test_entidades_de_fases_futuras_nao_existem(self):
-        for nome in (
-            "LiderancaPolitica",
-            "LiderancaTerritorioEleitoral",
-            "SetorTerritorioEleitoral",
-        ):
-            with self.subTest(nome=nome):
-                self.assertFalse(hasattr(models, nome), nome)
-        tabelas = set(models.Base.metadata.tables)
-        for tabela in (
-            "liderancas_politicas",
-            "lideranca_territorio_eleitoral",
-            "setor_territorio_eleitoral",
-        ):
-            with self.subTest(tabela=tabela):
-                self.assertNotIn(tabela, tabelas)
+        # LiderancaPolitica e seus vinculos chegaram na Fase 6A, entao saem
+        # desta lista. SetorTerritorioEleitoral (rateio Setor x Bairro) segue
+        # deliberadamente adiado.
+        self.assertFalse(hasattr(models, "SetorTerritorioEleitoral"))
+        self.assertNotIn("setor_territorio_eleitoral", set(models.Base.metadata.tables))
+
+    def test_setor_continua_sem_vinculo_eleitoral_automatico(self):
+        # A associacao Setor <-> Bairro permanece administrada pelo usuario;
+        # nao ha inferencia espacial nem tabela de rateio.
+        colunas = set(models.Setor.__table__.columns.keys())
+        self.assertNotIn("territorio_eleitoral_id", colunas)
+        self.assertNotIn("base_eleitoral_id", colunas)
 
     def test_legado_eleitoral_permanece_intacto(self):
         bairros = models.Bairro.__table__.columns.keys()

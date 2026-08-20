@@ -701,3 +701,110 @@ class ImportacaoBaseEleitoral(Base):
         "BaseEleitoral", back_populates="importacoes", foreign_keys=[base_eleitoral_id]
     )
     executado_por = relationship("Usuario", foreign_keys=[executado_por_id])
+
+
+# ==============================================================================
+# GESTAO DE LIDERANCAS
+# ==============================================================================
+# LiderancaPolitica e a PESSOA cadastrada para a campanha. Nada a ver com
+# TipoMapaEstrategico.LIDERANCA_SETOR, que designa a opcao mais votada em um
+# setor e permanece intacto.
+#
+# A lideranca pertence ao PROJETO (campanha) e sobrevive as ondas. Setor e cota
+# variam por onda, entao vivem em lideranca_pesquisa_config; os bairros da Base
+# Eleitoral sao a ancora territorial estavel, em lideranca_territorio_eleitoral.
+
+
+class LiderancaPolitica(Base):
+    __tablename__ = "liderancas_politicas"
+    __table_args__ = (
+        Index("ix_liderancas_politicas_projeto", "projeto_id"),
+        Index("ix_liderancas_politicas_ativo", "ativo"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    # Raiz: Projeto = campanha. O tenant e derivado por projeto.company_id.
+    projeto_id = Column(Integer, ForeignKey("projetos.id"), nullable=False)
+    nome = Column(String, nullable=False)
+    # Preparada para o mapa de uma fase futura; nao usada nesta.
+    localizacao = Column(Geometry(geometry_type="POINT", srid=4326), nullable=True)
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    projeto = relationship("Projeto", foreign_keys=[projeto_id])
+    configs_pesquisa = relationship(
+        "LiderancaPesquisaConfig",
+        back_populates="lideranca",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    territorios = relationship(
+        "LiderancaTerritorioEleitoral",
+        back_populates="lideranca",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class LiderancaPesquisaConfig(Base):
+    """Configuracao da lideranca em UMA onda: setor operacional e cota eleitoral."""
+
+    __tablename__ = "lideranca_pesquisa_config"
+    __table_args__ = (
+        UniqueConstraint("lideranca_id", "pesquisa_id", name="uq_lideranca_pesquisa"),
+        # NULL = cota ainda nao configurada; 0 = cota definida como zero.
+        CheckConstraint(
+            "cota_votos_validos IS NULL OR cota_votos_validos >= 0",
+            name="ck_lideranca_config_cota",
+        ),
+        Index("ix_lideranca_config_pesquisa", "pesquisa_id"),
+        Index("ix_lideranca_config_setor", "setor_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    lideranca_id = Column(
+        Integer, ForeignKey("liderancas_politicas.id", ondelete="CASCADE"), nullable=False
+    )
+    pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False)
+    # Setor tem delete fisico e morre com a Pesquisa: SET NULL evita que a
+    # configuracao historica da lideranca desapareca junto.
+    setor_id = Column(Integer, ForeignKey("setores.id", ondelete="SET NULL"), nullable=True)
+    # Cota em VOTOS VALIDOS. Nao confundir com Setor.meta, que e meta de coletas.
+    cota_votos_validos = Column(Integer, nullable=True)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    lideranca = relationship("LiderancaPolitica", back_populates="configs_pesquisa")
+    pesquisa = relationship("Pesquisa", foreign_keys=[pesquisa_id])
+    setor = relationship("Setor", foreign_keys=[setor_id])
+
+
+class LiderancaTerritorioEleitoral(Base):
+    """Bairros da Base Eleitoral onde a lideranca atua. Ancora estavel entre ondas."""
+
+    __tablename__ = "lideranca_territorio_eleitoral"
+    __table_args__ = (
+        UniqueConstraint(
+            "lideranca_id", "territorio_eleitoral_id", name="uq_lideranca_territorio"
+        ),
+        Index("ix_lideranca_territorio_territorio", "territorio_eleitoral_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    lideranca_id = Column(
+        Integer, ForeignKey("liderancas_politicas.id", ondelete="CASCADE"), nullable=False
+    )
+    territorio_eleitoral_id = Column(
+        Integer, ForeignKey("territorio_eleitoral.id", ondelete="CASCADE"), nullable=False
+    )
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    lideranca = relationship("LiderancaPolitica", back_populates="territorios")
+    territorio_eleitoral = relationship(
+        "TerritorioEleitoral", foreign_keys=[territorio_eleitoral_id]
+    )

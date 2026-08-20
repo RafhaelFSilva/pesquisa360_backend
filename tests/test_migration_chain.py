@@ -17,7 +17,7 @@ from alembic.script import ScriptDirectory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "8c2097e0a3de"
+HEAD_REVISION = "78d895f396e9"
 EXPECTED_LINEAGE = [
     "91fbe6db1f17",
     "3e4de16d893c",
@@ -33,6 +33,7 @@ EXPECTED_LINEAGE = [
     "a3b4c5d6e7f8",
     "c4d5e6f7a8b9",
     "8c2097e0a3de",
+    "78d895f396e9",
 ]
 
 

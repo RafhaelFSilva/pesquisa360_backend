@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .db import models
 from .db.session import engine
-from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais, empresas, apuracao_espontanea, base_eleitoral
+from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais, empresas, apuracao_espontanea, base_eleitoral, liderancas
 from .core.dependencies import get_current_user
 
 
@@ -194,3 +194,6 @@ app.include_router(locais.router, prefix="/locais", tags=["Locais de Votação"]
 
 # Base Eleitoral versionada
 app.include_router(base_eleitoral.router, tags=["Base Eleitoral"])
+
+# Gestão de Lideranças
+app.include_router(liderancas.router, tags=["Liderancas"])

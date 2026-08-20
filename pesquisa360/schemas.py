@@ -1635,6 +1635,87 @@ class ResultadoValidacaoBase(BaseModel):
     total_em_conferencia: int
 
 
+
+
+# --- Leitura para o Workspace da Base Eleitoral (Fase 3D-A) ------------------
+# Somente contrato de leitura: nenhum destes schemas expoe company_id.
+
+
+class AuditoriaDataReferencia(BaseModel):
+    """Proveniencia da data de referencia, quando a importacao a registrou."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    origem: Optional[str] = None
+    convencional: bool = False
+    data_fonte_declarada: Optional[date] = None
+    motivo: Optional[str] = None
+    pdf_creation_date: Optional[str] = None
+
+
+class TotaisTerritorioEleitoral(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ESTADO: int = 0
+    MUNICIPIO: int = 0
+    BAIRRO: int = 0
+    LOCALIDADE: int = 0
+    LOCAL_VOTACAO: int = 0
+    SECAO: int = 0
+
+
+class ImportacaoBaseEleitoralResumo(BaseModel):
+    """Lote de importacao. O hash trafega completo; abreviar e papel da UI."""
+
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    id: int
+    arquivo_origem: str
+    hash_arquivo: Optional[str] = None
+    total_linhas: int
+    total_importadas: int
+    total_divergencias: int
+    executado_por_id: int
+    executado_em: datetime
+
+
+class BaseEleitoralDetalheCompleto(BaseEleitoralDetalhe):
+    """Detalhe da base acrescido do que o Workspace precisa ler.
+
+    `eleitorado_operacional` e `eleitorado_declarado` vêm da raiz ESTADO: saber
+    disso e regra de dominio e nao deve vazar para o cliente.
+    """
+
+    totais_por_tipo: TotaisTerritorioEleitoral
+    eleitorado_operacional: Optional[int] = None
+    eleitorado_declarado: Optional[int] = None
+    diferenca_eleitorado: Optional[int] = None
+    auditoria_data_referencia: Optional[AuditoriaDataReferencia] = None
+    # Sem unicidade garantida de importacao por base: a UI usa a contagem para
+    # decidir entre exibir a origem direto ou abrir a lista auditavel.
+    total_importacoes: int = 0
+    importacao_origem: Optional[ImportacaoBaseEleitoralResumo] = None
+
+
+class ProjetoBaseEleitoralAtualResponse(BaseModel):
+    """Base principal do projeto. `base=null` e estado normal, nao erro."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    projeto_id: int
+    principal: bool = False
+    base: Optional[BaseEleitoralDetalheCompleto] = None
+
+
+class TerritorioEleitoralPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: List[TerritorioEleitoralListItem]
+    total: int
+    limit: int
+    offset: int
+
+
 # --- Atualização de referências ---
 # Garante que os schemas que se referenciam mutuamente sejam resolvidos
 Projeto.model_rebuild()

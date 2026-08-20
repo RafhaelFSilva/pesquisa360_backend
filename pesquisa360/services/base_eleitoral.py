@@ -215,9 +215,15 @@ def vincular_base_eleitoral_ao_projeto(
     return vinculo
 
 
-def _obter_base_principal(
+def obter_base_principal_projeto_opcional(
     db: Session, projeto_id: int, current_user: models.Usuario
-) -> models.BaseEleitoral:
+) -> Optional[models.BaseEleitoral]:
+    """Base principal do projeto, ou None quando ainda nao ha vinculo.
+
+    Projeto inexistente ou de outro tenant continua sendo 404: ausencia de
+    vinculo e um estado funcional normal e nao deve ser confundida com projeto
+    invisivel. Usada pelo Workspace/conferencia, nunca pelo caminho de calculo.
+    """
     projeto = _obter_projeto_do_tenant(db, projeto_id, current_user)
     base = (
         db.query(models.BaseEleitoral)
@@ -233,8 +239,17 @@ def _obter_base_principal(
         .first()
     )
     if base is None:
-        raise _nao_encontrada("Base eleitoral principal do projeto")
+        return None
     _assegurar_base_elegivel_para_projeto(base, projeto)
+    return base
+
+
+def _obter_base_principal(
+    db: Session, projeto_id: int, current_user: models.Usuario
+) -> models.BaseEleitoral:
+    base = obter_base_principal_projeto_opcional(db, projeto_id, current_user)
+    if base is None:
+        raise _nao_encontrada("Base eleitoral principal do projeto")
     return base
 
 
@@ -324,9 +339,51 @@ def listar_territorios(
     offset: int = 0,
 ):
     base = obter_base_eleitoral_visivel(db, base_id, current_user)
+    query = _aplicar_filtros_territorio(
+        db,
+        base.id,
+        tipo=tipo,
+        status_validacao=status_validacao,
+        municipio_id=municipio_id,
+        q=q,
+    )
+    return (
+        query.order_by(
+            models.TerritorioEleitoral.tipo,
+            models.TerritorioEleitoral.nome,
+            models.TerritorioEleitoral.id,
+        )
+        .offset(_normalizar_offset(offset))
+        .limit(_normalizar_limit(limit))
+        .all()
+    )
+
+
+def _normalizar_limit(limit: int) -> int:
+    return max(min(limit, 500), 1)
+
+
+def _normalizar_offset(offset: int) -> int:
+    return max(offset, 0)
+
+
+def _aplicar_filtros_territorio(
+    db: Session,
+    base_id: int,
+    *,
+    tipo: Optional[str] = None,
+    status_validacao: Optional[str] = None,
+    municipio_id: Optional[int] = None,
+    q: Optional[str] = None,
+):
+    """Filtros compartilhados entre a pagina e o total.
+
+    Contar com filtros diferentes dos itens produziria uma paginacao mentirosa,
+    entao os dois caminhos passam obrigatoriamente por aqui.
+    """
     # Geometria nao trafega crua (ADR-004): esta listagem e alfanumerica.
     query = db.query(models.TerritorioEleitoral).filter(
-        models.TerritorioEleitoral.base_eleitoral_id == base.id
+        models.TerritorioEleitoral.base_eleitoral_id == base_id
     )
     if tipo:
         query = query.filter(models.TerritorioEleitoral.tipo == tipo)
@@ -340,12 +397,92 @@ def listar_territorios(
         chave = normalizar_nome_territorio(q)
         if chave:
             query = query.filter(models.TerritorioEleitoral.nome_normalizado.contains(chave))
-    return (
-        query.order_by(models.TerritorioEleitoral.tipo, models.TerritorioEleitoral.nome, models.TerritorioEleitoral.id)
-        .offset(max(offset, 0))
-        .limit(max(min(limit, 500), 1))
+    return query
+
+
+def contar_territorios(
+    db: Session,
+    base_id: int,
+    current_user: models.Usuario,
+    *,
+    tipo: Optional[str] = None,
+    status_validacao: Optional[str] = None,
+    municipio_id: Optional[int] = None,
+    q: Optional[str] = None,
+) -> int:
+    """Total apos os filtros e antes de limit/offset."""
+    base = obter_base_eleitoral_visivel(db, base_id, current_user)
+    return _aplicar_filtros_territorio(
+        db,
+        base.id,
+        tipo=tipo,
+        status_validacao=status_validacao,
+        municipio_id=municipio_id,
+        q=q,
+    ).count()
+
+
+def contar_territorios_por_tipo(db: Session, base_id: int) -> dict:
+    """GROUP BY no banco: nao carrega os territorios para contar em Python."""
+    linhas = (
+        db.query(models.TerritorioEleitoral.tipo, func.count(models.TerritorioEleitoral.id))
+        .filter(models.TerritorioEleitoral.base_eleitoral_id == base_id)
+        .group_by(models.TerritorioEleitoral.tipo)
         .all()
     )
+    contagem = {tipo: 0 for tipo in models.TIPOS_TERRITORIO_ELEITORAL}
+    for tipo, total in linhas:
+        contagem[tipo] = int(total or 0)
+    return contagem
+
+
+def obter_raiz_estado(db: Session, base_id: int) -> Optional[models.TerritorioEleitoral]:
+    """Raiz ESTADO da base.
+
+    Saber que o total da base vive no no ESTADO e regra de dominio; o cliente
+    nao deve precisar conhece-la.
+    """
+    return (
+        db.query(models.TerritorioEleitoral)
+        .filter(
+            models.TerritorioEleitoral.base_eleitoral_id == base_id,
+            models.TerritorioEleitoral.tipo == "ESTADO",
+        )
+        .order_by(models.TerritorioEleitoral.id)
+        .first()
+    )
+
+
+def listar_importacoes(
+    db: Session, base_id: int, current_user: models.Usuario
+) -> list[models.ImportacaoBaseEleitoral]:
+    """Lotes de importacao da base, em ordem de execucao.
+
+    Nao ha unicidade garantida de importacao por base (nenhuma constraint impede
+    dois lotes na mesma versao), entao o backend NAO elege uma "importacao de
+    origem" arbitrariamente: devolve a lista auditavel e deixa a escolha
+    explicita para quem consome.
+    """
+    base = obter_base_eleitoral_visivel(db, base_id, current_user)
+    return (
+        db.query(models.ImportacaoBaseEleitoral)
+        .filter(models.ImportacaoBaseEleitoral.base_eleitoral_id == base.id)
+        .order_by(models.ImportacaoBaseEleitoral.id)
+        .all()
+    )
+
+
+def obter_auditoria_data_referencia(db: Session, base_id: int) -> Optional[dict]:
+    """Bloco estruturado gravado na raiz ESTADO, quando existir.
+
+    Nunca deduzido de `data_referencia == 01/01`: ou a auditoria foi persistida
+    na importacao, ou nao ha auditoria.
+    """
+    raiz = obter_raiz_estado(db, base_id)
+    if raiz is None:
+        return None
+    bloco = (raiz.metadados or {}).get("data_referencia_auditoria")
+    return bloco if isinstance(bloco, dict) else None
 
 
 def listar_divergencias(db: Session, base_id: int, current_user: models.Usuario) -> list[dict]:

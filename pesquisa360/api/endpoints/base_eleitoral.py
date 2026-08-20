@@ -66,6 +66,77 @@ def _contar_territorios(db: Session, base_id: int) -> int:
     )
 
 
+def _auditoria_data_referencia(db: Session, base_id: int) -> Optional[dict]:
+    """Traduz o bloco persistido para o schema explicito.
+
+    Nada de devolver `metadados` cru: o cliente recebe apenas os campos
+    previstos em AuditoriaDataReferencia.
+    """
+    bloco = service.obter_auditoria_data_referencia(db, base_id)
+    if not bloco:
+        return None
+    return {
+        "origem": bloco.get("data_referencia_origem"),
+        "convencional": bool(bloco.get("data_referencia_convencional")),
+        "data_fonte_declarada": bloco.get("data_fonte_declarada"),
+        "motivo": bloco.get("motivo"),
+        "pdf_creation_date": bloco.get("pdf_creation_date"),
+    }
+
+
+def _detalhe_completo(db: Session, base: models.BaseEleitoral) -> dict:
+    """Detalhe da base com os agregados que o Workspace precisa ler."""
+    detalhe = _base_para_item(base)
+    raiz = service.obter_raiz_estado(db, base.id)
+    operacional = raiz.eleitorado_apto if raiz is not None else None
+    declarado = raiz.eleitorado_apto_origem if raiz is not None else None
+    diferenca = (
+        declarado - operacional
+        if operacional is not None and declarado is not None
+        else None
+    )
+    # A visibilidade da base ja foi validada por quem chama este helper.
+    importacoes = (
+        db.query(models.ImportacaoBaseEleitoral)
+        .filter(models.ImportacaoBaseEleitoral.base_eleitoral_id == base.id)
+        .order_by(models.ImportacaoBaseEleitoral.id)
+        .all()
+    )
+    # Sem unicidade garantida: so preenche importacao_origem quando ha
+    # exatamente um lote. Com mais de um, a UI consulta /importacoes.
+    origem = importacoes[0] if len(importacoes) == 1 else None
+
+    detalhe.update(
+        {
+            "fonte_referencia": base.fonte_referencia,
+            "substituida_por_id": base.substituida_por_id,
+            "comparecimento_estimado": (
+                float(base.comparecimento_estimado)
+                if base.comparecimento_estimado is not None
+                else None
+            ),
+            "percentual_votos_validos": (
+                float(base.percentual_votos_validos)
+                if base.percentual_votos_validos is not None
+                else None
+            ),
+            "criado_por_id": base.criado_por_id,
+            "criado_em": base.criado_em,
+            "atualizado_em": base.atualizado_em,
+            "total_territorios": _contar_territorios(db, base.id),
+            "total_em_conferencia": service.contar_territorios_em_conferencia(db, base.id),
+            "totais_por_tipo": service.contar_territorios_por_tipo(db, base.id),
+            "eleitorado_operacional": operacional,
+            "eleitorado_declarado": declarado,
+            "diferenca_eleitorado": diferenca,
+            "auditoria_data_referencia": _auditoria_data_referencia(db, base.id),
+            "total_importacoes": len(importacoes),
+            "importacao_origem": origem,
+        }
+    )
+    return detalhe
+
+
 # --- Leitura ------------------------------------------------------------------
 
 
@@ -89,7 +160,9 @@ def listar_bases_eleitorais(
     return [_base_para_item(base) for base in bases]
 
 
-@router.get("/base-eleitoral/{base_id}", response_model=schemas.BaseEleitoralDetalhe)
+@router.get(
+    "/base-eleitoral/{base_id}", response_model=schemas.BaseEleitoralDetalheCompleto
+)
 def obter_base_eleitoral(
     *,
     db: Session = Depends(get_db),
@@ -97,34 +170,12 @@ def obter_base_eleitoral(
     current_user: models.Usuario = Depends(get_current_user),
 ):
     base = service.obter_base_eleitoral_visivel(db, base_id, current_user)
-    detalhe = _base_para_item(base)
-    detalhe.update(
-        {
-            "fonte_referencia": base.fonte_referencia,
-            "substituida_por_id": base.substituida_por_id,
-            "comparecimento_estimado": (
-                float(base.comparecimento_estimado)
-                if base.comparecimento_estimado is not None
-                else None
-            ),
-            "percentual_votos_validos": (
-                float(base.percentual_votos_validos)
-                if base.percentual_votos_validos is not None
-                else None
-            ),
-            "criado_por_id": base.criado_por_id,
-            "criado_em": base.criado_em,
-            "atualizado_em": base.atualizado_em,
-            "total_territorios": _contar_territorios(db, base.id),
-            "total_em_conferencia": service.contar_territorios_em_conferencia(db, base.id),
-        }
-    )
-    return detalhe
+    return _detalhe_completo(db, base)
 
 
 @router.get(
     "/base-eleitoral/{base_id}/territorios",
-    response_model=List[schemas.TerritorioEleitoralListItem],
+    response_model=schemas.TerritorioEleitoralPage,
 )
 def listar_territorios_base_eleitoral(
     *,
@@ -138,18 +189,69 @@ def listar_territorios_base_eleitoral(
     offset: int = Query(default=0, ge=0),
     current_user: models.Usuario = Depends(get_current_user),
 ):
+    filtros = {
+        "tipo": tipo.value if tipo else None,
+        "status_validacao": status_validacao.value if status_validacao else None,
+        "municipio_id": municipio_id,
+        "q": q,
+    }
     territorios = service.listar_territorios(
-        db,
-        base_id,
-        current_user,
-        tipo=tipo.value if tipo else None,
-        status_validacao=status_validacao.value if status_validacao else None,
-        municipio_id=municipio_id,
-        q=q,
-        limit=limit,
-        offset=offset,
+        db, base_id, current_user, limit=limit, offset=offset, **filtros
     )
-    return [_territorio_para_item(territorio) for territorio in territorios]
+    # `total` reflete os mesmos filtros, antes de limit/offset.
+    total = service.contar_territorios(db, base_id, current_user, **filtros)
+    return {
+        "items": [_territorio_para_item(territorio) for territorio in territorios],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get(
+    "/base-eleitoral/{base_id}/importacoes",
+    response_model=List[schemas.ImportacaoBaseEleitoralResumo],
+)
+def listar_importacoes_base_eleitoral(
+    *,
+    db: Session = Depends(get_db),
+    base_id: int,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    """Lotes de importacao da base, em ordem de execucao.
+
+    Nao ha constraint garantindo um unico lote por versao, entao o backend nao
+    elege uma origem arbitrariamente. Quando ha exatamente um lote, o detalhe da
+    base ja traz `importacao_origem`; com mais de um, a origem e escolhida aqui,
+    explicitamente.
+    """
+    return service.listar_importacoes(db, base_id, current_user)
+
+
+@router.get(
+    "/projetos/{projeto_id}/base-eleitoral",
+    response_model=schemas.ProjetoBaseEleitoralAtualResponse,
+)
+def obter_base_eleitoral_do_projeto(
+    *,
+    db: Session = Depends(get_db),
+    projeto_id: int,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    """Base eleitoral principal do projeto.
+
+    Projeto sem base vinculada responde 200 com `base=null`: ausencia de vinculo
+    e estado funcional normal. 404 continua significando projeto inexistente ou
+    invisivel para o tenant.
+    """
+    base = service.obter_base_principal_projeto_opcional(db, projeto_id, current_user)
+    if base is None:
+        return {"projeto_id": projeto_id, "principal": False, "base": None}
+    return {
+        "projeto_id": projeto_id,
+        "principal": True,
+        "base": _detalhe_completo(db, base),
+    }
 
 
 @router.get(

@@ -205,7 +205,7 @@ class BaseEleitoralApiTests(unittest.TestCase):
             f"/base-eleitoral/{self.privada_a.id}/territorios"
         )
         self.assertEqual(resposta.status_code, 200)
-        for item in resposta.json():
+        for item in resposta.json()["items"]:
             with self.subTest(territorio=item["nome"]):
                 self.assertNotIn("geometria", item)
                 self.assertIn("possui_geometria", item)
@@ -214,16 +214,20 @@ class BaseEleitoralApiTests(unittest.TestCase):
         cliente = self._cliente(self.usuario_a)
         base_id = self.privada_a.id
         resposta = cliente.get(f"/base-eleitoral/{base_id}/territorios", params={"tipo": "BAIRRO"})
-        self.assertEqual({item["tipo"] for item in resposta.json()}, {"BAIRRO"})
+        corpo = resposta.json()
+        self.assertEqual({item["tipo"] for item in corpo["items"]}, {"BAIRRO"})
+        self.assertEqual(corpo["total"], 3)
 
         resposta = cliente.get(
             f"/base-eleitoral/{base_id}/territorios", params={"status_validacao": "EM_CONFERENCIA"}
         )
-        self.assertEqual(len(resposta.json()), 1)
+        self.assertEqual(len(resposta.json()["items"]), 1)
+        self.assertEqual(resposta.json()["total"], 1)
 
         # Busca por acento tem de casar com a chave normalizada.
         resposta = cliente.get(f"/base-eleitoral/{base_id}/territorios", params={"q": "macapa"})
-        self.assertEqual([item["nome"] for item in resposta.json()], ["Macapá"])
+        self.assertEqual([item["nome"] for item in resposta.json()["items"]], ["Macapá"])
+        self.assertEqual(resposta.json()["total"], 1)
 
     def test_divergencias_expostas_com_origem_do_lote(self):
         resposta = self._cliente(self.usuario_a).get(

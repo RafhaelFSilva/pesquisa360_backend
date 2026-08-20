@@ -1584,6 +1584,40 @@ class TerritorioEleitoralListItem(BaseModel):
     possui_geometria: bool
 
 
+class AjusteFilhoDivergenciaResponse(BaseModel):
+    """Filho cujo valor operacional mudou apos a resolucao da propria divergencia."""
+
+    model_config = ConfigDict(extra="allow")
+
+    territorio_id: int
+    territorio: str
+    tipo: str
+    valor_anterior: int
+    valor_final: int
+    # Sinal preservado: valor_final - valor_anterior.
+    ajuste: int
+
+
+class ComposicaoValorFinalResponse(BaseModel):
+    """Como o valor operacional do territorio foi formado.
+
+    Read model calculado a partir da arvore; nada disso e persistido.
+    `soma_filhos_original` e a ancora dos ajustes -- somar os ajustes sobre o
+    valor declarado pela fonte produziria semantica errada.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    soma_filhos_original: int
+    soma_filhos_atual: Optional[int] = None
+    ajuste_total_filhos: Optional[int] = None
+    valor_operacional_final: Optional[int] = None
+    # Modulo; a UI escolhe a linguagem ("N eleitores a menos").
+    diferenca_final_fonte: Optional[int] = None
+    ajustes_filhos: List[AjusteFilhoDivergenciaResponse] = Field(default_factory=list)
+    total_filhos: int = 0
+
+
 class DivergenciaBaseEleitoralResponse(BaseModel):
     """Espelha o JSON auditado do lote; o formato varia por tipo de divergencia."""
 
@@ -1593,6 +1627,8 @@ class DivergenciaBaseEleitoralResponse(BaseModel):
     importacao_id: int
     arquivo_origem: str
     resolvida: bool = False
+    territorio_id: Optional[int] = None
+    composicao_valor_final: Optional[ComposicaoValorFinalResponse] = None
 
 
 class ResolverDivergenciaRequest(BaseModel):

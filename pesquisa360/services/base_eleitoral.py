@@ -485,6 +485,90 @@ def obter_auditoria_data_referencia(db: Session, base_id: int) -> Optional[dict]
     return bloco if isinstance(bloco, dict) else None
 
 
+def _territorios_por_chave_importacao(
+    db: Session, base_id: int, chaves: set[str]
+) -> dict[str, models.TerritorioEleitoral]:
+    """Casa divergencia -> territorio pela chave do lote, nunca pelo nome.
+
+    Nome repete entre municipios; `chave_importacao` e o mesmo identificador
+    usado por `_marcar_divergencia_resolvida`.
+    """
+    if not chaves:
+        return {}
+    territorios = (
+        db.query(models.TerritorioEleitoral)
+        .filter(models.TerritorioEleitoral.base_eleitoral_id == base_id)
+        .all()
+    )
+    encontrados: dict[str, models.TerritorioEleitoral] = {}
+    for territorio in territorios:
+        chave = (territorio.metadados or {}).get("chave_importacao")
+        if chave in chaves:
+            encontrados[chave] = territorio
+    return encontrados
+
+
+def _composicao_valor_final(
+    territorio: models.TerritorioEleitoral,
+    filhos: list[models.TerritorioEleitoral],
+    registro: dict,
+) -> Optional[dict]:
+    """Explica como o valor operacional do territorio foi formado.
+
+    Read model puro: nada e persistido. A ancora dos ajustes e
+    `soma_filhos_original` (a soma registrada na conferencia), nunca o valor
+    declarado pela fonte -- somar os ajustes sobre o declarado produziria
+    semantica errada.
+    """
+    soma_filhos_original = registro.get("valor_detalhe")
+    valor_resumo = registro.get("valor_resumo")
+    if not isinstance(soma_filhos_original, int) or not isinstance(valor_resumo, int):
+        # Divergencias que nao sao de conferencia resumo/detalhe nao tem composicao.
+        return None
+
+    computaveis = [f for f in filhos if f.eleitorado_apto is not None]
+    soma_filhos_atual = sum(f.eleitorado_apto for f in computaveis) if computaveis else None
+
+    ajustes_filhos = []
+    for filho in sorted(filhos, key=lambda f: (f.nome or "")):
+        anterior = filho.eleitorado_apto_origem
+        atual = filho.eleitorado_apto
+        if anterior is None or atual is None or anterior == atual:
+            continue
+        ajustes_filhos.append(
+            {
+                "territorio_id": filho.id,
+                "territorio": filho.nome,
+                "tipo": filho.tipo,
+                "valor_anterior": anterior,
+                "valor_final": atual,
+                "ajuste": atual - anterior,
+            }
+        )
+
+    resolucao = registro.get("resolucao") or {}
+    valor_operacional_final = resolucao.get("valor_final")
+    if not isinstance(valor_operacional_final, int):
+        valor_operacional_final = None
+
+    return {
+        "soma_filhos_original": soma_filhos_original,
+        "soma_filhos_atual": soma_filhos_atual,
+        "ajuste_total_filhos": (
+            None if soma_filhos_atual is None else soma_filhos_atual - soma_filhos_original
+        ),
+        "valor_operacional_final": valor_operacional_final,
+        # Modulo: a UI escolhe a linguagem ("N eleitores a menos").
+        "diferenca_final_fonte": (
+            None
+            if valor_operacional_final is None
+            else abs(valor_resumo - valor_operacional_final)
+        ),
+        "ajustes_filhos": ajustes_filhos,
+        "total_filhos": len(filhos),
+    }
+
+
 def listar_divergencias(db: Session, base_id: int, current_user: models.Usuario) -> list[dict]:
     base = obter_base_eleitoral_visivel(db, base_id, current_user)
     importacoes = (
@@ -500,6 +584,36 @@ def listar_divergencias(db: Session, base_id: int, current_user: models.Usuario)
             registro["importacao_id"] = importacao.id
             registro["arquivo_origem"] = importacao.arquivo_origem
             resultado.append(registro)
+
+    chaves = {
+        registro["territorio_chave"]
+        for registro in resultado
+        if isinstance(registro.get("territorio_chave"), str)
+    }
+    territorios = _territorios_por_chave_importacao(db, base.id, chaves)
+    filhos_por_pai: dict[int, list[models.TerritorioEleitoral]] = {}
+    if territorios:
+        ids_pais = [t.id for t in territorios.values()]
+        for filho in (
+            db.query(models.TerritorioEleitoral)
+            .filter(
+                models.TerritorioEleitoral.base_eleitoral_id == base.id,
+                models.TerritorioEleitoral.parent_id.in_(ids_pais),
+            )
+            .all()
+        ):
+            filhos_por_pai.setdefault(filho.parent_id, []).append(filho)
+
+    for registro in resultado:
+        territorio = territorios.get(registro.get("territorio_chave"))
+        if territorio is None:
+            continue
+        registro["territorio_id"] = territorio.id
+        composicao = _composicao_valor_final(
+            territorio, filhos_por_pai.get(territorio.id, []), registro
+        )
+        if composicao is not None:
+            registro["composicao_valor_final"] = composicao
     return resultado
 
 

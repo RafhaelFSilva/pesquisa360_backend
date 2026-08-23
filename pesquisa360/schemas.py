@@ -898,6 +898,206 @@ class MapaPreviewRequest(BaseModel):
     data_fim: Optional[datetime] = None
 
 
+# --- Mapa de Respostas Georreferenciadas (Fase 2A) ---------------------------
+#
+# Espacializa cada coleta como um ponto, categorizado pela resposta a uma
+# pergunta principal. Cor NAO faz parte deste contrato: `valor -> cor` e
+# decisao do cliente.
+#
+# Modo CRUZADO (opcional): `pergunta_secundaria_id` acrescenta uma segunda
+# categoria por coleta. O par nasce SEMPRE do mesmo `coleta_id` -- nunca do
+# encontro de dois totais agregados independentes. Ausente, o contrato e
+# byte-a-byte o de antes.
+
+
+class MapaRespostasGeoRequest(BaseModel):
+    """Recorte do universo de coletas a espacializar.
+
+    company_id nunca entra aqui: o tenant vem do JWT. Configuracao visual
+    (cores, zoom, tamanho de marcador) tambem nao pertence ao contrato.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Pergunta que define a CATEGORIA de cada ponto.
+    pergunta_id: int
+    # Categorias a exibir; so estas voltam.
+    valores: List[str] = Field(min_length=1)
+    # Segunda pergunta do cruzamento geografico. None = modo simples.
+    pergunta_secundaria_id: Optional[int] = None
+    # Categorias da segunda pergunta a exibir. None/ausente = TODAS as
+    # categorias elegiveis dela, que e o comportamento do contrato anterior.
+    valores_secundarios: Optional[List[str]] = None
+    # Dimensoes adicionais: OR dentro da pergunta, AND entre perguntas.
+    filtros_respostas: List[CruzamentoFiltroResposta] = Field(default_factory=list)
+    setor_ids: Optional[List[int]] = None
+    agente_ids: Optional[List[int]] = None
+
+    # --- Agrupamento em "Outros" ------------------------------------------
+    #
+    # Muda o PAPEL de `valores`: sem agrupamento ele FILTRA (quem nao esta na
+    # lista sai do mapa); com agrupamento ele DESTACA (quem nao esta na lista
+    # continua no mapa, reunido em um unico balde). Default False mantem o
+    # comportamento legado byte-a-byte.
+    agrupar_nao_selecionadas: bool = False
+    agrupar_nao_selecionadas_secundaria: bool = False
+
+    # Categorias que NUNCA entram no balde, mesmo desmarcadas: Branco/Nulo,
+    # NS/NR e afins. O servidor NAO adivinha quais sao -- nao existe
+    # classificador semantico no projeto, e inferir por texto mudaria em
+    # silencio a semantica dessas respostas. Quem decide e o cliente, de forma
+    # explicita e visivel ao usuario.
+    valores_preservados: List[str] = Field(default_factory=list)
+    valores_preservados_secundarios: List[str] = Field(default_factory=list)
+
+    @field_validator("valores")
+    @classmethod
+    def validar_valores(cls, value: List[str]) -> List[str]:
+        normalizados = [item.strip() for item in value]
+        if any(not item for item in normalizados):
+            raise ValueError("valores nao pode conter itens vazios")
+        if len(normalizados) != len(set(normalizados)):
+            raise ValueError("valores nao pode conter itens duplicados")
+        return normalizados
+
+    @field_validator("valores_secundarios")
+    @classmethod
+    def validar_valores_secundarios(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        # None e "sem recorte"; lista vazia seria "nenhuma categoria", que nao
+        # e uma pergunta a se fazer -- o mapa ficaria vazio por construcao.
+        if value is None:
+            return None
+        normalizados = [item.strip() for item in value]
+        if not normalizados:
+            raise ValueError("valores_secundarios nao pode ser uma lista vazia")
+        if any(not item for item in normalizados):
+            raise ValueError("valores_secundarios nao pode conter itens vazios")
+        if len(normalizados) != len(set(normalizados)):
+            raise ValueError("valores_secundarios nao pode conter itens duplicados")
+        return normalizados
+
+    @field_validator("valores_preservados", "valores_preservados_secundarios")
+    @classmethod
+    def validar_preservados(cls, value: List[str]) -> List[str]:
+        # Lista vazia e o normal: nem toda pergunta tem categoria especial.
+        normalizados = [item.strip() for item in value]
+        if any(not item for item in normalizados):
+            raise ValueError("valores preservados nao pode conter itens vazios")
+        if len(normalizados) != len(set(normalizados)):
+            raise ValueError("valores preservados nao pode conter itens duplicados")
+        return normalizados
+
+    @model_validator(mode="after")
+    def validar_filtros(self):
+        ids = [item.pergunta_id for item in self.filtros_respostas]
+        if len(ids) != len(set(ids)):
+            raise ValueError("filtros_respostas nao pode repetir pergunta_id")
+        # Preservar so faz sentido quando existe um balde de onde preservar.
+        if self.valores_preservados and not self.agrupar_nao_selecionadas:
+            raise ValueError(
+                "valores_preservados exige agrupar_nao_selecionadas"
+            )
+        if self.valores_preservados_secundarios and not self.agrupar_nao_selecionadas_secundaria:
+            raise ValueError(
+                "valores_preservados_secundarios exige agrupar_nao_selecionadas_secundaria"
+            )
+        if self.agrupar_nao_selecionadas_secundaria and self.pergunta_secundaria_id is None:
+            raise ValueError(
+                "agrupar_nao_selecionadas_secundaria exige pergunta_secundaria_id"
+            )
+        if self.pergunta_secundaria_id is None and self.valores_secundarios is not None:
+            raise ValueError(
+                "valores_secundarios exige pergunta_secundaria_id"
+            )
+        if self.pergunta_secundaria_id is not None:
+            # Cruzar uma pergunta com ela mesma nao produz par: produz a
+            # diagonal, que ja e o modo simples.
+            if self.pergunta_secundaria_id == self.pergunta_id:
+                raise ValueError(
+                    "pergunta_secundaria_id nao pode ser igual a pergunta_id"
+                )
+            # A secundaria e eixo do cruzamento; usa-la tambem como recorte
+            # daria dois papeis a mesma pergunta na mesma leitura.
+            if self.pergunta_secundaria_id in ids:
+                raise ValueError(
+                    "pergunta_secundaria_id nao pode aparecer em filtros_respostas"
+                )
+        return self
+
+
+class MapaRespostasGeoResumo(BaseModel):
+    # Universo da PESQUISA: nenhum filtro alem do tenant.
+    total_universo: int
+    # Universo ANALITICO: apos os filtros estruturais (setor, agente e
+    # dimensoes de resposta) e ANTES da selecao de categorias. E este o
+    # denominador do "% do universo": marcar ou desmarcar uma resposta nao
+    # pode mexer no denominador, senao o percentual muda de significado a
+    # cada clique.
+    total_universo_analitico: int
+    # Coletas efetivamente representadas (com categoria atribuida). Sem
+    # agrupamento e o recorte destacado; com agrupamento tende ao universo
+    # analitico, porque as nao selecionadas permanecem como "Outros".
+    total_filtrado: int
+    total_com_coordenada: int
+    # Contabilizadas, nunca descartadas em silencio nem colocadas em (0,0).
+    total_sem_coordenada: int
+    # Modo cruzado: coletas com categoria na principal mas sem valor unico na
+    # secundaria. Ficam de fora do par e sao declaradas, nunca mascaradas.
+    # NAO inclui quem foi excluido por `valores_secundarios`: aquilo e recorte
+    # pedido pelo usuario, nao ausencia de resposta.
+    total_sem_par: int = 0
+    # No universo analitico, quantas coletas nao produziram valor unico na
+    # pergunta principal. Explica a diferenca entre universo analitico e
+    # representados sem que o cliente precise deduzir por subtracao.
+    total_sem_categoria: int = 0
+
+
+class MapaRespostasGeoCategoria(BaseModel):
+    valor: str
+    total: int
+    # True apenas no balde de nao selecionadas. A identidade da categoria e o
+    # PAR (valor, agrupado): uma pergunta pode ter uma opcao real chamada
+    # "Outros", e ela continua sendo uma categoria comum, distinta do balde.
+    agrupado: bool = False
+
+
+class MapaRespostasGeoCombinacao(BaseModel):
+    """Par observado na MESMA coleta, nunca o encontro de dois totais."""
+
+    valor: str
+    valor_secundario: str
+    total: int
+    agrupado: bool = False
+    agrupado_secundario: bool = False
+
+
+class MapaRespostasGeoPonto(BaseModel):
+    """Payload minimo: nenhum dado pessoal do entrevistado."""
+
+    coleta_id: int
+    # lat/lng conforme ADR-005 para rotas novas; nunca geometria PostGIS crua.
+    lat: float
+    lng: float
+    valor: str
+    # Preenchido apenas no modo cruzado; e a resposta da MESMA coleta.
+    valor_secundario: Optional[str] = None
+    setor_id: Optional[int] = None
+    agrupado: bool = False
+    agrupado_secundario: bool = False
+
+
+class MapaRespostasGeoResponse(BaseModel):
+    pesquisa_id: int
+    pergunta_id: int
+    pergunta_secundaria_id: Optional[int] = None
+    resumo: MapaRespostasGeoResumo
+    # Ordenadas por total DESC; empate resolvido pela ordem original enviada.
+    categorias: List[MapaRespostasGeoCategoria] = Field(default_factory=list)
+    # Vazio no modo simples.
+    combinacoes: List[MapaRespostasGeoCombinacao] = Field(default_factory=list)
+    pontos: List[MapaRespostasGeoPonto] = Field(default_factory=list)
+
+
 class TipoRelatorioExecutivo(StrEnum):
     MAPAS = "MAPAS"
     EXECUTIVO = "EXECUTIVO"

@@ -9,6 +9,7 @@ from pesquisa360.services.multidimensional_cross import (
     build_multidimensional_cross,
     get_multidimensional_cross_options,
 )
+from pesquisa360.services import mapa_respostas_geo
 
 router = APIRouter()
 
@@ -87,6 +88,46 @@ def read_mapa_preview(
         pesquisa_id=pesquisa_id,
         current_user=current_user,
         payload=payload,
+    )
+
+
+@router.post(
+    "/relatorios/pesquisas/{pesquisa_id}/mapas/respostas-georreferenciadas/",
+    response_model=schemas.MapaRespostasGeoResponse,
+)
+def read_mapa_respostas_georreferenciadas(
+    *,
+    db: Session = Depends(get_db),
+    pesquisa_id: int,
+    payload: schemas.MapaRespostasGeoRequest,
+    current_user: models.Usuario = Depends(get_current_user)
+):
+    """Coletas individuais como pontos, categorizadas pela pergunta principal.
+
+    POST porque o recorte aceita N dimensoes de filtro. O tenant vem do JWT;
+    pesquisa de outra empresa responde 404, nunca 403.
+
+    `pergunta_secundaria_id` opcional liga o modo cruzado: a mesma coleta passa
+    a carregar duas categorias. Ausente, a resposta e a de sempre.
+    """
+    return mapa_respostas_geo.gerar_mapa_respostas_geo(
+        db,
+        pesquisa_id=pesquisa_id,
+        pergunta_id=payload.pergunta_id,
+        pergunta_secundaria_id=payload.pergunta_secundaria_id,
+        valores_secundarios=payload.valores_secundarios,
+        valores=payload.valores,
+        filtros_respostas=[
+            {"pergunta_id": item.pergunta_id, "valores": item.valores}
+            for item in payload.filtros_respostas
+        ],
+        setor_ids=payload.setor_ids,
+        agente_ids=payload.agente_ids,
+        agrupar_nao_selecionadas=payload.agrupar_nao_selecionadas,
+        agrupar_nao_selecionadas_secundaria=payload.agrupar_nao_selecionadas_secundaria,
+        valores_preservados=payload.valores_preservados,
+        valores_preservados_secundarios=payload.valores_preservados_secundarios,
+        current_user=current_user,
     )
 
 

@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from pesquisa360 import crud
 from pesquisa360.db import models
+from pesquisa360.services.filtros_universo import aplicar_filtros_respostas
 from pesquisa360.services import base_eleitoral as base_service
 
 # --- Motivos de indisponibilidade --------------------------------------------
@@ -121,18 +122,9 @@ def _valores_reportaveis(
     return valores
 
 
-def _aplicar_filtros(
-    coleta_ids: Iterable[int], valores: dict, filtros: Sequence[tuple[int, set]]
-) -> list[int]:
-    """OR dentro dos valores da mesma pergunta, AND entre perguntas distintas."""
-    if not filtros:
-        return list(coleta_ids)
-    selecionadas = []
-    for coleta_id in coleta_ids:
-        respostas = valores.get(coleta_id, {})
-        if all(respostas.get(pergunta_id, set()) & permitidos for pergunta_id, permitidos in filtros):
-            selecionadas.append(coleta_id)
-    return selecionadas
+# Semantica compartilhada com o Mapa de Respostas Georreferenciadas:
+# OR dentro da pergunta, AND entre perguntas. Uma implementacao so.
+_aplicar_filtros = aplicar_filtros_respostas
 
 
 def _medir(

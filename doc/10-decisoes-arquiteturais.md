@@ -414,3 +414,154 @@ alterações administrativas. A mudança destes parâmetros, portanto, **não é
 historiada** — apenas `atualizado_em` muda. Guardar histórico em campo
 inadequado seria pior que a ausência; a trilha depende de uma decisão futura
 sobre auditoria transversal.
+
+## ADR-026 — Mapa de Respostas Georreferenciadas: o filtro define o universo
+
+**Rota.** `POST /relatorios/pesquisas/{pesquisa_id}/mapas/respostas-georreferenciadas/`
+
+`POST` porque o recorte aceita N dimensões de filtro, o que não cabe em query
+string. O prefixo segue o padrão já consolidado dos Mapas Estratégicos.
+
+**Payload.**
+
+```json
+{
+  "pergunta_id": 57,
+  "valores": ["Candidato A", "Candidato B"],
+  "filtros_respostas": [
+    {"pergunta_id": 52, "valores": ["Feminino"]},
+    {"pergunta_id": 53, "valores": ["25-34", "35-44"]}
+  ],
+  "setor_ids": [33],
+  "agente_ids": []
+}
+```
+
+`company_id` é recusado (`extra="forbid"`): o tenant vem do JWT. Configuração
+visual — cores, zoom, tamanho de marcador — também não pertence ao contrato.
+
+**Resposta.** `resumo` (universo/filtrado/com coordenada/sem coordenada),
+`categorias` (valor + total) e `pontos` (`coleta_id`, `lat`, `lng`, `valor`,
+`setor_id`). Nenhum dado pessoal do entrevistado.
+
+**Semântica dos filtros.** OR dentro dos valores da mesma pergunta, AND entre
+perguntas distintas. Isto é **restrição de universo**, não geração de tabela
+cruzada — o cruzamento em árvore continua em `multidimensional_cross`. A
+implementação vive em `services/filtros_universo.py`, compartilhada com a
+Gestão de Lideranças: uma semântica, um código.
+
+**Tipos suportados.** Apenas categóricas de **resposta única**
+(`ESCOLHA_SIMPLES` e seus aliases) e espontâneas já categorizadas.
+`MULTIPLA_ESCOLHA` é recusada com 422: uma coleta produz um ponto, e duas
+categorias no mesmo ponto seriam ambíguas cartograficamente. Suportá-la exige
+uma decisão de produto sobre como representar isso, e fica para uma fase futura.
+
+**Regra de coordenada.** `coalesce(localizacao_inicio, localizacao_fim)`, a
+mesma `_coleta_ponto_referencia` dos demais Mapas Estratégicos — a mesma coleta
+cai no mesmo lugar em todos eles. Coordenada ausente ou fora de faixa entra em
+`total_sem_coordenada`; nunca vira `(0,0)` nem é descartada em silêncio.
+
+**Setor.** Pertencimento pela regra espacial oficial
+(`classificar_coletas_por_setor` → `ST_Covers`), em lote. Coletas não têm coluna
+`setor_id`, e o cliente não determina pertencimento.
+
+**Multitenancy.** `_validar_pesquisa_relatorio` (Pesquisa ⋈ Projeto ⋈
+company_id) mais `Coleta.company_id`. Recurso de outro tenant responde **404**,
+nunca 403.
+
+**Limitações do MVP.** Sem paginação: o mapa analítico precisa representar todo
+o universo filtrado, e truncar em silêncio produziria leitura territorial falsa.
+Medição no DEV: 1000 coletas → 696 pontos em **10 queries constantes**. Se o
+volume crescer a ponto de exigir limite, as alternativas a avaliar são cluster,
+Canvas, simplificação de payload e recorte por viewport — nenhuma implementada
+aqui.
+
+## ADR-027 — Agrupamento em "Outros" e os dois denominadores da legenda
+
+Evolução do ADR-026. Contrato **aditivo**: sem os campos novos, requisição e
+resposta continuam byte-a-byte as de antes.
+
+### O problema
+
+`total_filtrado` misturava dois recortes de naturezas diferentes: os filtros
+**estruturais** (setor, agente, dimensões de resposta) e a **seleção de
+categorias** (`valores` / `valores_secundarios`). Consequência: ao destacar dois
+candidatos, o universo caía de 1.000 para 48 e todo percentual passava a ter
+denominador móvel — mudava a cada clique do usuário.
+
+### Universo analítico
+
+```
+total_universo             pesquisa inteira, só o tenant
+total_universo_analitico   após os filtros ESTRUTURAIS, antes da seleção  ← novo
+total_filtrado             coletas efetivamente representadas
+total_sem_categoria        no universo analítico, sem valor único em A     ← novo
+```
+
+`total_universo_analitico` é o **denominador do "% do universo"**. Sai de
+`len(coleta_ids)` logo após `aplicar_filtros_respostas`, onde os estruturais já
+rodaram e a seleção ainda não — **zero consulta adicional**.
+
+`total_sem_categoria` existe para o cliente não precisar deduzir a diferença por
+subtração: universo analítico = representados + sem categoria (+ `total_sem_par`
+no modo cruzado).
+
+### Seleção: filtrar ou destacar
+
+`agrupar_nao_selecionadas` muda o **papel** de `valores`:
+
+| | papel de `valores` | não selecionadas |
+|---|---|---|
+| `false` (padrão) | FILTRA | saem do mapa |
+| `true` | DESTACA | viram o balde "Outros" |
+
+O caminho sem agrupamento é **exatamente** o legado — a interseção com os
+permitidos acontece antes da exigência de valor único, o que importa para
+espontâneas, onde uma coleta pode ter mais de um valor reportável. Trocar essa
+ordem mudaria o resultado de perguntas espontâneas em silêncio.
+
+Agrupar **não afrouxa a regra cartográfica**: uma coleta sem valor único
+continua fora do mapa. E, no cruzamento, "Outros" reúne quem **respondeu** outra
+coisa — nunca quem não respondeu, que permanece em `total_sem_par`.
+
+### Identidade da categoria
+
+A identidade é o **par `(valor, agrupado)`**, nunca o texto sozinho. Uma
+pergunta pode ter uma opção real chamada "Outros"; ela e o balde convivem na
+mesma resposta como duas linhas distintas. O cliente pinta o balde de cinza pela
+**flag**, não pelo rótulo.
+
+### Branco/Nulo e NS/NR
+
+O projeto **não tem classificador semântico** — nem no backend nem no frontend.
+Inferir essas categorias por texto no servidor mudaria em silêncio a semântica
+de respostas que o instituto precisa ler separadas.
+
+Por isso o servidor **não adivinha**: recebe `valores_preservados` explícito. A
+interface sugere os candidatos por heurística de texto, exibe a sugestão marcada
+e deixa o usuário ajustar. A decisão viaja explícita; a heurística é visível.
+
+`valores_preservados` sem `agrupar_nao_selecionadas` é **422**: preservar de um
+balde que não existe é instrução sem efeito, e aceitá-la em silêncio esconderia
+um erro de chamada.
+
+### Os dois percentuais da legenda (frontend)
+
+Denominadores diferentes **sempre rotulados**, nunca `percentual1`/`percentual2`:
+
+| percentual | denominador | quando |
+|---|---|---|
+| `% do universo` | `total_universo_analitico` | sempre |
+| `% do recorte` | soma das linhas exibidas | agrupamento desligado |
+| `% do grupo` | total da categoria de A na linha | agrupamento ligado |
+
+O segundo percentual é **suprimido** quando não informa nada: denominador
+ausente, a linha é o próprio denominador (seria sempre 100%), ou o denominador
+coincide com o universo (repetiria o número ao lado).
+
+### Performance
+
+Com agrupamento, o payload de pontos cresce para o universo analítico inteiro —
+é o objetivo declarado da funcionalidade ("as demais respostas continuam no
+mapa"). O número de consultas **não muda**: continua constante, como no ADR-026.
+A ausência de paginação segue valendo pelas mesmas razões.

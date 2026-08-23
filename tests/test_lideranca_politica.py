@@ -781,6 +781,226 @@ class ApiTests(_LiderancaFixture):
         self.assertEqual(resposta.status_code, 422)
 
 
+class PosicionamentoTests(_LiderancaFixture):
+    """BASE / OPOSICAO / INDEFINIDA como atributo da lideranca (Fase 2)."""
+
+    def test_nao_existe_entidade_separada_para_oposicao(self):
+        # A decisao de dominio: um unico CRUD descreve os dois campos politicos.
+        tabelas = set(models.Base.metadata.tables)
+        for proibida in ("liderancas_oposicao", "oposicoes", "liderancas_base"):
+            with self.subTest(tabela=proibida):
+                self.assertNotIn(proibida, tabelas)
+
+    def test_lideranca_existente_recebe_indefinida(self):
+        # Simula a linha que ja existia antes da coluna: o INSERT nao cita
+        # posicionamento, entao quem responde e o server_default da migration.
+        self._sql(
+            "INSERT INTO liderancas_politicas (id,projeto_id,nome,ativo) VALUES"
+            " (900,100,'Antiga',1)"
+        )
+        self.session.commit()
+        antiga = self.session.get(models.LiderancaPolitica, 900)
+        self.session.refresh(antiga)
+        self.assertEqual(antiga.posicionamento, "INDEFINIDA")
+
+    def test_criar_sem_informar_posicionamento_e_indefinida(self):
+        cliente = self._cliente(self.gerente_a)
+        criada = cliente.post("/projetos/100/liderancas", json={"nome": "Sem campo"})
+        self.assertEqual(criada.status_code, 201)
+        self.assertEqual(criada.json()["posicionamento"], "INDEFINIDA")
+
+    def test_criar_com_cada_posicionamento_valido(self):
+        cliente = self._cliente(self.gerente_a)
+        for valor in ("BASE", "OPOSICAO", "INDEFINIDA"):
+            with self.subTest(posicionamento=valor):
+                criada = cliente.post(
+                    "/projetos/100/liderancas",
+                    json={"nome": "Lideranca " + valor, "posicionamento": valor},
+                )
+                self.assertEqual(criada.status_code, 201)
+                self.assertEqual(criada.json()["posicionamento"], valor)
+
+    def test_valor_invalido_e_rejeitado_com_422(self):
+        cliente = self._cliente(self.gerente_a)
+        for invalido in ("ALIADO", "base", "Oposicao", "", None, 1):
+            with self.subTest(valor=invalido):
+                resposta = cliente.post(
+                    "/projetos/100/liderancas",
+                    json={"nome": "X", "posicionamento": invalido},
+                )
+                self.assertEqual(resposta.status_code, 422)
+
+    def test_servico_tambem_rejeita_valor_fora_do_dominio(self):
+        # Chamada interna nao passa pelo Pydantic; a barreira precisa existir.
+        with self.assertRaises(HTTPException) as erro:
+            service.criar_lideranca(
+                self.session, 100, "Y", self.gerente_a, posicionamento="ALIADO"
+            )
+        self.assertEqual(erro.exception.status_code, 422)
+
+    def test_patch_base_para_oposicao_e_de_volta_para_indefinida(self):
+        cliente = self._cliente(self.gerente_a)
+        lideranca_id = cliente.post(
+            "/projetos/100/liderancas", json={"nome": "Vira-casaca", "posicionamento": "BASE"}
+        ).json()["id"]
+
+        virou = cliente.patch(
+            "/projetos/100/liderancas/" + str(lideranca_id), json={"posicionamento": "OPOSICAO"}
+        )
+        self.assertEqual(virou.json()["posicionamento"], "OPOSICAO")
+
+        soltou = cliente.patch(
+            "/projetos/100/liderancas/" + str(lideranca_id), json={"posicionamento": "INDEFINIDA"}
+        )
+        self.assertEqual(soltou.json()["posicionamento"], "INDEFINIDA")
+
+    def test_patch_sem_o_campo_nao_altera_o_posicionamento(self):
+        cliente = self._cliente(self.gerente_a)
+        lideranca_id = cliente.post(
+            "/projetos/100/liderancas", json={"nome": "Estavel", "posicionamento": "OPOSICAO"}
+        ).json()["id"]
+
+        renomeada = cliente.patch(
+            "/projetos/100/liderancas/" + str(lideranca_id), json={"nome": "Estavel II"}
+        )
+        self.assertEqual(renomeada.json()["nome"], "Estavel II")
+        self.assertEqual(renomeada.json()["posicionamento"], "OPOSICAO")
+
+    def test_patch_com_valor_invalido_nao_persiste_nada(self):
+        cliente = self._cliente(self.gerente_a)
+        lideranca_id = cliente.post(
+            "/projetos/100/liderancas", json={"nome": "Intacta", "posicionamento": "BASE"}
+        ).json()["id"]
+
+        recusado = cliente.patch(
+            "/projetos/100/liderancas/" + str(lideranca_id),
+            json={"nome": "Alterada", "posicionamento": "ALIADO"},
+        )
+        self.assertEqual(recusado.status_code, 422)
+        atual = cliente.get("/projetos/100/liderancas/" + str(lideranca_id)).json()
+        self.assertEqual(atual["nome"], "Intacta")
+        self.assertEqual(atual["posicionamento"], "BASE")
+
+    def _semear_tres(self, cliente):
+        semente = (("A-Base", "BASE"), ("B-Oposicao", "OPOSICAO"), ("C-Indef", "INDEFINIDA"))
+        for nome, valor in semente:
+            cliente.post(
+                "/projetos/100/liderancas", json={"nome": nome, "posicionamento": valor}
+            )
+
+    def test_listagem_sem_filtro_devolve_todas(self):
+        cliente = self._cliente(self.gerente_a)
+        self._semear_tres(cliente)
+        listagem = cliente.get("/projetos/100/liderancas")
+        self.assertEqual(len(listagem.json()), 3)
+
+    def test_listagem_filtra_por_posicionamento(self):
+        cliente = self._cliente(self.gerente_a)
+        self._semear_tres(cliente)
+        casos = (("BASE", "A-Base"), ("OPOSICAO", "B-Oposicao"), ("INDEFINIDA", "C-Indef"))
+        for valor, nome_esperado in casos:
+            with self.subTest(posicionamento=valor):
+                filtrada = cliente.get(
+                    "/projetos/100/liderancas?posicionamento=" + valor
+                ).json()
+                self.assertEqual([item["nome"] for item in filtrada], [nome_esperado])
+
+    def test_filtro_invalido_na_listagem_e_422(self):
+        cliente = self._cliente(self.gerente_a)
+        self.assertEqual(
+            cliente.get("/projetos/100/liderancas?posicionamento=ALIADO").status_code, 422
+        )
+
+    def test_filtro_respeita_o_soft_delete(self):
+        cliente = self._cliente(self.gerente_a)
+        lideranca_id = cliente.post(
+            "/projetos/100/liderancas", json={"nome": "Saiu", "posicionamento": "BASE"}
+        ).json()["id"]
+        cliente.delete("/projetos/100/liderancas/" + str(lideranca_id))
+
+        self.assertEqual(cliente.get("/projetos/100/liderancas?posicionamento=BASE").json(), [])
+        incluindo = cliente.get(
+            "/projetos/100/liderancas?posicionamento=BASE&incluir_inativas=true"
+        ).json()
+        self.assertEqual(len(incluindo), 1)
+
+    def test_payload_continua_recusando_company_id(self):
+        cliente = self._cliente(self.gerente_a)
+        resposta = cliente.post(
+            "/projetos/100/liderancas",
+            json={"nome": "X", "posicionamento": "BASE", "company_id": 20},
+        )
+        self.assertEqual(resposta.status_code, 422)
+
+
+class PosicionamentoMultitenancyTests(_LiderancaFixture):
+    """Empresa A x Empresa B: o posicionamento nao abre nenhuma fresta."""
+
+    def setUp(self):
+        super().setUp()
+        self.cliente_a = self._cliente(self.gerente_a)
+        self.cliente_b = self._cliente(self.gerente_b)
+        self.lideranca_a = self.cliente_a.post(
+            "/projetos/100/liderancas", json={"nome": "Da empresa A", "posicionamento": "BASE"}
+        ).json()["id"]
+        self.lideranca_b = self.cliente_b.post(
+            "/projetos/200/liderancas", json={"nome": "Da empresa B", "posicionamento": "OPOSICAO"}
+        ).json()["id"]
+
+    def test_cada_empresa_so_enxerga_a_propria_lideranca(self):
+        nomes_a = [item["nome"] for item in self.cliente_a.get("/projetos/100/liderancas").json()]
+        nomes_b = [item["nome"] for item in self.cliente_b.get("/projetos/200/liderancas").json()]
+        self.assertEqual(nomes_a, ["Da empresa A"])
+        self.assertEqual(nomes_b, ["Da empresa B"])
+
+    def test_a_nao_le_lideranca_de_b_e_vice_versa(self):
+        casos = (
+            (self.cliente_a, 200, self.lideranca_b),
+            (self.cliente_b, 100, self.lideranca_a),
+        )
+        for cliente, projeto_id, lideranca_id in casos:
+            with self.subTest(projeto=projeto_id):
+                resposta = cliente.get(
+                    "/projetos/" + str(projeto_id) + "/liderancas/" + str(lideranca_id)
+                )
+                # 404, nunca 403: a resposta nao revela que a lideranca existe.
+                self.assertEqual(resposta.status_code, 404)
+
+    def test_a_nao_altera_o_posicionamento_de_b_e_vice_versa(self):
+        casos = (
+            (self.cliente_a, 200, self.lideranca_b),
+            (self.cliente_b, 100, self.lideranca_a),
+        )
+        for cliente, projeto_id, lideranca_id in casos:
+            with self.subTest(projeto=projeto_id):
+                resposta = cliente.patch(
+                    "/projetos/" + str(projeto_id) + "/liderancas/" + str(lideranca_id),
+                    json={"posicionamento": "INDEFINIDA"},
+                )
+                self.assertEqual(resposta.status_code, 404)
+
+        # Nenhum dos dois lados mudou.
+        atual_a = self.cliente_a.get(
+            "/projetos/100/liderancas/" + str(self.lideranca_a)
+        ).json()
+        atual_b = self.cliente_b.get(
+            "/projetos/200/liderancas/" + str(self.lideranca_b)
+        ).json()
+        self.assertEqual(atual_a["posicionamento"], "BASE")
+        self.assertEqual(atual_b["posicionamento"], "OPOSICAO")
+
+    def test_filtro_nao_vaza_lideranca_do_outro_tenant(self):
+        # B tem uma OPOSICAO; A filtrando por OPOSICAO no proprio projeto ve nada.
+        self.assertEqual(
+            self.cliente_a.get("/projetos/100/liderancas?posicionamento=OPOSICAO").json(), []
+        )
+        # E A filtrando dentro do projeto de B nem chega a filtrar: 404.
+        self.assertEqual(
+            self.cliente_a.get("/projetos/200/liderancas?posicionamento=OPOSICAO").status_code,
+            404,
+        )
+
+
 class NomenclaturaTests(unittest.TestCase):
     def test_conceito_de_mapa_permanece_intacto(self):
         from pesquisa360 import schemas as s

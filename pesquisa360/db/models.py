@@ -713,13 +713,25 @@ class ImportacaoBaseEleitoral(Base):
 # A lideranca pertence ao PROJETO (campanha) e sobrevive as ondas. Setor e cota
 # variam por onda, entao vivem em lideranca_pesquisa_config; os bairros da Base
 # Eleitoral sao a ancora territorial estavel, em lideranca_territorio_eleitoral.
+#
+# POSICIONAMENTO e atributo da lideranca, nao entidade separada: BASE e OPOSICAO
+# sao a mesma pessoa cadastrada em campos politicos opostos, com o mesmo CRUD,
+# a mesma cota e os mesmos bairros. Nao existe tabela de oposicao (ADR).
+POSICIONAMENTOS_LIDERANCA = ("BASE", "OPOSICAO", "INDEFINIDA")
+# Lideranca ja cadastrada nunca e presumida aliada: o default e INDEFINIDA.
+POSICIONAMENTO_LIDERANCA_PADRAO = "INDEFINIDA"
 
 
 class LiderancaPolitica(Base):
     __tablename__ = "liderancas_politicas"
     __table_args__ = (
+        CheckConstraint(
+            _sql_in("posicionamento", POSICIONAMENTOS_LIDERANCA),
+            name="ck_liderancas_politicas_posicionamento",
+        ),
         Index("ix_liderancas_politicas_projeto", "projeto_id"),
         Index("ix_liderancas_politicas_ativo", "ativo"),
+        Index("ix_liderancas_politicas_posicionamento", "posicionamento"),
     )
 
     id = Column(Integer, primary_key=True)
@@ -729,6 +741,14 @@ class LiderancaPolitica(Base):
     # Preparada para o mapa de uma fase futura; nao usada nesta.
     localizacao = Column(Geometry(geometry_type="POINT", srid=4326), nullable=True)
     ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    # Campo politico da lideranca. Sem valor definido a lideranca e INDEFINIDA;
+    # jamais BASE por omissao.
+    posicionamento = Column(
+        String,
+        nullable=False,
+        default=POSICIONAMENTO_LIDERANCA_PADRAO,
+        server_default=POSICIONAMENTO_LIDERANCA_PADRAO,
+    )
     criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     atualizado_em = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()

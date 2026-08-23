@@ -4,7 +4,7 @@ Todas ao nivel de PROJETO: a lideranca politica e da campanha, nao da onda.
 Nenhuma rota aceita company_id; recurso de outro tenant responde 404.
 """
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -32,6 +32,7 @@ def _lideranca_response(db: Session, lideranca: models.LiderancaPolitica) -> dic
         "id": lideranca.id,
         "nome": lideranca.nome,
         "ativo": lideranca.ativo,
+        "posicionamento": lideranca.posicionamento,
         "criado_em": lideranca.criado_em,
         "atualizado_em": lideranca.atualizado_em,
         # Nunca a geometria PostGIS crua (ADR-004).
@@ -63,10 +64,16 @@ def listar_liderancas(
     db: Session = Depends(get_db),
     projeto_id: int,
     incluir_inativas: bool = False,
+    # Ausente devolve todas: chamadas existentes nao mudam de comportamento.
+    posicionamento: Optional[schemas.PosicionamentoLideranca] = None,
     current_user: models.Usuario = Depends(get_current_user),
 ):
     liderancas = service.listar_liderancas(
-        db, projeto_id, current_user, incluir_inativas=incluir_inativas
+        db,
+        projeto_id,
+        current_user,
+        incluir_inativas=incluir_inativas,
+        posicionamento=posicionamento.value if posicionamento else None,
     )
     return [_lideranca_response(db, lideranca) for lideranca in liderancas]
 
@@ -83,7 +90,13 @@ def criar_lideranca(
     payload: schemas.LiderancaPoliticaCreate,
     current_user: models.Usuario = Depends(get_current_user),
 ):
-    lideranca = service.criar_lideranca(db, projeto_id, payload.nome, current_user)
+    lideranca = service.criar_lideranca(
+        db,
+        projeto_id,
+        payload.nome,
+        current_user,
+        posicionamento=payload.posicionamento.value,
+    )
     return _lideranca_response(db, lideranca)
 
 
@@ -126,6 +139,7 @@ def atualizar_lideranca(
         current_user,
         nome=payload.nome,
         ativo=payload.ativo,
+        posicionamento=payload.posicionamento.value if payload.posicionamento else None,
         **extras,
     )
     return _lideranca_response(db, lideranca)

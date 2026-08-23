@@ -74,22 +74,50 @@ def listar_liderancas(
     current_user: models.Usuario,
     *,
     incluir_inativas: bool = False,
+    posicionamento: Optional[str] = None,
 ) -> list[models.LiderancaPolitica]:
+    """`posicionamento=None` mantem o comportamento antigo: devolve todas."""
     projeto = obter_projeto(db, projeto_id, current_user)
     query = db.query(models.LiderancaPolitica).filter(
         models.LiderancaPolitica.projeto_id == projeto.id
     )
     if not incluir_inativas:
         query = query.filter(models.LiderancaPolitica.ativo.is_(True))
+    if posicionamento is not None:
+        query = query.filter(models.LiderancaPolitica.posicionamento == posicionamento)
     return query.order_by(models.LiderancaPolitica.nome, models.LiderancaPolitica.id).all()
 
 
+def _validar_posicionamento(valor: str) -> str:
+    """Ultima barreira do dominio.
+
+    O schema ja rejeita valor fora da lista com 422; isto protege as chamadas
+    internas de servico, que nao passam pelo Pydantic.
+    """
+    if valor not in models.POSICIONAMENTOS_LIDERANCA:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="posicionamento invalido.",
+        )
+    return valor
+
+
 def criar_lideranca(
-    db: Session, projeto_id: int, nome: str, current_user: models.Usuario
+    db: Session,
+    projeto_id: int,
+    nome: str,
+    current_user: models.Usuario,
+    *,
+    posicionamento: str = models.POSICIONAMENTO_LIDERANCA_PADRAO,
 ) -> models.LiderancaPolitica:
+    """Chamada antiga, sem posicionamento, continua criando INDEFINIDA."""
     projeto = obter_projeto(db, projeto_id, current_user)
     assegurar_permissao_escrita(db, current_user)
-    lideranca = models.LiderancaPolitica(projeto_id=projeto.id, nome=nome.strip())
+    lideranca = models.LiderancaPolitica(
+        projeto_id=projeto.id,
+        nome=nome.strip(),
+        posicionamento=_validar_posicionamento(posicionamento),
+    )
     db.add(lideranca)
     try:
         db.commit()
@@ -125,6 +153,7 @@ def atualizar_lideranca(
     nome: Optional[str] = None,
     ativo: Optional[bool] = None,
     localizacao=NAO_INFORMADO,
+    posicionamento: Optional[str] = None,
 ) -> models.LiderancaPolitica:
     lideranca = obter_lideranca(db, projeto_id, lideranca_id, current_user)
     assegurar_permissao_escrita(db, current_user)
@@ -132,6 +161,9 @@ def atualizar_lideranca(
         lideranca.nome = nome.strip()
     if ativo is not None:
         lideranca.ativo = ativo
+    if posicionamento is not None:
+        # Nao mexe em cota, bairros nem config da onda: so troca o campo politico.
+        lideranca.posicionamento = _validar_posicionamento(posicionamento)
     if localizacao is not NAO_INFORMADO:
         # Nao toca em setor, cota, bairros nem config da onda.
         lideranca.localizacao = _ponto_para_geometria(localizacao)

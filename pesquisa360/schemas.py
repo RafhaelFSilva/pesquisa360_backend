@@ -1983,6 +1983,22 @@ class TerritorioEleitoralPage(BaseModel):
 # Nenhum request aceita company_id: o tenant vem do JWT.
 
 
+class PosicionamentoLideranca(StrEnum):
+    """Campo politico da lideranca.
+
+    BASE       = vinculada ao grupo politico analisado
+    OPOSICAO   = pertencente ao campo adversario
+    INDEFINIDA = ainda sem classificacao
+
+    E atributo, nao entidade: BASE e OPOSICAO compartilham CRUD, cota e
+    territorios. Valor fora do dominio e 422, nunca coercao silenciosa.
+    """
+
+    BASE = "BASE"
+    OPOSICAO = "OPOSICAO"
+    INDEFINIDA = "INDEFINIDA"
+
+
 class MotivoIndisponibilidadeLideranca(StrEnum):
     SEM_COTA = "SEM_COTA"
     SEM_TERRITORIO_ELEITORAL = "SEM_TERRITORIO_ELEITORAL"
@@ -2034,6 +2050,8 @@ class LiderancaPoliticaCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nome: str = Field(min_length=1)
+    # Omitido = INDEFINIDA. Cadastro nunca presume que a lideranca e aliada.
+    posicionamento: PosicionamentoLideranca = PosicionamentoLideranca.INDEFINIDA
 
     @field_validator("nome")
     @classmethod
@@ -2051,6 +2069,9 @@ class LiderancaPoliticaUpdate(BaseModel):
     ativo: Optional[bool] = None
     # Campo ausente mantem a posicao; null explicito remove.
     localizacao: Optional[PontoGeoJSON] = None
+    # Ausente = nao altera. Nao aceita null: posicionamento sempre tem valor,
+    # e "sem classificacao" se escreve INDEFINIDA.
+    posicionamento: Optional[PosicionamentoLideranca] = None
 
     @field_validator("nome")
     @classmethod
@@ -2093,6 +2114,7 @@ class LiderancaPoliticaResponse(BaseModel):
     id: int
     nome: str
     ativo: bool
+    posicionamento: PosicionamentoLideranca
     criado_em: datetime
     atualizado_em: datetime
     # NULL e estado valido: lideranca sem ponto no mapa.
@@ -2188,6 +2210,9 @@ class LiderancaRecorteFiltrado(BaseModel):
 class LiderancaAnaliseItem(BaseModel):
     id: int
     nome: str
+    # Acompanha a analise para que o mapa distinga BASE de OPOSICAO sem uma
+    # segunda chamada. Nao participa de nenhum calculo desta fase.
+    posicionamento: PosicionamentoLideranca = PosicionamentoLideranca.INDEFINIDA
     setor: Optional[LiderancaSetorItem] = None
     territorios: List[LiderancaTerritorioItem] = Field(default_factory=list)
     cota_votos_validos: Optional[int] = None

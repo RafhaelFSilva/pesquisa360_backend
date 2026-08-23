@@ -565,3 +565,119 @@ Com agrupamento, o payload de pontos cresce para o universo analítico inteiro �
 é o objetivo declarado da funcionalidade ("as demais respostas continuam no
 mapa"). O número de consultas **não muda**: continua constante, como no ADR-026.
 A ausência de paginação segue valendo pelas mesmas razões.
+
+## ADR-028 — Posicionamento é atributo da liderança, não entidade
+
+`BASE`, `OPOSICAO` e `INDEFINIDA` são valores de uma coluna em
+`liderancas_politicas`. Não existem `liderancas_oposicao`, `oposicoes` nem
+`liderancas_base`.
+
+```text
+LiderancaPolitica
+  └── posicionamento   VARCHAR NOT NULL DEFAULT 'INDEFINIDA'
+                       CHECK IN ('BASE','OPOSICAO','INDEFINIDA')
+```
+
+Motivo: uma liderança de oposição é a **mesma coisa** que uma liderança de base
+— tem nome, setor por onda, cota de votos válidos e bairros da Base Eleitoral.
+Duplicar a entidade duplicaria CRUD, multitenancy, analytics e migrations para
+descrever uma única diferença: de que lado ela está. O que muda é um atributo,
+então é um atributo.
+
+Consequências:
+
+- o CRUD é um só; filtrar por campo político é
+  `GET /projetos/{id}/liderancas?posicionamento=OPOSICAO`, e a ausência do
+  parâmetro devolve todas, como antes;
+- o tenant continua derivando de `LiderancaPolitica -> Projeto -> company_id`;
+  posicionamento não é chave de acesso e não abre exceção ao 404 de outro tenant;
+- o domínio segue `String + CHECK` (como `TerritorioEleitoral.tipo`), não
+  `sa.Enum`: o valor viaja como texto do início ao fim e o banco recusa o resto.
+
+### O padrão é INDEFINIDA, nunca BASE
+
+Liderança já cadastrada recebe `INDEFINIDA` pelo `server_default` da migration.
+Presumir `BASE` atribuiria em silêncio um campo político a milhares de registros
+que ninguém classificou — e o erro seria invisível, porque um dado errado com
+cara de dado certo não gera pergunta. `INDEFINIDA` é um estado honesto: diz que
+a informação não existe, em vez de inventá-la.
+
+Pelo mesmo motivo, criar sem informar `posicionamento` resulta em `INDEFINIDA`,
+e o formulário abre nesse valor.
+
+### Posicionamento e Gap/Plus são conceitos distintos
+
+Posicionamento diz **de que lado** a liderança está. Gap/Plus diz **como ela
+está performando** contra a cota. São eixos independentes: existe liderança de
+oposição em PLUS e liderança de base em GAP.
+
+Os dois convivem no mapa sem compartilhar variável nem paleta — posicionamento
+usa azul/vermelho/cinza, Gap/Plus usa verde/âmbar/teal. A regra de negócio lê
+`lideranca.posicionamento`; **cor é representação, não fonte de verdade**:
+
+```ts
+switch (lideranca.posicionamento) { case 'BASE': ... }   // correto
+if (markerColor === 'red') { /* oposição */ }            // errado
+```
+
+---
+
+## ADR-029 — Cobertura eleitoral usa o universo do Setor, ou não existe
+
+O percentual de cobertura de uma liderança responde: **quanto do eleitorado
+daquele Setor ela cobre**.
+
+```text
+cobertura_percentual = eleitorado_coberto_lideranca / eleitorado_total_do_setor
+```
+
+O denominador é o Setor. Município, projeto e estado **não são substitutos**.
+Trocar o denominador muda a pergunta que o número responde: 3.000 eleitores
+sobre um setor de 10.000 é 30% de cobertura; os mesmos 3.000 sobre um município
+de 200.000 é 1,5% — e nenhum dos dois números é "aproximadamente" o outro. Um
+fallback silencioso para o município produziria percentuais que parecem baixos
+por falha da liderança quando na verdade são baixos por troca de universo.
+
+### Sem setor confiável, o percentual é indisponível
+
+Quando não há Setor de referência, o sistema mostra o **valor absoluto** de
+eleitorado coberto e `cobertura_percentual: null`, com motivo explícito
+(`SEM_SETOR_REFERENCIA`). Segue o padrão de indisponibilidade já usado na
+análise de liderança (ADR-024): ausência declarada, nunca número inventado.
+
+### Não existe associação Setor × Território Eleitoral
+
+Hoje `Setor` e `TerritorioEleitoral` não têm vínculo formal — nem FK, nem tabela
+associativa, nem campo que determine o setor de um território. A ausência é
+**deliberada** e está guardada por teste
+(`RegressaoEscopoFase2Tests.test_setor_continua_sem_vinculo_eleitoral_automatico`).
+
+Enquanto esse vínculo não existir, o denominador do Setor não é calculável e o
+indicador **não deve ser implementado**. Similaridade de nome entre setor e
+bairro não é associação auditável.
+
+---
+
+## ADR-030 — Área geográfica e eleitorado são grandezas diferentes
+
+Interseção espacial (`ST_Intersection`) informa **área**. Não informa eleitores.
+
+Converter percentual de área em percentual de eleitorado assume distribuição
+uniforme da população pelo território — uma premissa que quase nunca vale: metade
+da área de um bairro pode conter 5% dos seus eleitores. O sistema não faz essa
+conversão automaticamente.
+
+### Território disputado usa unidades completas
+
+Quando duas lideranças de campos opostos atuam na mesma região, o eleitorado
+disputado é a soma dos territórios **em comum**, deduplicados por
+`territorio_eleitoral_id`:
+
+```text
+Base:     A + B + C
+Oposição: B + C + D
+Comuns:   B + C  ->  eleitorado(B) + eleitorado(C)
+```
+
+O modo geométrico pode informar a área da interseção como dado espacial, mas não
+produz eleitorado estimado sem uma metodologia própria e declarada.

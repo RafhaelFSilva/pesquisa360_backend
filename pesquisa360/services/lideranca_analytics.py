@@ -388,6 +388,7 @@ def analisar_liderancas(
             {
                 "id": lideranca.id,
                 "nome": lideranca.nome,
+                "posicionamento": lideranca.posicionamento,
                 "setor": (
                     {"id": config.setor.id, "nome": config.setor.nome}
                     if config is not None and config.setor is not None

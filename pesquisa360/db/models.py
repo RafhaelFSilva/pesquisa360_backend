@@ -703,6 +703,60 @@ class ImportacaoBaseEleitoral(Base):
     executado_por = relationship("Usuario", foreign_keys=[executado_por_id])
 
 
+
+# ==============================================================================
+# COMPOSICAO ELEITORAL DO SETOR
+# ==============================================================================
+# Setor e divisao operacional/analitica da Pesquisa; TerritorioEleitoral pertence
+# a Base Eleitoral. Sao conceitos distintos e o sistema nao infere um do outro:
+# a composicao e declarada pelo usuario, nunca deduzida por geometria, nome ou
+# proximidade.
+#
+# O schema e generico (aponta para territorio_eleitoral.id, qualquer tipo). A
+# REGRA de servico hoje aceita apenas BAIRRO, porque e a unica unidade com
+# cobertura de eleitorado na Base atual. Quando existir base com SECAO, a
+# estrutura ja comporta.
+
+
+class SetorTerritorioEleitoral(Base):
+    """Unidades da Base Eleitoral que compoem o universo de um Setor.
+
+    N:N. Sem company_id: o tenant deriva de setor -> pesquisa -> projeto. Sem
+    pesquisa_id: e derivavel por setor.pesquisa_id, e denormalizar so para
+    viabilizar um UNIQUE(pesquisa_id, territorio) descreveria a regra errada --
+    a exclusividade vale entre setores ANALITICOS, o que depende de
+    setores.finalidade e nao cabe num UNIQUE simples.
+    """
+
+    __tablename__ = "setor_territorio_eleitoral"
+    __table_args__ = (
+        # Impede o mesmo bairro duas vezes no MESMO setor. A exclusividade
+        # ENTRE setores analiticos vive no servico (depende de finalidade).
+        UniqueConstraint(
+            "setor_id", "territorio_eleitoral_id", name="uq_setor_territorio"
+        ),
+        Index("ix_setor_territorio_setor", "setor_id"),
+        Index("ix_setor_territorio_territorio", "territorio_eleitoral_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    # Setor tem delete FISICO (endpoint delete_setor_by_projeto_pesquisa):
+    # CASCADE, pois o vinculo nao significa nada sem o setor.
+    setor_id = Column(
+        Integer, ForeignKey("setores.id", ondelete="CASCADE"), nullable=False
+    )
+    # Mesma politica de lideranca_territorio_eleitoral: territorio morre junto
+    # com a base, e o vinculo morre junto com o territorio.
+    territorio_eleitoral_id = Column(
+        Integer, ForeignKey("territorio_eleitoral.id", ondelete="CASCADE"), nullable=False
+    )
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    setor = relationship("Setor", foreign_keys=[setor_id])
+    territorio_eleitoral = relationship(
+        "TerritorioEleitoral", foreign_keys=[territorio_eleitoral_id]
+    )
+
 # ==============================================================================
 # GESTAO DE LIDERANCAS
 # ==============================================================================

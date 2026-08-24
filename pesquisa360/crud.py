@@ -1317,6 +1317,16 @@ def update_setor(
     if "finalidade" in fields_set:
         if setor_update.finalidade is None:
             raise ValueError("Finalidade do setor e obrigatoria quando informada.")
+        # Import local: services.setor_territorio depende de FINALIDADES_ANALITICAS
+        # daqui, entao o import no topo fecharia ciclo.
+        from pesquisa360.services import setor_territorio
+
+        # Porta lateral: um setor OPERACAO pode compartilhar bairros com a malha
+        # analitica. Ao virar RELATORIO/AMBOS essa sobreposicao legitima viraria
+        # dupla contagem, entao a promocao e barrada enquanto houver conflito.
+        setor_territorio.assegurar_finalidade_sem_conflito(
+            db, db_setor, setor_update.finalidade.value
+        )
         db_setor.finalidade = setor_update.finalidade.value
     if "agente_id" in fields_set:
         db_setor.agente_id = setor_update.agente_id

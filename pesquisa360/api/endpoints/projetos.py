@@ -15,6 +15,7 @@ from pesquisa360.core.dependencies import (
     require_manager_or_superadmin,
 )
 from pesquisa360.core.utils import web_point
+from pesquisa360.services import setor_territorio
 from pesquisa360.question_types import normalize_question_type
 
 router = APIRouter()
@@ -664,6 +665,93 @@ def delete_setor_by_projeto_pesquisa(
     db.delete(db_setor)
     db.commit()
     return {"message": "Setor excluído com sucesso"}
+
+
+# --- Composicao eleitoral do Setor -------------------------------------------
+# Rota propria em vez de inflar a listagem de setores: a listagem serve o app do
+# agente e o mapa de setores, que nao precisam da composicao a cada chamada.
+
+
+def _setor_territorio_item(territorio: models.TerritorioEleitoral) -> dict:
+    return {
+        "id": territorio.id,
+        "nome": territorio.nome,
+        "municipio_id": territorio.municipio_id,
+        "eleitorado_apto": territorio.eleitorado_apto,
+    }
+
+
+@router.get(
+    "/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores/{setor_id}/territorios",
+    response_model=List[schemas.SetorTerritorioItem],
+)
+def listar_territorios_do_setor(
+    projeto_id: int,
+    pesquisa_id: int,
+    setor_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    """Composicao eleitoral atual do Setor. Setor de outro tenant responde 404."""
+    setor = setor_territorio.obter_setor(db, projeto_id, pesquisa_id, setor_id, current_user)
+    return [
+        _setor_territorio_item(territorio)
+        for territorio in setor_territorio.listar_territorios(db, setor.id)
+    ]
+
+
+@router.get(
+    "/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores/{setor_id}/universo-eleitoral",
+    response_model=schemas.UniversoEleitoralSetorResponse,
+)
+def obter_universo_eleitoral_do_setor(
+    projeto_id: int,
+    pesquisa_id: int,
+    setor_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    """Eleitores aptos que compoem o Setor na Base principal ATUAL do projeto.
+
+    Rota propria em vez de engordar a listagem de setores, que serve o app do
+    agente e o mapa e nao precisa deste calculo a cada chamada.
+
+    Derivado em leitura; nada e persistido. Indisponibilidade vem com motivo
+    explicito, nunca como zero.
+    """
+    return setor_territorio.obter_universo_eleitoral_setor(
+        db, projeto_id, pesquisa_id, setor_id, current_user
+    )
+
+
+@router.put(
+    "/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores/{setor_id}/territorios",
+    response_model=List[schemas.SetorTerritorioItem],
+)
+def definir_territorios_do_setor(
+    projeto_id: int,
+    pesquisa_id: int,
+    setor_id: int,
+    payload: schemas.SetorTerritoriosRequest,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    """Substitui integralmente a composicao eleitoral do Setor.
+
+    Idempotente e transacional: o conjunto enviado passa a ser a composicao, e
+    qualquer recusa deixa a composicao anterior intacta. Bairro ja usado por
+    outro setor analitico da mesma pesquisa responde 409.
+    """
+    territorios = setor_territorio.definir_territorios(
+        db,
+        projeto_id,
+        pesquisa_id,
+        setor_id,
+        payload.territorio_eleitoral_ids,
+        current_user,
+    )
+    return [_setor_territorio_item(territorio) for territorio in territorios]
+
 
 @router.get("/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores")
 def list_setores_by_projeto_pesquisa(

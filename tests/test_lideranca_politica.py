@@ -7,6 +7,7 @@ O cenario analitico segue exatamente a fixture controlada do escopo:
 """
 
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -28,6 +29,7 @@ from pesquisa360.core.dependencies import get_current_user, get_db
 from pesquisa360.db import models
 from pesquisa360.services import lideranca as service
 from pesquisa360.services import lideranca_analytics as analytics
+from pesquisa360.services import setor_territorio
 
 from tests.test_base_eleitoral_import import run_alembic_upgrade
 
@@ -54,6 +56,16 @@ class _LiderancaFixture(unittest.TestCase):
             dbapi_connection.create_function("GeomFromEWKT", 1, lambda valor: valor)
             dbapi_connection.create_function("ST_GeomFromEWKT", 1, lambda valor: valor)
             dbapi_connection.create_function("AsEWKB", 1, lambda valor: valor)
+            # A classificacao territorial por setor usa AsGeoJSON; ate a Fase
+            # 3B.1 nenhum teste daqui exercitava o escopo SETOR, entao a funcao
+            # nunca fizera falta. SQLite nao tem PostGIS.
+            dbapi_connection.create_function("AsGeoJSON", 1, lambda valor: None)
+            dbapi_connection.create_function("ST_AsGeoJSON", 1, lambda valor: None)
+            # Classificacao de coleta por setor le as coordenadas do ponto.
+            # As coletas desta fixture nao tem localizacao, entao None mantem o
+            # comportamento real: coleta sem coordenada nao entra em setor algum.
+            dbapi_connection.create_function("ST_X", 1, lambda valor: None)
+            dbapi_connection.create_function("ST_Y", 1, lambda valor: None)
 
         self.Session = sessionmaker(bind=self.engine)
         self.session = self.Session()
@@ -64,6 +76,7 @@ class _LiderancaFixture(unittest.TestCase):
 
     def _limpar(self):
         for tabela in (
+            "setor_territorio_eleitoral",
             "lideranca_territorio_eleitoral",
             "lideranca_pesquisa_config",
             "liderancas_politicas",
@@ -998,6 +1011,691 @@ class PosicionamentoMultitenancyTests(_LiderancaFixture):
         self.assertEqual(
             self.cliente_a.get("/projetos/200/liderancas?posicionamento=OPOSICAO").status_code,
             404,
+        )
+
+
+class _CoberturaFixture(_LiderancaFixture):
+    """Cenario territorial do escopo (Fase 3B.1).
+
+    Setor 30:  B 8.000 + C 5.000 + E 7.000  -> universo 20.000
+    Lideranca: A 5.000 + B 8.000 + C 5.000 + D 4.000
+
+    Intersecao B+C = 13.000 -> 65,00%. A e D ficam de fora do denominador.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.bA = self._bairro("Cob A", 5000)
+        self.bB = self._bairro("Cob B", 8000)
+        self.bC = self._bairro("Cob C", 5000)
+        self.bD = self._bairro("Cob D", 4000)
+        self.bE = self._bairro("Cob E", 7000)
+
+    def _municipio_da_base(self, base):
+        """MUNICIPIO daquela base.
+
+        `self.municipio` da fixture aponta para a ultima base criada, e a FK
+        composta exige pai e filho na MESMA base -- resolver pela base evita
+        cruzar as duas sem querer. Cria a arvore se a base ainda nao tiver.
+        """
+        municipio = (
+            self.session.query(models.TerritorioEleitoral)
+            .filter(
+                models.TerritorioEleitoral.base_eleitoral_id == base.id,
+                models.TerritorioEleitoral.tipo == "MUNICIPIO",
+            )
+            .first()
+        )
+        if municipio is not None:
+            return municipio
+        estado = models.TerritorioEleitoral(
+            base_eleitoral_id=base.id, tipo="ESTADO", nome="Amapa",
+            nome_normalizado="amapa",
+        )
+        self.session.add(estado)
+        self.session.commit()
+        municipio = models.TerritorioEleitoral(
+            base_eleitoral_id=base.id, tipo="MUNICIPIO", nome="Macapa",
+            nome_normalizado="macapa", parent_id=estado.id,
+        )
+        self.session.add(municipio)
+        self.session.commit()
+        return municipio
+
+    def _bairro(self, nome, aptos, base=None, municipio=None):
+        alvo = base or self.base
+        pai = municipio or self._municipio_da_base(alvo)
+        territorio = models.TerritorioEleitoral(
+            base_eleitoral_id=alvo.id,
+            tipo="BAIRRO",
+            nome=nome,
+            nome_normalizado=nome.lower(),
+            parent_id=pai.id,
+            municipio_id=pai.id,
+            eleitorado_apto=aptos,
+        )
+        self.session.add(territorio)
+        self.session.commit()
+        return territorio
+
+    def _compor_setor(self, setor_id, territorios):
+        self.session.query(models.SetorTerritorioEleitoral).filter(
+            models.SetorTerritorioEleitoral.setor_id == setor_id
+        ).delete(synchronize_session=False)
+        for territorio in territorios:
+            self.session.add(
+                models.SetorTerritorioEleitoral(
+                    setor_id=setor_id, territorio_eleitoral_id=territorio.id
+                )
+            )
+        self.session.commit()
+
+    def _lideranca_com(self, territorios, *, setor_id=30, cota=3000, nome="Cobertura"):
+        lideranca = self._criar_lideranca(nome=nome)
+        service.definir_config_pesquisa(
+            self.session, 100, lideranca.id, 10, self.gerente_a,
+            setor_id=setor_id, cota_votos_validos=cota,
+        )
+        if territorios:
+            self.session.query(models.LiderancaTerritorioEleitoral).filter(
+                models.LiderancaTerritorioEleitoral.lideranca_id == lideranca.id
+            ).delete(synchronize_session=False)
+            for territorio in territorios:
+                self.session.add(
+                    models.LiderancaTerritorioEleitoral(
+                        lideranca_id=lideranca.id, territorio_eleitoral_id=territorio.id
+                    )
+                )
+            self.session.commit()
+        return lideranca
+
+    def _cobertura(self, lideranca):
+        item = next(
+            linha for linha in self._analisar()["liderancas"] if linha["id"] == lideranca.id
+        )
+        return item["cobertura_eleitoral"]
+
+
+class CoberturaDisponivelTests(_CoberturaFixture):
+    def test_cobertura_parcial_do_escopo(self):
+        self._compor_setor(30, [self.bB, self.bC, self.bE])
+        lideranca = self._lideranca_com([self.bA, self.bB, self.bC, self.bD])
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(cobertura["status"], "DISPONIVEL")
+        self.assertIsNone(cobertura["motivo_indisponibilidade"])
+        self.assertEqual(cobertura["setor_id"], 30)
+        self.assertEqual(cobertura["universo_eleitoral_setor"], 20000)
+        self.assertEqual(cobertura["quantidade_territorios_lideranca"], 4)
+        self.assertEqual(cobertura["quantidade_territorios_cobertos"], 2)
+        self.assertEqual(cobertura["eleitorado_coberto"], 13000)
+        self.assertEqual(cobertura["cobertura_percentual"], 65.0)
+
+    def test_cobertura_total_fecha_exatamente_em_cem(self):
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bA, self.bB])
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        # Exatamente 100.0, sem 99.99 nem 100.01 de ponto flutuante.
+        self.assertEqual(cobertura["cobertura_percentual"], 100.0)
+        self.assertEqual(cobertura["eleitorado_coberto"], 13000)
+        self.assertEqual(cobertura["universo_eleitoral_setor"], 13000)
+
+    def test_lideranca_mais_ampla_que_o_setor_nao_passa_de_cem(self):
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bA, self.bB, self.bC, self.bD, self.bE])
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(cobertura["cobertura_percentual"], 100.0)
+        self.assertLessEqual(cobertura["cobertura_percentual"], 100.0)
+        # C, D e E existem na lideranca mas nao no denominador daquele setor.
+        self.assertEqual(cobertura["quantidade_territorios_lideranca"], 5)
+        self.assertEqual(cobertura["quantidade_territorios_cobertos"], 2)
+
+    def test_zero_verdadeiro_e_disponivel(self):
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bC, self.bD])
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        # A informacao existe: a cobertura naquele setor e efetivamente zero.
+        self.assertEqual(cobertura["status"], "DISPONIVEL")
+        self.assertIsNone(cobertura["motivo_indisponibilidade"])
+        self.assertEqual(cobertura["eleitorado_coberto"], 0)
+        self.assertEqual(cobertura["cobertura_percentual"], 0.0)
+        self.assertEqual(cobertura["quantidade_territorios_cobertos"], 0)
+        # E nao null: zero real nao e ausencia de informacao.
+        self.assertIsNotNone(cobertura["eleitorado_coberto"])
+
+    def test_percentual_sempre_entre_zero_e_cem(self):
+        casos = (
+            ([self.bB, self.bC, self.bE], [self.bA, self.bB, self.bC, self.bD]),
+            ([self.bA, self.bB], [self.bA, self.bB]),
+            ([self.bA, self.bB], [self.bC, self.bD]),
+            ([self.bA], [self.bA, self.bB, self.bC, self.bD, self.bE]),
+        )
+        self._semear_coletas(total=100, alvo=50)
+        for indice, (setor, lider) in enumerate(casos):
+            with self.subTest(caso=indice):
+                self._compor_setor(30, setor)
+                lideranca = self._lideranca_com(lider, nome=f"L{indice}")
+                cobertura = self._cobertura(lideranca)
+                self.assertEqual(cobertura["status"], "DISPONIVEL")
+                self.assertGreaterEqual(cobertura["cobertura_percentual"], 0)
+                self.assertLessEqual(cobertura["cobertura_percentual"], 100)
+
+    def test_intersecao_usa_id_e_nao_nome(self):
+        # Bairro homonimo em outro municipio: mesmo nome, id diferente.
+        outro_municipio = models.TerritorioEleitoral(
+            base_eleitoral_id=self.base.id, tipo="MUNICIPIO", nome="Santana",
+            nome_normalizado="santana",
+            parent_id=self._municipio_da_base(self.base).parent_id,
+        )
+        self.session.add(outro_municipio)
+        self.session.commit()
+        homonimo = self._bairro("Cob B", 9999, municipio=outro_municipio)
+
+        self._compor_setor(30, [self.bB])
+        lideranca = self._lideranca_com([homonimo])
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(homonimo.nome, self.bB.nome)
+        # Nomes iguais, ids diferentes: nao ha intersecao.
+        self.assertEqual(cobertura["eleitorado_coberto"], 0)
+        self.assertEqual(cobertura["cobertura_percentual"], 0.0)
+
+    def test_soma_nao_multiplica_o_mesmo_bairro(self):
+        self._compor_setor(30, [self.bB, self.bC])
+        lideranca = self._lideranca_com([self.bB])
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        # 8.000 uma vez, nao 16.000.
+        self.assertEqual(cobertura["eleitorado_coberto"], 8000)
+        self.assertEqual(cobertura["quantidade_territorios_cobertos"], 1)
+
+
+class CoberturaIndisponivelTests(_CoberturaFixture):
+    def test_sem_setor_de_referencia(self):
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bA], setor_id=None)
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(cobertura["status"], "INDISPONIVEL")
+        self.assertEqual(cobertura["motivo_indisponibilidade"], "SEM_SETOR_REFERENCIA")
+        self.assertIsNone(cobertura["setor_id"])
+        self.assertIsNone(cobertura["universo_eleitoral_setor"])
+        self.assertIsNone(cobertura["eleitorado_coberto"])
+        self.assertIsNone(cobertura["cobertura_percentual"])
+
+    def test_sem_setor_nao_usa_denominador_alternativo(self):
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bA], setor_id=None)
+        self._semear_coletas(total=100, alvo=50)
+        cobertura = self._cobertura(lideranca)
+        # Nem municipio, nem projeto, nem a soma dos proprios bairros.
+        self.assertIsNone(cobertura["universo_eleitoral_setor"])
+        self.assertNotEqual(cobertura["cobertura_percentual"], 100.0)
+
+    def test_lideranca_sem_territorio(self):
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([], setor_id=30)
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(
+            cobertura["motivo_indisponibilidade"], "SEM_TERRITORIO_ELEITORAL_LIDERANCA"
+        )
+        self.assertIsNone(cobertura["eleitorado_coberto"])
+        self.assertIsNone(cobertura["cobertura_percentual"])
+        # Nunca 0%: nao ha informacao para medir.
+        self.assertNotEqual(cobertura["cobertura_percentual"], 0.0)
+        # O denominador existe e e informado: falta o numerador, nao o setor.
+        self.assertEqual(cobertura["universo_eleitoral_setor"], 13000)
+
+    def test_eleitorado_nulo_na_lideranca(self):
+        sem_valor = self._bairro("Cob Sem Valor", None)
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bA, sem_valor])
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(
+            cobertura["motivo_indisponibilidade"],
+            "ELEITORADO_TERRITORIO_LIDERANCA_INDISPONIVEL",
+        )
+        self.assertIsNone(cobertura["eleitorado_coberto"])
+        # NULL nao virou zero: nao devolveu os 5.000 de A.
+        self.assertNotEqual(cobertura["eleitorado_coberto"], 5000)
+
+    def test_universo_do_setor_zero_nao_divide_por_zero(self):
+        zerado_a = self._bairro("Cob Zero A", 0)
+        zerado_b = self._bairro("Cob Zero B", 0)
+        self._compor_setor(30, [zerado_a, zerado_b])
+        lideranca = self._lideranca_com([zerado_a])
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(cobertura["motivo_indisponibilidade"], "UNIVERSO_ELEITORAL_ZERO")
+        self.assertIsNone(cobertura["cobertura_percentual"])
+
+
+class CoberturaBaseStaleTests(_CoberturaFixture):
+    def _trocar_base_principal(self):
+        nova = self._criar_base(company_id=10, versao="a-nova")
+        self.session.execute(
+            text("UPDATE projeto_base_eleitoral SET principal = 0 WHERE projeto_id = 100")
+        )
+        self.session.add(
+            models.ProjetoBaseEleitoral(
+                projeto_id=100, base_eleitoral_id=nova.id, principal=True
+            )
+        )
+        self.session.commit()
+        return nova
+
+    def test_territorios_da_lideranca_de_base_anterior(self):
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bA, self.bB])
+        self._semear_coletas(total=100, alvo=50)
+        self.assertEqual(self._cobertura(lideranca)["status"], "DISPONIVEL")
+
+        self._trocar_base_principal()
+
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(cobertura["status"], "INDISPONIVEL")
+        self.assertIsNone(cobertura["eleitorado_coberto"])
+        self.assertIsNone(cobertura["cobertura_percentual"])
+
+    def test_vinculos_da_lideranca_sao_preservados(self):
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bA, self.bB])
+        self._semear_coletas(total=100, alvo=50)
+        self._trocar_base_principal()
+
+        persistidos = self.session.execute(
+            text(
+                "SELECT count(*) FROM lideranca_territorio_eleitoral WHERE lideranca_id = :i"
+            ).bindparams(i=lideranca.id)
+        ).scalar()
+        self.assertEqual(persistidos, 2)
+
+    def test_lideranca_parcialmente_stale(self):
+        nova = self._criar_base(company_id=10, versao="a-parcial")
+        atual = self._bairro("Cob Novo", 3000, base=nova)
+        # Municipio/parent da base nova para o territorio novo ficar coerente.
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bA])
+        self.session.add(
+            models.LiderancaTerritorioEleitoral(
+                lideranca_id=lideranca.id, territorio_eleitoral_id=atual.id
+            )
+        )
+        self.session.commit()
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(
+            cobertura["motivo_indisponibilidade"], "TERRITORIO_LIDERANCA_BASE_DESATUALIZADA"
+        )
+        self.assertIsNone(cobertura["eleitorado_coberto"])
+        # Nem os 5.000 do bairro que esta na base atual.
+        self.assertNotEqual(cobertura["eleitorado_coberto"], 5000)
+
+    def test_o_vinculo_antigo_nao_migra_sozinho(self):
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bA])
+        self._semear_coletas(total=100, alvo=50)
+        self._trocar_base_principal()
+
+        # Trocar a base principal desatualiza os DOIS lados de uma vez. Pela
+        # precedencia (denominador antes do numerador), quem aparece e o motivo
+        # do Setor -- e e o certo: nao adianta reconfigurar a lideranca antes de
+        # o setor voltar a ter universo. O motivo proprio da lideranca aparece
+        # em test_lideranca_parcialmente_stale, onde so ela esta desatualizada.
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(
+            cobertura["motivo_indisponibilidade"], "COMPOSICAO_BASE_DESATUALIZADA"
+        )
+        self.assertIsNone(cobertura["cobertura_percentual"])
+
+        # Nenhum casamento por nome em nenhum dos lados: o vinculo continua
+        # apontando para a base anterior ate reconfiguracao explicita.
+        persistidos = self.session.execute(
+            text(
+                "SELECT territorio_eleitoral_id FROM lideranca_territorio_eleitoral"
+                " WHERE lideranca_id = :i"
+            ).bindparams(i=lideranca.id)
+        ).scalars().all()
+        self.assertEqual(persistidos, [self.bA.id])
+
+
+class CoberturaPropagacaoDoSetorTests(_CoberturaFixture):
+    """Problema do denominador propaga o motivo do Setor, sem sinonimos."""
+
+    def _preparar(self, territorios_setor=None):
+        if territorios_setor is not None:
+            self._compor_setor(30, territorios_setor)
+        lideranca = self._lideranca_com([self.bA, self.bB])
+        self._semear_coletas(total=100, alvo=50)
+        return lideranca
+
+    def test_setor_sem_composicao(self):
+        lideranca = self._preparar([])
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(cobertura["motivo_indisponibilidade"], "SEM_COMPOSICAO_ELEITORAL")
+        self.assertIsNone(cobertura["cobertura_percentual"])
+
+    def test_composicao_do_setor_desatualizada(self):
+        nova = self._criar_base(company_id=10, versao="a-setor")
+        bairro_novo = self._bairro("Setor Novo", 1000, base=nova)
+        self._compor_setor(30, [self.bA])
+        lideranca = self._lideranca_com([bairro_novo])
+        self._semear_coletas(total=100, alvo=50)
+        # Base principal passa a ser a nova: a composicao do setor fica velha.
+        self.session.execute(
+            text("UPDATE projeto_base_eleitoral SET principal = 0 WHERE projeto_id = 100")
+        )
+        self.session.add(
+            models.ProjetoBaseEleitoral(
+                projeto_id=100, base_eleitoral_id=nova.id, principal=True
+            )
+        )
+        self.session.commit()
+
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(
+            cobertura["motivo_indisponibilidade"], "COMPOSICAO_BASE_DESATUALIZADA"
+        )
+        self.assertIsNone(cobertura["cobertura_percentual"])
+
+    def test_projeto_sem_base_principal(self):
+        lideranca = self._preparar([self.bA, self.bB])
+        self.session.execute(
+            text("DELETE FROM projeto_base_eleitoral WHERE projeto_id = 100")
+        )
+        self.session.commit()
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(
+            cobertura["motivo_indisponibilidade"], "BASE_ELEITORAL_NAO_CONFIGURADA"
+        )
+
+    def test_base_principal_nao_validada(self):
+        lideranca = self._preparar([self.bA, self.bB])
+        self.session.execute(
+            text("UPDATE base_eleitoral SET status = 'EM_CONFERENCIA' WHERE id = :i")
+            .bindparams(i=self.base.id)
+        )
+        self.session.commit()
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(
+            cobertura["motivo_indisponibilidade"], "BASE_ELEITORAL_NAO_VALIDADA"
+        )
+
+    def test_eleitorado_ausente_no_setor(self):
+        sem_valor = self._bairro("Setor Sem Valor", None)
+        lideranca = self._preparar([self.bA, sem_valor])
+        cobertura = self._cobertura(lideranca)
+        self.assertEqual(
+            cobertura["motivo_indisponibilidade"], "ELEITORADO_TERRITORIO_INDISPONIVEL"
+        )
+
+    def test_motivos_do_setor_nao_ganham_sinonimo(self):
+        from pesquisa360 import schemas as s
+
+        motivos = {m.value for m in s.MotivoCoberturaEleitoral}
+        for proibido in ("COBERTURA_SEM_COMPOSICAO", "COBERTURA_BASE_NAO_VALIDADA"):
+            self.assertNotIn(proibido, motivos)
+        # Todos os estados do universo aparecem tal como o Setor os emite.
+        herdados = {m.value for m in s.StatusUniversoEleitoralSetor} - {"DISPONIVEL"}
+        self.assertTrue(herdados <= motivos)
+
+
+class CoberturaPrecedenciaTests(_CoberturaFixture):
+    """Ordem determinística: denominador antes do numerador."""
+
+    def test_sem_setor_vence_sem_territorio(self):
+        lideranca = self._lideranca_com([], setor_id=None)
+        self._semear_coletas(total=100, alvo=50)
+        self.assertEqual(
+            self._cobertura(lideranca)["motivo_indisponibilidade"], "SEM_SETOR_REFERENCIA"
+        )
+
+    def test_universo_indisponivel_vence_lideranca_sem_territorio(self):
+        self._compor_setor(30, [])
+        lideranca = self._lideranca_com([], setor_id=30)
+        self._semear_coletas(total=100, alvo=50)
+        # O denominador falta primeiro; adianta pouco reclamar do numerador.
+        self.assertEqual(
+            self._cobertura(lideranca)["motivo_indisponibilidade"],
+            "SEM_COMPOSICAO_ELEITORAL",
+        )
+
+    def test_base_stale_da_lideranca_vence_eleitorado_nulo(self):
+        nova = self._criar_base(company_id=10, versao="a-prec")
+        stale_com_nulo = self._bairro("Cob Stale Nulo", None, base=nova)
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bA])
+        self.session.add(
+            models.LiderancaTerritorioEleitoral(
+                lideranca_id=lideranca.id, territorio_eleitoral_id=stale_com_nulo.id
+            )
+        )
+        self.session.commit()
+        self._semear_coletas(total=100, alvo=50)
+        self.assertEqual(
+            self._cobertura(lideranca)["motivo_indisponibilidade"],
+            "TERRITORIO_LIDERANCA_BASE_DESATUALIZADA",
+        )
+
+
+class CoberturaMultitenancyTests(_CoberturaFixture):
+    def test_analise_de_outro_tenant_e_404(self):
+        with self.assertRaises(HTTPException) as erro:
+            analytics.analisar_liderancas(
+                self.session,
+                projeto_id=100,
+                pesquisa_id=10,
+                pergunta_alvo_id=42,
+                alvo_valores=["Candidato X"],
+                filtros_respostas=None,
+                lideranca_ids=None,
+                current_user=self.gerente_b,
+            )
+        self.assertEqual(erro.exception.status_code, 404)
+
+    def test_territorio_de_outro_tenant_nao_entra_na_cobertura(self):
+        self._compor_setor(30, [self.bA, self.bB])
+        lideranca = self._lideranca_com([self.bA])
+        # Vinculo cru com bairro de outro tenant, impossivel pela API.
+        self.session.add(
+            models.LiderancaTerritorioEleitoral(
+                lideranca_id=lideranca.id,
+                territorio_eleitoral_id=self.bairro_outro_tenant.id,
+            )
+        )
+        self.session.commit()
+        self._semear_coletas(total=100, alvo=50)
+
+        cobertura = self._cobertura(lideranca)
+        # Base diferente: invalida em vez de somar eleitorado alheio.
+        self.assertEqual(
+            cobertura["motivo_indisponibilidade"], "TERRITORIO_LIDERANCA_BASE_DESATUALIZADA"
+        )
+        self.assertIsNone(cobertura["eleitorado_coberto"])
+
+    def test_setor_de_outra_pesquisa_nao_serve_de_denominador(self):
+        # Setor 40 pertence a pesquisa 20 (tenant B); config exige a onda certa.
+        with self.assertRaises(HTTPException):
+            self._lideranca_com([self.bA], setor_id=40)
+
+
+class CoberturaFiltrosTests(_CoberturaFixture):
+    def test_filtro_de_resposta_nao_altera_a_cobertura(self):
+        self._compor_setor(30, [self.bB, self.bC, self.bE])
+        lideranca = self._lideranca_com([self.bA, self.bB, self.bC, self.bD])
+        self._semear_coletas(total=100, alvo=50, sexo_f=40, alvo_em_f=20)
+
+        sem_filtro = self._cobertura(lideranca)
+        com_filtro = next(
+            linha
+            for linha in self._analisar(
+                filtros_respostas=[{"pergunta_id": 43, "valores": ["F"]}]
+            )["liderancas"]
+            if linha["id"] == lideranca.id
+        )["cobertura_eleitoral"]
+
+        # Cobertura e territorial: recorte de resposta nao mexe nela.
+        self.assertEqual(sem_filtro, com_filtro)
+        self.assertEqual(com_filtro["cobertura_percentual"], 65.0)
+
+    def test_cobertura_acompanha_a_selecao_de_liderancas(self):
+        self._compor_setor(30, [self.bA, self.bB])
+        primeira = self._lideranca_com([self.bA], nome="Primeira")
+        segunda = self._lideranca_com([self.bB], nome="Segunda")
+        self._semear_coletas(total=100, alvo=50)
+
+        resultado = self._analisar(lideranca_ids=[segunda.id])
+        ids = [linha["id"] for linha in resultado["liderancas"]]
+        self.assertEqual(ids, [segunda.id])
+        self.assertNotIn(primeira.id, ids)
+        self.assertIsNotNone(resultado["liderancas"][0]["cobertura_eleitoral"])
+
+
+class CoberturaPerformanceTests(_CoberturaFixture):
+    def _contar_queries(self, executar):
+        from sqlalchemy import event as sa_event
+
+        contagem = []
+        engine = self.session.get_bind()
+
+        def registrar(*_a, **_k):
+            contagem.append(1)
+
+        sa_event.listen(engine, "before_cursor_execute", registrar)
+        try:
+            executar()
+        finally:
+            sa_event.remove(engine, "before_cursor_execute", registrar)
+        return len(contagem)
+
+    def test_universo_do_setor_nao_multiplica_por_lideranca(self):
+        # 3 setores distintos, 10 liderancas espalhadas entre eles.
+        self.session.execute(
+            text(
+                "INSERT INTO setores (id,nome,meta,tolerancia,finalidade,pesquisa_id)"
+                " VALUES (51,'S1',50,50,'AMBOS',10),(52,'S2',50,50,'AMBOS',10)"
+            )
+        )
+        self.session.commit()
+        self._compor_setor(30, [self.bA, self.bB])
+        self._compor_setor(51, [self.bC])
+        self._compor_setor(52, [self.bD])
+
+        uma = self._lideranca_com([self.bA], setor_id=30, nome="L0")
+        self._semear_coletas(total=100, alvo=50)
+        com_uma = self._contar_queries(lambda: self._analisar())
+
+        for indice in range(1, 10):
+            setor = (30, 51, 52)[indice % 3]
+            self._lideranca_com([self.bA], setor_id=setor, nome=f"L{indice}")
+        com_dez = self._contar_queries(lambda: self._analisar())
+
+        resultado = self._analisar()
+        self.assertEqual(len(resultado["liderancas"]), 10)
+        self.assertIsNotNone(uma)
+        # 10 liderancas nao podem custar ~10x: o universo e resolvido por setor.
+        self.assertLess(com_dez, com_uma * 2)
+
+    def test_cache_de_universo_e_apenas_da_request(self):
+        import inspect
+
+        fonte = inspect.getsource(analytics.analisar_liderancas)
+        # Dicionario local, nunca atributo de modulo nem store externo.
+        self.assertIn("universos_por_setor", fonte)
+        self.assertFalse(hasattr(analytics, "universos_por_setor"))
+        self.assertFalse(hasattr(analytics, "_cache_universo"))
+
+
+class CoberturaEscopoTests(_CoberturaFixture):
+    """Guardas contra a fase crescer sozinha."""
+
+    def _codigo_da_cobertura(self):
+        """Fonte sem comentarios nem docstring.
+
+        Os comentarios explicam justamente o que NAO se faz ("nao ha clamp",
+        "geometria nao decide"), entao casariam com as proprias proibicoes.
+        """
+        import inspect
+
+        fonte = inspect.getsource(analytics._calcular_cobertura_territorial)
+        fonte = re.sub(r'"""[\s\S]*?"""', "", fonte)
+        linhas = fonte.splitlines()
+        return "\n".join(l for l in linhas if not l.strip().startswith("#"))
+
+    def test_nao_ha_clamp_no_percentual(self):
+        fonte = self._codigo_da_cobertura()
+        for clamp in ("min(100", "min(Decimal(100)", "max(0,"):
+            with self.subTest(clamp=clamp):
+                self.assertNotIn(clamp, fonte)
+
+    def test_cobertura_nao_usa_geometria(self):
+        fonte = self._codigo_da_cobertura()
+        for espacial in ("ST_Intersection", "ST_Contains", "ST_Covers", "ST_Area", "geometria"):
+            with self.subTest(funcao=espacial):
+                self.assertNotIn(espacial, fonte)
+
+    def test_intersecao_nao_usa_nome(self):
+        fonte = self._codigo_da_cobertura()
+        for atributo in ("nome_normalizado", ".nome", "municipio_id"):
+            with self.subTest(atributo=atributo):
+                self.assertNotIn(atributo, fonte)
+
+    def test_indicadores_de_fase_futura_nao_existem(self):
+        proibidos = (
+            "pressao_cotas",
+            "pressao_de_cotas",
+            "cotas_excedem_universo",
+            "ocorrencias_para_meta",
+            "amostra_planejada",
+            "territorio_disputado",
+            "votos_validos_projetados_setor",
+        )
+        for nome in proibidos:
+            with self.subTest(indicador=nome):
+                self.assertFalse(hasattr(analytics, nome))
+
+    def test_contrato_da_cobertura_nao_traz_projecao(self):
+        from pesquisa360 import schemas as s
+
+        campos = set(s.CoberturaEleitoralLideranca.model_fields)
+        for proibido in ("votos_validos_projetados", "pressao_cotas", "meta_ocorrencias"):
+            with self.subTest(campo=proibido):
+                self.assertNotIn(proibido, campos)
+
+    def test_cobertura_nao_e_persistida(self):
+        colunas = set(models.LiderancaPolitica.__table__.columns.keys())
+        for proibida in ("cobertura_percentual", "eleitorado_coberto"):
+            with self.subTest(coluna=proibida):
+                self.assertNotIn(proibida, colunas)
+        config = set(models.LiderancaPesquisaConfig.__table__.columns.keys())
+        self.assertNotIn("cobertura_percentual", config)
+
+    def test_universo_do_setor_nao_foi_duplicado(self):
+        import inspect
+
+        fonte = inspect.getsource(analytics)
+        # A soma dos bairros do setor vive so em setor_territorio.
+        self.assertIn("obter_universo_eleitoral_setor", fonte)
+        # Mesma funcao, nao uma copia da regra.
+        self.assertIs(
+            analytics.obter_universo_eleitoral_setor,
+            setor_territorio.obter_universo_eleitoral_setor,
         )
 
 

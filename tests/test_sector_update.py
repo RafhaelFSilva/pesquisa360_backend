@@ -81,6 +81,17 @@ def database():
                 geometria TEXT, pesquisa_id INTEGER, agente_id INTEGER
             )
         """))
+        # Promover setor a analitico confere conflito de composicao eleitoral
+        # (Fase 3A.2); sem a tabela a consulta nem chega a rodar.
+        connection.execute(text("""
+            CREATE TABLE setor_territorio_eleitoral (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                setor_id INTEGER NOT NULL,
+                territorio_eleitoral_id INTEGER NOT NULL,
+                criado_em TIMESTAMP,
+                CONSTRAINT uq_setor_territorio UNIQUE (setor_id, territorio_eleitoral_id)
+            )
+        """))
         connection.execute(text("INSERT INTO companies VALUES (10, 'A', NULL, NULL, 1, NULL), (20, 'B', NULL, NULL, 1, NULL)"))
         connection.execute(text("INSERT INTO perfis VALUES (1, 'Gerente', NULL), (2, 'Agente', NULL)"))
         connection.execute(text("""

@@ -1979,6 +1979,73 @@ class TerritorioEleitoralPage(BaseModel):
 
 
 
+# --- Composicao eleitoral do Setor ------------------------------------------
+# Nenhum request aceita company_id nem base_eleitoral_id: ambos derivam do
+# caminho projeto -> pesquisa -> setor e da base principal do projeto.
+
+
+class SetorTerritoriosRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Substituicao integral: o conjunto enviado passa a ser a composicao.
+    # Lista vazia limpa. Ids repetidos sao deduplicados, nao rejeitados.
+    territorio_eleitoral_ids: List[int] = Field(default_factory=list)
+
+
+class SetorTerritorioItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    nome: str
+    # Nome se repete entre municipios ("Centro" existe em 16): quem identifica
+    # e o id, e a UI precisa do municipio para desambiguar.
+    municipio_id: Optional[int] = None
+    eleitorado_apto: Optional[int] = None
+
+
+# --- Universo eleitoral do Setor --------------------------------------------
+# Derivado em leitura da composicao atual + Base principal atual. Nunca
+# persistido: guardar a soma criaria um numero que envelhece sozinho.
+
+
+class StatusUniversoEleitoralSetor(StrEnum):
+    """Estado do universo. A UI decide pelo codigo, nunca por texto livre.
+
+    Ausencia NUNCA vira zero: zero eleitores e um resultado, "nao da para
+    calcular" e outra coisa.
+    """
+
+    DISPONIVEL = "DISPONIVEL"
+    # Setor sem nenhuma unidade vinculada: falta configurar, nao ha universo.
+    SEM_COMPOSICAO_ELEITORAL = "SEM_COMPOSICAO_ELEITORAL"
+    # Ao menos uma unidade pertence a Base anterior a principal atual.
+    COMPOSICAO_BASE_DESATUALIZADA = "COMPOSICAO_BASE_DESATUALIZADA"
+    BASE_ELEITORAL_NAO_CONFIGURADA = "BASE_ELEITORAL_NAO_CONFIGURADA"
+    BASE_ELEITORAL_NAO_VALIDADA = "BASE_ELEITORAL_NAO_VALIDADA"
+    # eleitorado_apto e nullable no schema: base futura pode trazer unidade sem
+    # o valor, e somar tratando NULL como 0 inventaria um universo menor.
+    ELEITORADO_TERRITORIO_INDISPONIVEL = "ELEITORADO_TERRITORIO_INDISPONIVEL"
+
+
+class UniversoEleitoralSetorResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    setor_id: int
+    status: StatusUniversoEleitoralSetor
+    # Espelha `status` quando indisponivel e e None em DISPONIVEL: a UI que so
+    # sabe tratar ausencia le um campo, a que ramifica por estado le o outro.
+    motivo_indisponibilidade: Optional[StatusUniversoEleitoralSetor] = None
+    # Base principal ATUAL do projeto, nao a base dos vinculos. None quando o
+    # projeto nao tem base principal.
+    base_eleitoral_id: Optional[int] = None
+    base_eleitoral_nome: Optional[str] = None
+    # Vinculos efetivamente persistidos, mesmo quando o universo esta
+    # indisponivel: distingue "nao configurado" de "configurado e desatualizado".
+    quantidade_territorios: int
+    # None sempre que o universo nao pode ser calculado. Nunca 0 por ausencia.
+    eleitorado_apto: Optional[int] = None
+
+
 # --- Gestao de Liderancas (Fase 6A) -----------------------------------------
 # Nenhum request aceita company_id: o tenant vem do JWT.
 
@@ -2207,6 +2274,56 @@ class LiderancaRecorteFiltrado(BaseModel):
     taxa_alvo: Optional[float] = None
 
 
+class StatusCoberturaEleitoral(StrEnum):
+    DISPONIVEL = "DISPONIVEL"
+    INDISPONIVEL = "INDISPONIVEL"
+
+
+class MotivoCoberturaEleitoral(StrEnum):
+    """Motivos proprios da cobertura + os herdados do universo do Setor.
+
+    Quando o problema e do denominador, o motivo do Setor e PROPAGADO em vez de
+    ganhar um sinonimo: a causa e a mesma e a UI ja sabe explica-la.
+    """
+
+    # Proprios da lideranca
+    SEM_SETOR_REFERENCIA = "SEM_SETOR_REFERENCIA"
+    SEM_TERRITORIO_ELEITORAL_LIDERANCA = "SEM_TERRITORIO_ELEITORAL_LIDERANCA"
+    TERRITORIO_LIDERANCA_BASE_DESATUALIZADA = "TERRITORIO_LIDERANCA_BASE_DESATUALIZADA"
+    ELEITORADO_TERRITORIO_LIDERANCA_INDISPONIVEL = (
+        "ELEITORADO_TERRITORIO_LIDERANCA_INDISPONIVEL"
+    )
+    UNIVERSO_ELEITORAL_ZERO = "UNIVERSO_ELEITORAL_ZERO"
+    # Herdados do universo do Setor (StatusUniversoEleitoralSetor)
+    SEM_COMPOSICAO_ELEITORAL = "SEM_COMPOSICAO_ELEITORAL"
+    COMPOSICAO_BASE_DESATUALIZADA = "COMPOSICAO_BASE_DESATUALIZADA"
+    BASE_ELEITORAL_NAO_CONFIGURADA = "BASE_ELEITORAL_NAO_CONFIGURADA"
+    BASE_ELEITORAL_NAO_VALIDADA = "BASE_ELEITORAL_NAO_VALIDADA"
+    ELEITORADO_TERRITORIO_INDISPONIVEL = "ELEITORADO_TERRITORIO_INDISPONIVEL"
+
+
+class CoberturaEleitoralLideranca(BaseModel):
+    """Quanto do universo do SETOR os bairros da lideranca cobrem.
+
+    Somente a intersecao entra: bairro da lideranca fora do setor nao e erro,
+    apenas nao pertence aquele denominador. Por isso a cobertura nunca passa de
+    100% -- e nao ha clamp escondendo nada.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    status: StatusCoberturaEleitoral
+    motivo_indisponibilidade: Optional[MotivoCoberturaEleitoral] = None
+    setor_id: Optional[int] = None
+    base_eleitoral_id: Optional[int] = None
+    universo_eleitoral_setor: Optional[int] = None
+    quantidade_territorios_lideranca: int = 0
+    # None quando indisponivel; 0 e cobertura real de zero bairros.
+    quantidade_territorios_cobertos: Optional[int] = None
+    eleitorado_coberto: Optional[int] = None
+    cobertura_percentual: Optional[float] = None
+
+
 class LiderancaAnaliseItem(BaseModel):
     id: int
     nome: str
@@ -2216,6 +2333,8 @@ class LiderancaAnaliseItem(BaseModel):
     setor: Optional[LiderancaSetorItem] = None
     territorios: List[LiderancaTerritorioItem] = Field(default_factory=list)
     cota_votos_validos: Optional[int] = None
+    # Aditivo (Fase 3B.1): cobertura territorial da lideranca no setor.
+    cobertura_eleitoral: Optional[CoberturaEleitoralLideranca] = None
     universo_eleitoral: LiderancaUniversoEleitoral
     resultado_principal: LiderancaResultadoPrincipal
     recorte_filtrado: Optional[LiderancaRecorteFiltrado] = None

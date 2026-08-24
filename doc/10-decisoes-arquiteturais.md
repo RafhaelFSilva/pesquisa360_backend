@@ -681,3 +681,294 @@ Comuns:   B + C  ->  eleitorado(B) + eleitorado(C)
 
 O modo geométrico pode informar a área da interseção como dado espacial, mas não
 produz eleitorado estimado sem uma metodologia própria e declarada.
+
+## ADR-031 — Composição eleitoral do Setor é declarada, não inferida
+
+`Setor` e `TerritorioEleitoral` são conceitos de origens diferentes: o primeiro
+é divisão operacional/analítica da Pesquisa, o segundo pertence à Base
+Eleitoral. O sistema **não deduz um do outro**.
+
+```text
+Setor  N:N  TerritorioEleitoral   ->  setor_territorio_eleitoral
+                                      (setor_id, territorio_eleitoral_id)
+                                      UNIQUE(setor_id, territorio_eleitoral_id)
+```
+
+A composição é **explícita, administrada pelo usuário e auditável**. Nunca
+inferida por geometria, nome, proximidade, interseção, município ou área. Os
+dois lados até têm geometria, mas cruzá-las produziria vínculo plausível e não
+verificável — e um vínculo errado aqui contamina todo indicador eleitoral que
+vier depois.
+
+Sem `company_id`: o tenant deriva de `setor -> pesquisa -> projeto`. Sem
+`pesquisa_id`: é derivável por `setor.pesquisa_id`, e denormalizá-lo apenas para
+viabilizar um `UNIQUE(pesquisa_id, territorio)` descreveria a regra **errada**
+(ver exclusividade, abaixo).
+
+### Somente BAIRRO, por ora
+
+O schema é genérico — aponta para `territorio_eleitoral.id`, de qualquer tipo.
+A regra de serviço não é: hoje aceita exclusivamente `BAIRRO`, porque na Base
+atual (Amapá 2026) ele é:
+
+- a **menor unidade existente** — `LOCAL_VOTACAO` e `SECAO` têm 0 registros;
+- **100% coberto** — 198/198 bairros com `eleitorado_apto > 0`;
+- **folha** — 198/198 sem descendentes, logo somá-los nunca duplica eleitor.
+
+`MUNICIPIO` e `ESTADO` são recusados por motivo oposto: são **agregações** dos
+bairros (os três níveis somam os mesmos 577.894), então aceitá-los contaria o
+mesmo eleitorado duas vezes.
+
+Quando existir base com seções, a estrutura já comporta — muda a regra, não o
+schema.
+
+### Não existe rateio parcial de Bairro
+
+O bairro entra inteiro na composição ou não entra. Não há coluna de peso,
+percentual ou fração. Dividir um bairro entre dois setores exigiria repartir seu
+eleitorado, e a Base não tem unidade menor para sustentar essa divisão —
+qualquer repartição seria inventada.
+
+### Um Bairro, um universo analítico
+
+> O mesmo BAIRRO não pode compor dois setores **analíticos** da mesma Pesquisa.
+
+Porque o bairro é indivisível: se entrasse em dois universos analíticos, o mesmo
+eleitorado seria contado duas vezes.
+
+"Analítico" é `RELATORIO` ou `AMBOS` — exatamente `crud.FINALIDADES_ANALITICAS`,
+o conjunto que `_validar_setores_analiticos` usa para decidir quem entra em
+Mapas Estratégicos, Cruzamentos e na análise de lideranças.
+
+| Setor A | Setor B | Mesmo bairro |
+|---|---|---|
+| RELATORIO | RELATORIO | proibido |
+| RELATORIO | AMBOS | proibido |
+| AMBOS | AMBOS | proibido |
+| OPERACAO | RELATORIO/AMBOS | **permitido** |
+| OPERACAO | OPERACAO | **permitido** |
+
+Setor `OPERACAO` fica de fora da regra porque fica de fora dos indicadores: o
+filtro por `FINALIDADES_ANALITICAS` acontece antes de qualquer classificação de
+coleta, então uma malha operacional pode recortar o território de outro jeito
+sem contaminar universo algum. A exclusividade é por **Pesquisa**: outra onda
+tem universo próprio e pode reutilizar o mesmo bairro.
+
+### A regra vive no serviço, não num UNIQUE
+
+A exclusividade depende de `setores.finalidade` — coluna de **outra tabela** —,
+o que nenhum `UNIQUE` simples expressa. A validação é transacional:
+
+1. trava as linhas de `territorio_eleitoral` envolvidas (`FOR UPDATE`,
+   `ORDER BY id` para não deadlockar quando dois conjuntos se cruzam);
+2. confere conflito **dentro da mesma transação**;
+3. só então substitui os vínculos.
+
+Sem o passo 1, duas requisições simultâneas leem "sem conflito" e ambas gravam.
+O `UNIQUE(setor_id, territorio_eleitoral_id)` cobre outra coisa: o mesmo bairro
+repetido no mesmo setor.
+
+### Substituição integral e transacional
+
+`PUT .../setores/{id}/territorios` **substitui** a composição — não acumula.
+Idempotente: reenviar o mesmo conjunto deixa o mesmo resultado; lista vazia
+limpa; ids repetidos são deduplicados. Qualquer recusa (tipo errado, base
+errada, conflito) deixa a composição anterior **intacta** — nunca meio salva.
+
+### A mudança de finalidade é porta lateral
+
+Promover um setor de `OPERACAO` para `RELATORIO`/`AMBOS` transforma sobreposição
+legítima em dupla contagem. Por isso a promoção é barrada enquanto houver
+conflito, no mesmo caminho que altera a finalidade. Rebaixar para `OPERACAO` e
+mudar entre finalidades já analíticas seguem livres.
+
+### Risco conhecido: vínculo e base substituída
+
+Trocar a Base principal do Projeto **não** revalida os vínculos existentes: eles
+continuam apontando para territórios da base anterior. A exposição é idêntica à
+de `lideranca_territorio_eleitoral`, que valida a base no momento da escrita e
+não relê depois — e para a qual não existe política. Fica registrado como risco;
+não há backfill nem revalidação automática, que seriam decisão de domínio, não
+detalhe de implementação.
+
+## ADR-032 — Universo eleitoral do Setor é derivado, nunca persistido
+
+O universo eleitoral de um Setor é a soma do `eleitorado_apto` das unidades
+**explicitamente vinculadas** à sua composição. Na Base atual essas unidades são
+BAIRROS.
+
+```text
+Setor -> setor_territorio_eleitoral -> BAIRRO.eleitorado_apto
+                                       SUM (por id único)
+```
+
+Calculado **em leitura**, em `setor_territorio.obter_universo_eleitoral_setor`,
+que é a fonte única — endpoint, frontend e analytics consomem daqui e ninguém
+repete a soma.
+
+Não existe coluna `setores.eleitorado_apto`, tabela de cache nem agregado
+gravado. O valor depende de três coisas que mudam por conta própria — a
+composição, o `eleitorado_apto` da Base e a Base principal do Projeto — então
+persistir a soma criaria um número que envelhece sem avisar ninguém. A soma de
+198 inteiros não é o gargalo que justificaria esse risco.
+
+### Ausência não é zero
+
+Todo estado indisponível devolve `eleitorado_apto: null` com motivo explícito.
+Zero eleitores é um **resultado**; "não dá para calcular" é outra coisa, e
+confundir os dois faria um setor não configurado parecer um setor vazio.
+
+| Estado | Condição | `eleitorado_apto` |
+|---|---|---|
+| `DISPONIVEL` | base VALIDADA + ≥1 unidade, todas da base atual e com eleitorado | soma |
+| `SEM_COMPOSICAO_ELEITORAL` | nenhum vínculo | `null` |
+| `COMPOSICAO_BASE_DESATUALIZADA` | ≥1 unidade de Base anterior | `null` |
+| `BASE_ELEITORAL_NAO_CONFIGURADA` | projeto sem Base principal | `null` |
+| `BASE_ELEITORAL_NAO_VALIDADA` | Base principal fora de `VALIDADA` | `null` |
+| `ELEITORADO_TERRITORIO_INDISPONIVEL` | ≥1 unidade com `eleitorado_apto` nulo | `null` |
+
+A precedência vai do contexto para o detalhe — base ausente, base inválida,
+composição vazia, composição desatualizada, eleitorado ausente. A Base vem
+primeiro porque é a precondição de tudo: sem ela nem dá para julgar se a
+composição está desatualizada. Validade é `status == VALIDADA`, a mesma
+definição que o resto do motor eleitoral usa; nenhum conceito novo.
+
+### Troca de Base invalida, não apaga
+
+Trocar a Base principal deixa os vínculos anteriores **intactos no banco** e o
+universo **indisponível** até reconfiguração explícita pelo usuário.
+
+Os vínculos são preservados por auditabilidade — apagá-los destruiria o registro
+do que estava configurado e a chance de o usuário ver o que precisa refazer. E
+não há remapeamento automático entre Bases: "Centro" da Base A e "Centro" da
+Base B são registros diferentes, e casá-los por nome produziria vínculo
+plausível e não verificável.
+
+Basta **uma** unidade da Base anterior para invalidar a composição inteira.
+Somar apenas as unidades atuais entregaria um universo parcial com cara de
+completo — pior que não responder, porque o número pareceria confiável.
+`quantidade_territorios` continua reportando os vínculos reais, o que permite à
+UI separar "não configurado" (0) de "configurado e desatualizado" (N).
+
+### Universo individual existe para qualquer finalidade
+
+`OPERACAO`, `RELATORIO` e `AMBOS` têm universo individual. A finalidade não
+bloqueia a soma de um setor isolado.
+
+O que **não** existe é consolidação: somar os universos de vários setores seria
+outra regra, porque setores `OPERACAO` podem sobrepor a malha analítica e o
+mesmo eleitorado entraria duas vezes. Fica para fase própria, com decisão
+explícita sobre quais finalidades entram na conta.
+
+### O que o universo ainda não é
+
+`eleitorado_apto` é o único número eleitoral desta fase. Não há cobertura de
+liderança, percentual do universo, votos válidos projetados, pressão de cotas
+nem ocorrências para meta. A projeção
+(`aptos × comparecimento × votos válidos`) pertence a fase posterior — e a soma
+aqui é de eleitores aptos, não de votos.
+
+## ADR-033 — Cobertura eleitoral da Liderança é a interseção com o Setor
+
+A cobertura responde: **quanto do universo eleitoral do Setor de referência está
+coberto pelos bairros da Liderança**.
+
+```text
+L = territórios da Liderança
+S = composição eleitoral do Setor da onda
+
+eleitorado_coberto     = SUM(eleitorado_apto de L ∩ S)
+cobertura_percentual   = eleitorado_coberto / universo_setor × 100
+```
+
+A interseção usa `territorio_eleitoral.id`. Nunca nome, `nome_normalizado`,
+município, geometria ou centroide — "Centro" existe em 16 municípios da Base
+atual, e casar por nome produziria cobertura plausível e errada.
+
+Derivada em runtime, nada persistido. O denominador vem de
+`obter_universo_eleitoral_setor` (ADR-032), fonte única: a soma dos bairros do
+Setor não foi copiada para dentro da análise de Lideranças.
+
+### Território fora do Setor não é erro
+
+A Liderança pertence ao **Projeto** e pode atuar além de um Setor específico
+daquela onda. Bairros dela fora da composição do Setor simplesmente não entram
+naquele denominador.
+
+```text
+Liderança: A + B + C + D        Setor: B + C + E
+Interseção: B + C               A e D ficam de fora
+```
+
+Consequência direta: a cobertura **nunca passa de 100%**, porque o numerador é
+subconjunto do denominador por construção. Por isso não há `min(100, x)` — um
+percentual acima de 100 seria sinal de defeito de integridade, e escondê-lo
+atrás de um clamp transformaria bug em número apresentável.
+
+### Interseção vazia é 0%, ausência é null
+
+A distinção é o coração desta fase:
+
+| Situação | Resultado |
+|---|---|
+| Liderança tem bairros, Setor tem composição, nenhum em comum | `0` e `0,00%` — **DISPONIVEL** |
+| Liderança sem bairros configurados | `null` — `SEM_TERRITORIO_ELEITORAL_LIDERANCA` |
+| Liderança sem Setor de referência na onda | `null` — `SEM_SETOR_REFERENCIA` |
+| Base inconsistente de qualquer lado | `null` — motivo específico |
+
+Zero é um **resultado**: a informação existe e a cobertura naquele Setor é
+efetivamente nenhuma. `null` diz que não há informação para medir. Exibir 0%
+para o segundo caso faria "não sei" parecer "não cobre nada".
+
+Sem Setor não há denominador territorial, e município, projeto ou a soma dos
+próprios bairros da Liderança responderiam **outra pergunta**.
+
+### Precedência: denominador antes do numerador
+
+```text
+1. sem Setor de referência        -> SEM_SETOR_REFERENCIA
+2. universo do Setor indisponível -> propaga o motivo do Setor
+3. Liderança sem territórios      -> SEM_TERRITORIO_ELEITORAL_LIDERANCA
+4. território de Base anterior    -> TERRITORIO_LIDERANCA_BASE_DESATUALIZADA
+5. eleitorado ausente na Liderança-> ELEITORADO_TERRITORIO_LIDERANCA_INDISPONIVEL
+6. universo do Setor igual a zero -> UNIVERSO_ELEITORAL_ZERO
+7. calcula a interseção
+```
+
+O denominador vem primeiro porque é a precondição: não adianta reclamar do
+numerador enquanto o Setor não tiver universo. Quando o problema é do Setor, o
+motivo dele é **propagado** em vez de ganhar um sinônimo — a causa é a mesma e a
+UI já sabe explicá-la. Não existem `COBERTURA_SEM_COMPOSICAO` e afins.
+
+`UNIVERSO_ELEITORAL_ZERO` existe porque é alcançável: ADR-032 aceita bairro com
+`eleitorado_apto = 0` como valor válido, e um Setor só de bairros zerados fecha
+com universo 0.
+
+### Numerador e denominador na mesma Base
+
+Ambos os lados precisam pertencer à Base principal **atual** do Projeto. Um
+único território da Liderança em Base anterior invalida o numerador inteiro —
+somar só os atuais entregaria cobertura parcial com cara de completa. Os
+vínculos permanecem no banco; não há remapeamento automático nem exclusão.
+
+### Correção incorporada: Gap/Plus não mistura mais Bases
+
+A análise de Lideranças somava `eleitorado_apto` de territórios de **qualquer**
+Base e projetava com os parâmetros da Base atual — eleitorado de uma Base
+multiplicado pelo comparecimento de outra, silenciosamente.
+
+A partir daqui, território fora da Base principal torna o valor eleitoral da
+Liderança indisponível (`TERRITORIO_LIDERANCA_BASE_DESATUALIZADA`), o que zera
+por consequência `votos_validos_projetados`, `gap_plus`, `status` e
+`atingimento_percentual` **naquele cenário específico**. Onde os territórios já
+pertenciam à Base principal — a totalidade dos casos atuais — nada muda.
+
+### O que a cobertura ainda não é
+
+`eleitorado_coberto` conta **eleitores aptos**, não votos. Projeção de votos
+válidos, pressão de cotas, ocorrências para meta e território disputado
+pertencem a fases posteriores.
+
+`universo_eleitoral.eleitorado_apto` (todos os bairros da Liderança) e
+`cobertura_eleitoral.eleitorado_coberto` (só a interseção com o Setor) são
+grandezas **diferentes** e continuam expostas separadamente.

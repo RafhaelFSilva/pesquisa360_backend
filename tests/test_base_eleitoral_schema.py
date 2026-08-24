@@ -672,16 +672,23 @@ class RegressaoEscopoFase2Tests(unittest.TestCase):
             [item.value for item in schemas.NivelTerritorial], ["SETOR"]
         )
 
-    def test_entidades_de_fases_futuras_nao_existem(self):
-        # LiderancaPolitica e seus vinculos chegaram na Fase 6A, entao saem
-        # desta lista. SetorTerritorioEleitoral (rateio Setor x Bairro) segue
-        # deliberadamente adiado.
-        self.assertFalse(hasattr(models, "SetorTerritorioEleitoral"))
-        self.assertNotIn("setor_territorio_eleitoral", set(models.Base.metadata.tables))
+    def test_composicao_eleitoral_do_setor_e_associativa(self):
+        # A tabela chegou na Fase 3A.2, depois de o diagnostico provar que
+        # BAIRRO e a menor unidade confiavel. Continua NAO sendo rateio: o
+        # vinculo e por unidade inteira, declarado pelo usuario.
+        self.assertTrue(hasattr(models, "SetorTerritorioEleitoral"))
+        self.assertIn("setor_territorio_eleitoral", set(models.Base.metadata.tables))
+        colunas = set(models.SetorTerritorioEleitoral.__table__.columns.keys())
+        # Sem company_id (tenant vem do setor) e sem percentual/peso: nao ha
+        # fracao de bairro.
+        self.assertEqual(
+            colunas, {"id", "setor_id", "territorio_eleitoral_id", "criado_em"}
+        )
 
     def test_setor_continua_sem_vinculo_eleitoral_automatico(self):
-        # A associacao Setor <-> Bairro permanece administrada pelo usuario;
-        # nao ha inferencia espacial nem tabela de rateio.
+        # A associacao Setor <-> Bairro permanece administrada pelo usuario e
+        # vive na tabela associativa; nao ha inferencia espacial nem coluna
+        # eleitoral dentro de Setor.
         colunas = set(models.Setor.__table__.columns.keys())
         self.assertNotIn("territorio_eleitoral_id", colunas)
         self.assertNotIn("base_eleitoral_id", colunas)

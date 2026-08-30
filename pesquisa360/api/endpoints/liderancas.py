@@ -15,6 +15,7 @@ from pesquisa360.core.utils import wkb_to_geojson_point
 from pesquisa360.db import models
 from pesquisa360.services import lideranca as service
 from pesquisa360.services import lideranca_analytics as analytics
+from pesquisa360.core.rbac import Permissao, require_permissao
 
 router = APIRouter()
 
@@ -57,8 +58,7 @@ def _lideranca_response(db: Session, lideranca: models.LiderancaPolitica) -> dic
 
 @router.get(
     "/projetos/{projeto_id}/liderancas",
-    response_model=List[schemas.LiderancaPoliticaResponse],
-)
+    response_model=List[schemas.LiderancaPoliticaResponse], dependencies=[Depends(require_permissao(Permissao.LIDERANCA_VER))])
 def listar_liderancas(
     *,
     db: Session = Depends(get_db),
@@ -81,8 +81,7 @@ def listar_liderancas(
 @router.post(
     "/projetos/{projeto_id}/liderancas",
     response_model=schemas.LiderancaPoliticaResponse,
-    status_code=201,
-)
+    status_code=201, dependencies=[Depends(require_permissao(Permissao.LIDERANCA_GERENCIAR))])
 def criar_lideranca(
     *,
     db: Session = Depends(get_db),
@@ -102,8 +101,7 @@ def criar_lideranca(
 
 @router.get(
     "/projetos/{projeto_id}/liderancas/{lideranca_id}",
-    response_model=schemas.LiderancaPoliticaResponse,
-)
+    response_model=schemas.LiderancaPoliticaResponse, dependencies=[Depends(require_permissao(Permissao.LIDERANCA_VER))])
 def obter_lideranca(
     *,
     db: Session = Depends(get_db),
@@ -117,8 +115,7 @@ def obter_lideranca(
 
 @router.patch(
     "/projetos/{projeto_id}/liderancas/{lideranca_id}",
-    response_model=schemas.LiderancaPoliticaResponse,
-)
+    response_model=schemas.LiderancaPoliticaResponse, dependencies=[Depends(require_permissao(Permissao.LIDERANCA_GERENCIAR))])
 def atualizar_lideranca(
     *,
     db: Session = Depends(get_db),
@@ -147,8 +144,7 @@ def atualizar_lideranca(
 
 @router.delete(
     "/projetos/{projeto_id}/liderancas/{lideranca_id}",
-    response_model=schemas.LiderancaPoliticaResponse,
-)
+    response_model=schemas.LiderancaPoliticaResponse, dependencies=[Depends(require_permissao(Permissao.LIDERANCA_GERENCIAR))])
 def desativar_lideranca(
     *,
     db: Session = Depends(get_db),
@@ -166,8 +162,7 @@ def desativar_lideranca(
 
 @router.put(
     "/projetos/{projeto_id}/liderancas/{lideranca_id}/pesquisas/{pesquisa_id}/config",
-    response_model=schemas.LiderancaPesquisaConfigResponse,
-)
+    response_model=schemas.LiderancaPesquisaConfigResponse, dependencies=[Depends(require_permissao(Permissao.LIDERANCA_GERENCIAR))])
 def definir_config(
     *,
     db: Session = Depends(get_db),
@@ -199,8 +194,7 @@ def definir_config(
 
 @router.put(
     "/projetos/{projeto_id}/liderancas/{lideranca_id}/territorios",
-    response_model=List[schemas.LiderancaTerritorioItem],
-)
+    response_model=List[schemas.LiderancaTerritorioItem], dependencies=[Depends(require_permissao(Permissao.LIDERANCA_GERENCIAR))])
 def definir_territorios(
     *,
     db: Session = Depends(get_db),
@@ -221,8 +215,7 @@ def definir_territorios(
 
 @router.post(
     "/projetos/{projeto_id}/liderancas/analise",
-    response_model=schemas.LiderancaAnaliseResponse,
-)
+    response_model=schemas.LiderancaAnaliseResponse, dependencies=[Depends(require_permissao(Permissao.LIDERANCA_GERENCIAR))])
 def analisar_liderancas(
     *,
     db: Session = Depends(get_db),

@@ -19,6 +19,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 from pesquisa360 import crud, schemas
 from pesquisa360.api.endpoints import projetos
 from pesquisa360.core.dependencies import get_current_user, get_db
+from tests.acl_fixture import criar_tabelas_acl
 
 
 def user(user_id: int, company_id: int, profile: str, active: bool = True):
@@ -44,6 +45,7 @@ def database():
     raw.create_function("ST_AsGeoJSON", 1, as_geojson)
     raw.create_function("AsGeoJSON", 1, as_geojson)
     raw.close()
+    criar_tabelas_acl(engine)
     Session = sessionmaker(bind=engine)
 
     with engine.begin() as connection:
@@ -78,8 +80,7 @@ def database():
             CREATE TABLE setores (
                 id INTEGER PRIMARY KEY, nome TEXT, meta INTEGER, tolerancia INTEGER,
                 finalidade TEXT DEFAULT 'OPERACAO' NOT NULL,
-                geometria TEXT, pesquisa_id INTEGER, agente_id INTEGER
-            )
+                geometria TEXT, pesquisa_id INTEGER, agente_id INTEGER, municipio_territorio_id INTEGER)
         """))
         # Promover setor a analitico confere conflito de composicao eleitoral
         # (Fase 3A.2); sem a tabela a consulta nem chega a rodar.
@@ -90,6 +91,31 @@ def database():
                 territorio_eleitoral_id INTEGER NOT NULL,
                 criado_em TIMESTAMP,
                 CONSTRAINT uq_setor_territorio UNIQUE (setor_id, territorio_eleitoral_id)
+            )
+        """))
+        # ADR-035: a listagem resolve o municipio do setor via
+        # setores.municipio_territorio_id -> territorio_eleitoral.
+        connection.execute(text("""
+            CREATE TABLE territorio_eleitoral (
+                id INTEGER PRIMARY KEY, base_eleitoral_id INTEGER, parent_id INTEGER,
+                tipo TEXT, nome TEXT, nome_normalizado TEXT, municipio_id INTEGER
+            )
+        """))
+        # PROMPT 04: a listagem de setores calcula o progresso (cota
+        # territorial) em coletas; sem a tabela a consulta nem chega a rodar.
+        connection.execute(text("""
+            CREATE TABLE coletas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pesquisa_id INTEGER, agente_id INTEGER, setor_id INTEGER
+            )
+        """))
+        connection.execute(text("""
+            CREATE TABLE setor_agentes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                setor_id INTEGER NOT NULL,
+                agente_id INTEGER NOT NULL,
+                ativo BOOLEAN NOT NULL DEFAULT 1,
+                CONSTRAINT uq_setor_agentes_setor_agente UNIQUE (setor_id, agente_id)
             )
         """))
         connection.execute(text("INSERT INTO companies VALUES (10, 'A', NULL, NULL, 1, NULL), (20, 'B', NULL, NULL, 1, NULL)"))
@@ -114,7 +140,7 @@ def database():
               (2000, 'Survey B', NULL, 1, 200, NULL, NULL)
         """))
         connection.execute(text("""
-            INSERT INTO setores VALUES
+            INSERT INTO setores (id, nome, meta, tolerancia, finalidade, geometria, pesquisa_id, agente_id) VALUES
               (500, 'Original', 10, 50, 'OPERACAO', 'POLYGON ((-51 0, -50 0, -50 1, -51 0))', 1000, 2),
               (501, 'Other survey', 20, 60, 'OPERACAO', 'POLYGON ((-49 0, -48 0, -48 1, -49 0))', 1001, 2),
               (502, 'Analitico', 0, 0, 'RELATORIO', 'POLYGON ((-51 1, -50 1, -50 2, -51 1))', 1000, NULL)

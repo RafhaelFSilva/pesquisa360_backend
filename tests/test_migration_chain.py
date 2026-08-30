@@ -17,7 +17,7 @@ from alembic.script import ScriptDirectory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "b2c3d4e5f6a7"
+HEAD_REVISION = "b5c6d7e8f9a0"
 EXPECTED_LINEAGE = [
     "91fbe6db1f17",
     "3e4de16d893c",
@@ -36,6 +36,18 @@ EXPECTED_LINEAGE = [
     "78d895f396e9",
     "a1b2c3d4e5f6",
     "b2c3d4e5f6a7",
+    "c3d4e5f6a7b8",
+    "d5e6f7a8b9c0",
+    "e6f7a8b9c0d1",
+    "f7a8b9c0d1e2",
+    "a8b9c0d1e2f3",
+    "b9c0d1e2f3a4",
+    "c0d1e2f3a4b5",
+    "d1e2f3a4b5c6",
+    "e2f3a4b5c6d7",
+    "f3a4b5c6d7e8",
+    "a4b5c6d7e8f9",
+    "b5c6d7e8f9a0",
 ]
 
 
@@ -197,6 +209,9 @@ class MigrationChainTests(unittest.TestCase):
                 coleta_columns = {
                     row[1]: row for row in connection.execute("PRAGMA table_info(coletas)")
                 }
+                coleta_indexes = connection.execute(
+                    "PRAGMA index_list(coletas)"
+                ).fetchall()
                 pergunta_columns = {
                     row[1]: row for row in connection.execute("PRAGMA table_info(perguntas)")
                 }
@@ -206,6 +221,9 @@ class MigrationChainTests(unittest.TestCase):
                 setor_columns = {
                     row[1]: row for row in connection.execute("PRAGMA table_info(setores)")
                 }
+                setor_agentes_indexes = connection.execute(
+                    "PRAGMA index_list(setor_agentes)"
+                ).fetchall()
                 categoria_indexes = connection.execute(
                     "PRAGMA index_list(categorias_resposta_espontanea)"
                 ).fetchall()
@@ -217,6 +235,7 @@ class MigrationChainTests(unittest.TestCase):
             self.assertTrue(
                 {
                     "companies", "usuarios", "projetos", "pesquisas", "coletas",
+                    "setor_agentes",
                     "categorias_resposta_espontanea", "mapeamentos_resposta_espontanea",
                 } <= tables
             )
@@ -226,6 +245,14 @@ class MigrationChainTests(unittest.TestCase):
             )
             self.assertEqual(coleta_columns["company_id"][3], 1)
             self.assertEqual(coleta_columns["client_uuid"][3], 1)
+            self.assertEqual(coleta_columns["setor_id"][3], 0)
+            self.assertIn(
+                "ix_coletas_setor_id", {index[1] for index in coleta_indexes}
+            )
+            self.assertTrue(
+                any(row[2] == "setores" and row[3] == "setor_id" and row[4] == "id"
+                    for row in coleta_fks)
+            )
             self.assertEqual(pergunta_columns["eh_resposta_espontanea"][3], 1)
             self.assertEqual(pergunta_columns["papel_analitico"][3], 0)
             self.assertEqual(pergunta_columns["metadados_analiticos"][3], 1)
@@ -236,6 +263,10 @@ class MigrationChainTests(unittest.TestCase):
             )
             self.assertEqual(setor_columns["finalidade"][3], 1)
             self.assertEqual(setor_columns["finalidade"][4], "'OPERACAO'")
+            self.assertTrue(
+                {"ix_setor_agentes_setor_id", "ix_setor_agentes_agente_id"}
+                <= {index[1] for index in setor_agentes_indexes}
+            )
             self.assertIn(
                 "uq_categoria_resposta_espontanea_pesquisa_nome_ativo",
                 {index[1] for index in categoria_indexes if index[2]},
@@ -287,6 +318,250 @@ class MigrationChainTests(unittest.TestCase):
             finally:
                 connection.close()
             self.assertEqual(finalidade, "OPERACAO")
+
+    def test_setor_agentes_backfill_and_reversible_upgrade(self):
+        previous = "b2c3d4e5f6a7"
+        with self.temporary_database(previous) as (db_path, database_url):
+            connection = sqlite3.connect(db_path)
+            try:
+                company_id = connection.execute(
+                    "SELECT id FROM companies ORDER BY id LIMIT 1"
+                ).fetchone()[0]
+                profile_id = connection.execute(
+                    "SELECT id FROM perfis ORDER BY id LIMIT 1"
+                ).fetchone()[0]
+                connection.execute(
+                    """INSERT INTO usuarios
+                       (id, email, nome, senha_hash, ativo, perfil_id, company_id)
+                       VALUES (900, 'setor-backfill@example.com', 'Agente legado',
+                               'hash', 1, ?, ?)""",
+                    (profile_id, company_id),
+                )
+                connection.execute(
+                    """INSERT INTO projetos
+                       (id, nome, status, data_inicio, coordenador_id, company_id)
+                       VALUES (901, 'Projeto backfill', 'Ativo', '2026-01-01',
+                               900, ?)""",
+                    (company_id,),
+                )
+                connection.execute(
+                    """INSERT INTO pesquisas (id, titulo, ativo, projeto_id)
+                       VALUES (902, 'Pesquisa backfill', 1, 901)"""
+                )
+                connection.execute(
+                    """INSERT INTO setores
+                       (id, nome, meta, geometria, pesquisa_id, agente_id,
+                        tolerancia, finalidade)
+                       VALUES (990, 'Setor legado', 10, NULL, 902, 900, 50,
+                               'OPERACAO')"""
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            self.run_alembic("upgrade", "head", database_url=database_url)
+            connection = sqlite3.connect(db_path)
+            try:
+                vinculos = connection.execute(
+                    "SELECT setor_id, agente_id, ativo FROM setor_agentes"
+                ).fetchall()
+                legado = connection.execute(
+                    "SELECT agente_id FROM setores WHERE id = 990"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            self.assertEqual(vinculos, [(990, 900, 1)])
+            self.assertEqual(legado, 900)
+
+            self.run_alembic("downgrade", previous, database_url=database_url)
+            connection = sqlite3.connect(db_path)
+            try:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                legado = connection.execute(
+                    "SELECT agente_id FROM setores WHERE id = 990"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            self.assertNotIn("setor_agentes", tables)
+            self.assertEqual(legado, 900)
+
+            self.run_alembic("upgrade", "head", database_url=database_url)
+            self.assertEqual(self.current_revision(db_path), HEAD_REVISION)
+
+    def test_coleta_setor_upgrade_keeps_history_null_and_is_reversible(self):
+        previous = "c3d4e5f6a7b8"
+        with self.temporary_database(previous) as (db_path, database_url):
+            connection = sqlite3.connect(db_path)
+            try:
+                company_id = connection.execute(
+                    "SELECT id FROM companies ORDER BY id LIMIT 1"
+                ).fetchone()[0]
+                profile_id = connection.execute(
+                    "SELECT id FROM perfis ORDER BY id LIMIT 1"
+                ).fetchone()[0]
+                connection.execute(
+                    """INSERT INTO usuarios
+                       (id, email, nome, senha_hash, ativo, perfil_id, company_id)
+                       VALUES (950, 'coleta-setor@example.com', 'Agente setor',
+                               'hash', 1, ?, ?)""",
+                    (profile_id, company_id),
+                )
+                connection.execute(
+                    """INSERT INTO projetos
+                       (id, nome, status, data_inicio, coordenador_id, company_id)
+                       VALUES (951, 'Projeto setor', 'Ativo', '2026-01-01', 950, ?)""",
+                    (company_id,),
+                )
+                connection.execute(
+                    "INSERT INTO pesquisas (id, titulo, ativo, projeto_id) VALUES (952, 'Pesquisa setor', 1, 951)"
+                )
+                connection.execute(
+                    """INSERT INTO coletas
+                       (id, pesquisa_id, agente_id, company_id, client_uuid,
+                        data_inicio_coleta, foi_offline, status_sincronizacao,
+                        inconformidade_localizacao)
+                       VALUES (953, 952, 950, ?, '00000000-0000-4000-8000-000000000953',
+                               '2026-01-01 10:00:00', 0, 'sincronizado', 0)""",
+                    (company_id,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            self.run_alembic("upgrade", "head", database_url=database_url)
+            connection = sqlite3.connect(db_path)
+            try:
+                columns = {
+                    row[1]: row for row in connection.execute("PRAGMA table_info(coletas)")
+                }
+                indexes = {
+                    row[1] for row in connection.execute("PRAGMA index_list(coletas)")
+                }
+                fks = connection.execute("PRAGMA foreign_key_list(coletas)").fetchall()
+                setor_id = connection.execute(
+                    "SELECT setor_id FROM coletas WHERE id = 953"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            self.assertEqual(columns["setor_id"][3], 0)
+            self.assertIn("ix_coletas_setor_id", indexes)
+            self.assertTrue(any(row[2] == "setores" and row[3] == "setor_id" for row in fks))
+            self.assertIsNone(setor_id)
+
+            self.run_alembic("downgrade", previous, database_url=database_url)
+            connection = sqlite3.connect(db_path)
+            try:
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(coletas)")
+                }
+            finally:
+                connection.close()
+            self.assertNotIn("setor_id", columns)
+
+    def test_pergunta_aplicabilidade_backfill_global_and_reversible(self):
+        """FASE F: perguntas existentes viram GLOBAL; downgrade nao toca o resto."""
+        previous = "d5e6f7a8b9c0"
+        with self.temporary_database(previous) as (db_path, database_url):
+            connection = sqlite3.connect(db_path)
+            try:
+                # Semente propria: em d5e6f7a8b9c0 `coletas.company_id` ja e
+                # NOT NULL, entao o helper legado (sem company_id) nao serve.
+                company_id = connection.execute(
+                    "SELECT id FROM companies ORDER BY id LIMIT 1"
+                ).fetchone()[0]
+                profile_id = connection.execute(
+                    "SELECT id FROM perfis ORDER BY id LIMIT 1"
+                ).fetchone()[0]
+                connection.execute(
+                    """INSERT INTO usuarios
+                       (id, email, nome, senha_hash, ativo, perfil_id, company_id)
+                       VALUES (900, 'f@example.com', 'F', 'hash', 1, ?, ?)""",
+                    (profile_id, company_id),
+                )
+                connection.execute(
+                    """INSERT INTO projetos
+                       (id, nome, status, data_inicio, coordenador_id, company_id)
+                       VALUES (901, 'Projeto F', 'Ativo', '2026-01-01', 900, ?)""",
+                    (company_id,),
+                )
+                connection.execute(
+                    """INSERT INTO pesquisas (id, titulo, ativo, projeto_id)
+                       VALUES (902, 'Pesquisa F', 1, 901)"""
+                )
+                connection.execute(
+                    """INSERT INTO coletas
+                       (id, pesquisa_id, agente_id, company_id, client_uuid,
+                        data_inicio_coleta, foi_offline, status_sincronizacao,
+                        inconformidade_localizacao)
+                       VALUES (910, 902, 900, ?, 'f-uuid-910', '2026-01-01 10:00:00',
+                               0, 'sincronizado', 0)""",
+                    (company_id,),
+                )
+                for pergunta_id in (950, 951, 952):
+                    connection.execute(
+                        """INSERT INTO perguntas
+                           (id, texto_pergunta, tipo_pergunta, ordem, eh_obrigatoria,
+                            eh_resposta_espontanea, metadados_analiticos, ativo, pesquisa_id)
+                           VALUES (?, 'Pergunta legada', 'TEXTO', ?, 1, 0, '{}', 1, 902)""",
+                        (pergunta_id, pergunta_id - 949),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+
+            self.run_alembic("upgrade", "head", database_url=database_url)
+
+            connection = sqlite3.connect(db_path)
+            try:
+                aplicabilidades = connection.execute(
+                    "SELECT aplicabilidade FROM perguntas WHERE id IN (950, 951, 952)"
+                ).fetchall()
+                self.assertEqual(aplicabilidades, [("GLOBAL",)] * 3)
+                # Tabela associativa criada e vazia: nenhuma pergunta antiga
+                # virou territorial.
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM pergunta_territorio_eleitoral"
+                    ).fetchone()[0],
+                    0,
+                )
+                coletas_antes = connection.execute("SELECT COUNT(*) FROM coletas").fetchone()[0]
+            finally:
+                connection.close()
+
+            self.run_alembic("downgrade", previous, database_url=database_url)
+
+            connection = sqlite3.connect(db_path)
+            try:
+                colunas = {
+                    linha[1] for linha in connection.execute("PRAGMA table_info(perguntas)")
+                }
+                self.assertNotIn("aplicabilidade", colunas)
+                tabelas = {
+                    linha[0]
+                    for linha in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+                self.assertNotIn("pergunta_territorio_eleitoral", tabelas)
+                # Downgrade nao mexe em coletas nem nas perguntas em si.
+                self.assertEqual(
+                    connection.execute("SELECT COUNT(*) FROM coletas").fetchone()[0],
+                    coletas_antes,
+                )
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM perguntas WHERE id IN (950, 951, 952)"
+                    ).fetchone()[0],
+                    3,
+                )
+            finally:
+                connection.close()
 
     def test_invalid_legacy_cnpj_aborts_without_advancing_revision(self):
         with self.temporary_database("d4e8a1b2c3f4") as (db_path, database_url):

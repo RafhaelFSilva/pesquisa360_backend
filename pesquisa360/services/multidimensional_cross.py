@@ -11,6 +11,7 @@ from pesquisa360.core.analytics_config import (
     MAX_CROSS_NODES,
 )
 from pesquisa360.db import models
+from pesquisa360.services import acessos
 from pesquisa360.question_types import (
     is_categorical_question_type,
     is_multiple_response_question_type,
@@ -159,7 +160,7 @@ def _question_order_key(path, option_orders):
 def _eligible_questions(db, pesquisa_id, current_user):
     pesquisa = db.query(models.Pesquisa).join(models.Projeto).filter(
         models.Pesquisa.id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id,
+        acessos.filtro_projeto_acessivel(current_user),
     ).first()
     if pesquisa is None:
         raise HTTPException(status_code=404, detail="Pesquisa nao encontrada.")
@@ -179,7 +180,7 @@ def get_multidimensional_cross_options(db, pesquisa_id, current_user):
     question_ids = [question.id for question in questions]
     collection_ids = [row[0] for row in db.query(models.Coleta.id).filter(
         models.Coleta.pesquisa_id == pesquisa_id,
-        models.Coleta.company_id == current_user.company_id,
+        acessos.filtro_company_acessivel(models.Coleta.company_id, current_user),
     ).all()]
     rows = db.query(
         models.Resposta.coleta_id,
@@ -187,7 +188,7 @@ def get_multidimensional_cross_options(db, pesquisa_id, current_user):
         models.Resposta.valor_resposta,
     ).join(models.Coleta, models.Coleta.id == models.Resposta.coleta_id).filter(
         models.Coleta.pesquisa_id == pesquisa_id,
-        models.Coleta.company_id == current_user.company_id,
+        acessos.filtro_company_acessivel(models.Coleta.company_id, current_user),
         models.Resposta.pergunta_id.in_(question_ids),
     ).all() if question_ids else []
     option_rows = db.query(
@@ -410,7 +411,7 @@ def build_multidimensional_cross(db, pesquisa_id, payload, current_user):
 
     collection_ids = [row[0] for row in db.query(models.Coleta.id).filter(
         models.Coleta.pesquisa_id == pesquisa_id,
-        models.Coleta.company_id == current_user.company_id,
+        acessos.filtro_company_acessivel(models.Coleta.company_id, current_user),
     ).order_by(models.Coleta.id).all()]
 
     # --- Territorio ----------------------------------------------------------
@@ -463,7 +464,7 @@ def build_multidimensional_cross(db, pesquisa_id, payload, current_user):
         models.Resposta.valor_resposta,
     ).join(models.Coleta, models.Coleta.id == models.Resposta.coleta_id).filter(
         models.Coleta.pesquisa_id == pesquisa_id,
-        models.Coleta.company_id == current_user.company_id,
+        acessos.filtro_company_acessivel(models.Coleta.company_id, current_user),
         models.Resposta.pergunta_id.in_(processed_ids),
     ).order_by(models.Resposta.coleta_id, models.Resposta.pergunta_id, models.Resposta.id).all()
 

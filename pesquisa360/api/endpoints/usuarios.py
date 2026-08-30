@@ -1,9 +1,12 @@
-from typing import List, Annotated
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime
+from typing import List, Annotated, Optional
+from fastapi import Query, APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from pesquisa360 import crud, schemas
 from pesquisa360.db import models
+from pesquisa360.core import rbac
+from pesquisa360.services import acessos, ativacao, auditoria
 from pesquisa360.core.dependencies import (
     get_db,
     get_current_user,
@@ -14,6 +17,8 @@ from pesquisa360.core.dependencies import (
 
 router = APIRouter()
 admin_router = APIRouter(prefix="/admin/usuarios", tags=["Admin Usuarios"])
+# ADR-039: leitura da trilha. Nao e o painel -- e a fonte que o painel usara.
+auditoria_router = APIRouter(prefix="/admin/auditoria", tags=["Admin Auditoria"])
 profiles_router = APIRouter(prefix="/perfis", tags=["Perfis"])
 
 ASSIGNABLE_PROFILE_CODES = {
@@ -77,7 +82,45 @@ def _get_managed_user(
         raise HTTPException(status_code=403, detail="Gerente pode administrar somente Agentes.")
     return user
 
-@router.post("/", response_model=schemas.Usuario, status_code=status.HTTP_201_CREATED)
+def _com_convite(usuario: models.Usuario, convite) -> dict:
+    """Monta a resposta de criacao com o link transitorio do convite."""
+    corpo = schemas.Usuario.model_validate(usuario, from_attributes=True).model_dump()
+    corpo["convite"] = {
+        "activation_url": convite.activation_url,
+        "expira_em": convite.expira_em,
+        "email_enviado": convite.email_enviado,
+    }
+    return corpo
+
+
+# --- Ativacao de conta (PUBLICO) ---------------------------------------------
+# Sao as unicas rotas anonimas deste modulo: quem tem o link ainda nao tem
+# sessao. A autoridade continua sendo o token de uso unico, validado no banco.
+
+
+@router.get("/ativacao/validar", response_model=schemas.AtivacaoTokenStatus)
+def validar_token_ativacao(token: str = "", db: Session = Depends(get_db)):
+    """Diz ao Web se o link e valido, expirou, ja foi usado ou nao existe."""
+    return ativacao.descrever_token(db, token)
+
+
+@router.post("/ativacao", response_model=schemas.AtivacaoContaResponse)
+def ativar_conta(payload: schemas.AtivacaoContaRequest, db: Session = Depends(get_db)):
+    """Define a primeira senha e ativa a conta (transacao unica)."""
+    if payload.confirmacao_senha is not None and payload.confirmacao_senha != payload.senha:
+        raise HTTPException(status_code=422, detail="As senhas nao conferem.")
+    try:
+        usuario = ativacao.ativar_conta(db, payload.token, payload.senha)
+    except ativacao.ErroAtivacao as erro:
+        raise HTTPException(status_code=erro.status_code, detail=erro.mensagem)
+    return {
+        "ativado": True,
+        "email": usuario.email,
+        "mensagem": "Conta ativada com sucesso. Sua senha foi definida.",
+    }
+
+
+@router.post("/", response_model=schemas.UsuarioCriadoResponse, status_code=status.HTTP_201_CREATED)
 def create_user(
     user: schemas.UsuarioCreate, 
     db: Session = Depends(get_db),
@@ -109,17 +152,46 @@ def create_user(
             raise HTTPException(status_code=403, detail="Gerente pode criar somente Agentes.")
         company_id = current_user.company_id
 
-    return crud.create_user(
+    criado = crud.create_user(
         db=db,
         user=user,
         current_user=current_user,
         company_id=company_id,
     )
+    # Sem senha no payload = cadastro por convite: a conta nasce inativa e o
+    # proprio usuario define a senha pelo link. Com senha, o comportamento
+    # anterior e preservado.
+    if not user.senha:
+        criado.ativo = False
+        db.add(criado)
+        convite = ativacao.enviar_convite(db, criado)
+        db.commit()
+        db.refresh(criado)
+        # Link devolvido UMA vez, para o administrador repassar por outro meio
+        # se o e-mail nao chegar. Nao e persistido nem recuperavel depois.
+        return _com_convite(criado, convite)
+    return criado
 
 @router.get("/me/", response_model=schemas.Usuario)
-def read_users_me(current_user: Annotated[models.Usuario, Depends(get_current_user)]):
-    """Retorna dados do usuário logado."""
-    return current_user
+def read_users_me(
+    current_user: Annotated[models.Usuario, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Dados do usuário logado.
+
+    ADR-024: `company_id` continua sendo a empresa PRINCIPAL/default. Os campos
+    `company_ids`/`multiempresa` sao aditivos e dizem onde ele pode trabalhar.
+    A arvore de projetos NAO vem aqui: para isso existe `GET /projetos/`.
+    """
+    company_ids = acessos.listar_company_ids_acessiveis(db, current_user)
+    dados = schemas.Usuario.model_validate(current_user, from_attributes=True)
+    dados.company_ids = company_ids
+    dados.multiempresa = len(company_ids) > 1
+    # ADR-037: a UI deriva daqui o que mostrar. Duplicar a matriz no React
+    # criaria duas verdades sobre a mesma regra.
+    dados.papel = rbac.papel_nome(current_user)
+    dados.permissions = rbac.resumo_permissoes(current_user)
+    return dados
 
 @router.get("/", response_model=List[schemas.Usuario])
 def read_users(
@@ -145,7 +217,7 @@ def read_agentes(
     """
     return db.query(models.Usuario)\
              .join(models.Perfil)\
-             .filter(models.Usuario.company_id == current_user.company_id)\
+             .filter(acessos.filtro_usuario_visivel(current_user))\
              .filter(models.Usuario.ativo == True)\
              .filter(models.Perfil.nome.ilike('%agente%'))\
              .all()
@@ -224,7 +296,7 @@ def read_admin_users(
         limit=limit,
     )
 
-@admin_router.post("/", response_model=schemas.Usuario, status_code=status.HTTP_201_CREATED)
+@admin_router.post("/", response_model=schemas.UsuarioCriadoResponse, status_code=status.HTTP_201_CREATED)
 def create_admin_user(
     user: schemas.UsuarioAdminCreate,
     db: Session = Depends(get_db),
@@ -239,7 +311,16 @@ def create_admin_user(
     if not crud.get_perfil(db=db, perfil_id=user.perfil_id):
         raise HTTPException(status_code=404, detail="Perfil nao encontrado.")
 
-    return crud.create_admin_user(db=db, user=user)
+    criado = crud.create_admin_user(db=db, user=user)
+    if not user.senha:
+        # Mesmo cadastro por convite da rota de tenant.
+        criado.ativo = False
+        db.add(criado)
+        convite = ativacao.enviar_convite(db, criado)
+        db.commit()
+        db.refresh(criado)
+        return _com_convite(criado, convite)
+    return criado
 
 @admin_router.get("/{usuario_id}", response_model=schemas.Usuario)
 def read_admin_user(
@@ -270,3 +351,125 @@ def update_admin_user(
         raise HTTPException(status_code=404, detail="Perfil nao encontrado.")
 
     return crud.update_admin_user(db=db, db_user=user, user_update=user_update)
+
+
+# --- ACL multiempresa/multiprojeto (ADR-024) ---------------------------------
+# Somente Superadmin nesta fase: permitir que um Gerente da Empresa A conceda
+# acesso a Empresa B seria escalacao de privilegio.
+
+
+@admin_router.get("/{usuario_id}/acessos", response_model=schemas.UsuarioAcessosResponse)
+def obter_acessos_usuario(
+    usuario_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(require_superadmin),
+):
+    usuario = db.query(models.Usuario).filter(models.Usuario.id == usuario_id).first()
+    if usuario is None:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado.")
+    return acessos.acessos_do_usuario(db, usuario)
+
+
+@admin_router.put("/{usuario_id}/acessos", response_model=schemas.UsuarioAcessosResponse)
+def definir_acessos_usuario(
+    usuario_id: int,
+    payload: schemas.UsuarioAcessosRequest,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(require_superadmin),
+):
+    """Substitui a ACL inteira do usuario em UMA transacao.
+
+    Tudo e validado antes de qualquer escrita: empresa existente e ativa,
+    projeto existente e pertencente a empresa informada, sem duplicatas e com a
+    empresa principal entre as autorizadas. Um item invalido nao deixa metade da
+    ACL gravada.
+    """
+    usuario = db.query(models.Usuario).filter(models.Usuario.id == usuario_id).first()
+    if usuario is None:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado.")
+    return acessos.substituir_acessos(db, usuario, payload)
+
+
+@admin_router.post("/{usuario_id}/reenviar-ativacao", response_model=schemas.ReenvioAtivacaoResponse)
+def reenviar_ativacao(
+    usuario_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(require_superadmin),
+):
+    """Novo convite para conta ainda nao ativada.
+
+    Reusa `enviar_convite`, que invalida o convite anterior ainda aberto -- dois
+    links validos ao mesmo tempo so ampliariam a superficie de ataque. Conta ja
+    ativa nao recebe convite: seria um caminho paralelo de troca de senha.
+    """
+    usuario = db.query(models.Usuario).filter(models.Usuario.id == usuario_id).first()
+    if usuario is None:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado.")
+    if usuario.ativo:
+        raise HTTPException(status_code=400, detail="Usuario ja esta ativo.")
+
+    convite = ativacao.enviar_convite(db, usuario)
+    db.commit()
+    return {
+        "enviado": convite.email_enviado,
+        "email": usuario.email,
+        "expira_em": convite.expira_em,
+        "activation_url": convite.activation_url,
+    }
+
+
+@auditoria_router.get("/eventos", response_model=schemas.AuditEventPage)
+def listar_eventos_auditoria(
+    event_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    user_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    company_id: Optional[int] = None,
+    ip_address: Optional[str] = None,
+    data_inicio: Optional[datetime] = None,
+    data_fim: Optional[datetime] = None,
+    limit: int = Query(auditoria.LIMITE_PADRAO_LISTAGEM, ge=1, le=auditoria.LIMITE_MAX_LISTAGEM),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(require_manager_or_superadmin),
+):
+    """Trilha de seguranca (ADR-039), mais recente primeiro.
+
+    Superadmin: global, `company_id` e filtro real.
+    Gerente: SOMENTE o proprio tenant -- `company_id` da query e ignorado como
+    seletor de escopo, nunca amplia. Demais perfis: 403 (dependency).
+    """
+    if not is_superadmin(current_user):
+        company_id = current_user.company_id
+    itens, total = auditoria.listar_eventos(
+        db, event_type=event_type, severity=severity, user_id=user_id,
+        project_id=project_id, company_id=company_id, ip_address=ip_address,
+        data_inicio=data_inicio, data_fim=data_fim, limit=limit, offset=offset,
+    )
+    return {"items": itens, "total": total, "limit": limit, "offset": offset}
+
+
+@auditoria_router.get("/resumo", response_model=schemas.AuditSummary)
+def resumo_auditoria(
+    data_inicio: Optional[datetime] = None,
+    data_fim: Optional[datetime] = None,
+    company_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(require_manager_or_superadmin),
+):
+    """Agregacoes do painel de seguranca (ADR-041): cards, ranking de IPs,
+    contas mais tentadas e serie temporal. Periodo padrao: ultimas 24h.
+
+    Mesma regra de escopo de `/eventos`: Superadmin global (company_id e filtro
+    real); Gerente SOMENTE o proprio tenant -- eventos sem company_id (login
+    contra e-mail desconhecido, por exemplo) nao entram na visao gerencial.
+    Nao gera evento: o painel so le.
+    """
+    if not is_superadmin(current_user):
+        company_id = current_user.company_id
+    return auditoria.resumo_seguranca(
+        db, company_id=company_id, project_id=project_id, user_id=user_id,
+        data_inicio=data_inicio, data_fim=data_fim,
+    )

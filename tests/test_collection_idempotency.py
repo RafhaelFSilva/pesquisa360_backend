@@ -24,6 +24,7 @@ from pesquisa360.api.endpoints import coletas
 from pesquisa360.core.dependencies import get_current_user, get_db
 from pesquisa360.core.utils import geojson_point, web_point
 from pesquisa360.db import models
+from tests.acl_fixture import criar_tabelas_acl
 
 
 class CollectionIdempotencyTests(unittest.TestCase):
@@ -61,8 +62,14 @@ class CollectionIdempotencyTests(unittest.TestCase):
             connection.create_function("ST_AsGeoJSON", 1, lambda value: None)
             connection.create_function("AsGeoJSON", 1, lambda value: None)
 
+        criar_tabelas_acl(cls.engine)
+
+        criar_tabelas_acl(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine)
         with cls.engine.begin() as connection:
+            # RBAC (ADR-037) le o NOME do perfil: a fixture precisa da tabela.
+            connection.execute(text("CREATE TABLE perfis (id INTEGER PRIMARY KEY, nome TEXT, descricao TEXT)"))
+            connection.execute(text("INSERT INTO perfis (id,nome) VALUES (1,'Gerente'),(99,'Gerente')"))
             connection.execute(text("""
                 CREATE TABLE usuarios (
                     id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE, nome TEXT,
@@ -91,8 +98,10 @@ class CollectionIdempotencyTests(unittest.TestCase):
                     eh_obrigatoria BOOLEAN NOT NULL, eh_resposta_espontanea BOOLEAN NOT NULL DEFAULT 0,
                     papel_analitico VARCHAR(50), metadados_analiticos JSON NOT NULL DEFAULT '{}',
                     ativo BOOLEAN NOT NULL,
-                    pesquisa_id INTEGER NOT NULL
-                )
+                    pesquisa_id INTEGER NOT NULL,
+                -- FASE F
+                aplicabilidade VARCHAR(20) NOT NULL DEFAULT 'GLOBAL'
+)
             """))
             connection.execute(text("""
                 CREATE TABLE opcoes (
@@ -101,10 +110,24 @@ class CollectionIdempotencyTests(unittest.TestCase):
                 )
             """))
             connection.execute(text("""
+                CREATE TABLE setores (
+                    id INTEGER PRIMARY KEY, nome TEXT NOT NULL, meta INTEGER NOT NULL,
+                    tolerancia INTEGER NOT NULL DEFAULT 50,
+                    finalidade TEXT NOT NULL DEFAULT 'OPERACAO', geometria BLOB,
+                    pesquisa_id INTEGER NOT NULL, agente_id INTEGER, municipio_territorio_id INTEGER)
+            """))
+            connection.execute(text("""
+                CREATE TABLE setor_agentes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, setor_id INTEGER NOT NULL,
+                    agente_id INTEGER NOT NULL, ativo BOOLEAN NOT NULL DEFAULT 1,
+                    UNIQUE (setor_id, agente_id)
+                )
+            """))
+            connection.execute(text("""
                 CREATE TABLE coletas (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     pesquisa_id INTEGER NOT NULL, agente_id INTEGER NOT NULL,
-                    company_id INTEGER NOT NULL, client_uuid TEXT NOT NULL,
+                    company_id INTEGER NOT NULL, client_uuid TEXT NOT NULL, setor_id INTEGER,
                     foi_offline BOOLEAN, endereco_estimado TEXT,
                     status_sincronizacao TEXT, data_inicio_coleta DATETIME NOT NULL,
                     data_fim_coleta DATETIME, localizacao_inicio BLOB,
@@ -157,7 +180,7 @@ class CollectionIdempotencyTests(unittest.TestCase):
         self.current_user_id = 1
         type(self).current_user_id = 1
         with self.engine.begin() as connection:
-            for table in ("respostas", "coletas", "perguntas", "pesquisas", "projetos", "usuarios"):
+            for table in ("respostas", "coletas", "setor_agentes", "setores", "perguntas", "pesquisas", "projetos", "usuarios"):
                 connection.execute(text(f"DELETE FROM {table}"))
             connection.execute(text("""
                 INSERT INTO usuarios
@@ -187,6 +210,20 @@ class CollectionIdempotencyTests(unittest.TestCase):
                        (1010, 'Pergunta A2', 'TEXTO', 1, 1, 1, 101),
                        (2000, 'Pergunta B', 'TEXTO', 1, 1, 1, 200)
             """))
+            connection.execute(text("""
+                INSERT INTO setores
+                    (id, nome, meta, pesquisa_id, agente_id)
+                VALUES (500, 'Setor A1', 10, 100, NULL),
+                       (501, 'Setor A1 sem vinculo', 10, 100, NULL),
+                       (502, 'Setor A2', 10, 101, NULL),
+                       (600, 'Setor B', 10, 200, NULL),
+                       (503, 'Setor legado', 10, 100, 1)
+            """))
+            connection.execute(text("""
+                INSERT INTO setor_agentes (setor_id, agente_id, ativo)
+                VALUES (500, 1, 1), (500, 2, 1), (501, 1, 0), (502, 1, 1),
+                       (600, 3, 1)
+            """))
 
     def payload(
         self,
@@ -196,6 +233,7 @@ class CollectionIdempotencyTests(unittest.TestCase):
         data_fim_coleta="2026-08-02T12:05:00Z",
         localizacao_inicio=None,
         localizacao_fim=None,
+        setor_id=None,
     ):
         payload = {
             "client_uuid": str(client_uuid),
@@ -207,6 +245,8 @@ class CollectionIdempotencyTests(unittest.TestCase):
             payload["localizacao_inicio"] = localizacao_inicio
         if localizacao_fim is not None:
             payload["localizacao_fim"] = localizacao_fim
+        if setor_id is not None:
+            payload["setor_id"] = setor_id
         return payload
 
     def submit(self, client_uuid, answer="Resposta original", pesquisa_id=100):
@@ -231,6 +271,79 @@ class CollectionIdempotencyTests(unittest.TestCase):
         response = self.submit(uuid4())
         self.assertEqual(response.status_code, 201)
         self.assertEqual(self.scalar("SELECT COUNT(*) FROM coletas"), 1)
+
+    def test_legacy_payload_keeps_nullable_sector(self):
+        response = self.submit(uuid4())
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(response.json()["setor_id"])
+        self.assertIsNone(self.scalar("SELECT setor_id FROM coletas"))
+
+    def test_assigned_sector_is_persisted_and_returned(self):
+        response = self.client.post(
+            "/pesquisas/100/coletas/",
+            json=self.payload(uuid4(), setor_id=500),
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["setor_id"], 500)
+        self.assertEqual(self.scalar("SELECT setor_id FROM coletas"), 500)
+        monitoring = self.client.get("/pesquisas/100/coletas/monitoramento/")
+        self.assertEqual(monitoring.json()[0]["setor_id"], 500)
+        listing = self.client.get("/pesquisas/100/coletas/")
+        self.assertEqual(listing.json()[0]["setor_id"], 500)
+
+    def test_same_tenant_unassigned_agent_is_rejected(self):
+        type(self).current_user_id = 2
+        response = self.client.post(
+            "/pesquisas/100/coletas/",
+            json=self.payload(uuid4(), setor_id=501),
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.scalar("SELECT COUNT(*) FROM coletas"), 0)
+
+    def test_cross_tenant_sector_is_hidden(self):
+        response = self.client.post(
+            "/pesquisas/100/coletas/",
+            json=self.payload(uuid4(), setor_id=600),
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.scalar("SELECT COUNT(*) FROM coletas"), 0)
+
+    def test_sector_from_another_survey_is_rejected(self):
+        response = self.client.post(
+            "/pesquisas/100/coletas/",
+            json=self.payload(uuid4(), setor_id=502),
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.scalar("SELECT COUNT(*) FROM coletas"), 0)
+
+    def test_inactive_assignment_without_legacy_fallback_is_rejected(self):
+        response = self.client.post(
+            "/pesquisas/100/coletas/",
+            json=self.payload(uuid4(), setor_id=501),
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_legacy_single_agent_assignment_is_accepted(self):
+        response = self.client.post(
+            "/pesquisas/100/coletas/",
+            json=self.payload(uuid4(), setor_id=503),
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["setor_id"], 503)
+
+    def test_idempotent_retry_does_not_replace_original_sector(self):
+        client_uuid = uuid4()
+        first = self.client.post(
+            "/pesquisas/100/coletas/",
+            json=self.payload(client_uuid, setor_id=500),
+        )
+        second = self.client.post(
+            "/pesquisas/100/coletas/",
+            json=self.payload(client_uuid, setor_id=503),
+        )
+        self.assertEqual((first.status_code, second.status_code), (201, 201))
+        self.assertEqual(first.json()["id"], second.json()["id"])
+        self.assertEqual(self.scalar("SELECT setor_id FROM coletas"), 500)
 
     def test_valid_mobile_coordinates_are_stored_as_longitude_latitude(self):
         response = self.client.post(
@@ -571,17 +684,23 @@ class CollectionIdempotencyTests(unittest.TestCase):
                 db=db,
                 coleta_in=coleta_in,
                 pesquisa_id=100,
-                agente_id=1,
-                company_id=10,
+                current_user=SimpleNamespace(id=1, company_id=10),
             )
 
         self.assertIs(result, existing)
         db.rollback.assert_called_once()
 
     def test_migration_has_exactly_one_new_head(self):
+        """Mesma garantia estrutural: a migration da FASE B nao ramificou nada.
+
+        O hash saiu daqui pelo mesmo motivo de `test_tenant_validation`: este
+        teste ja precisou ser reescrito uma vez so porque uma migration valida
+        entrou na cadeia. A revision concreta e a linhagem completa vivem em
+        `tests/test_migration_chain.py`.
+        """
         config = Config("alembic.ini")
         heads = ScriptDirectory.from_config(config).get_heads()
-        self.assertEqual(heads, ["b2c3d4e5f6a7"])
+        self.assertEqual(len(heads), 1, f"Cadeia ramificada: {heads}")
 
 
 if __name__ == "__main__":

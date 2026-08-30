@@ -7,8 +7,10 @@ import json
 
 from pesquisa360 import crud, schemas
 from pesquisa360.db import models
+from pesquisa360.services import acessos
 from pesquisa360.core.dependencies import get_db, get_current_user
 from pesquisa360.core.utils import web_point
+from pesquisa360.core.rbac import Permissao, require_permissao
 
 router = APIRouter()
 
@@ -28,7 +30,7 @@ def validar_agentes_monitoramento(db: Session, agente_ids: list[int] | None, cur
     ids_unicos = set(agente_ids)
     agentes = db.query(models.Usuario.id).filter(
         models.Usuario.id.in_(ids_unicos),
-        models.Usuario.company_id == current_user.company_id
+        acessos.filtro_usuario_visivel(current_user)
     ).all()
     ids_validos = {agente.id for agente in agentes}
 
@@ -49,7 +51,7 @@ def validar_setores_monitoramento(db: Session, pesquisa_id: int, setor_ids: list
     if ids_validos != ids_unicos:
         raise HTTPException(status_code=404, detail="Setor nao encontrado para esta pesquisa.")
 
-@router.post("/pesquisas/{pesquisa_id}/coletas/", status_code=status.HTTP_201_CREATED)
+@router.post("/pesquisas/{pesquisa_id}/coletas/", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissao(Permissao.COLETA_ENVIAR))])
 def submit_coleta(
     *,
     db: Session = Depends(get_db),
@@ -70,8 +72,7 @@ def submit_coleta(
         db=db,
         coleta_in=coleta_in,
         pesquisa_id=pesquisa_id,
-        agente_id=current_user.id,
-        company_id=current_user.company_id,
+        current_user=current_user,
     )
 
     # A associação do agente vem do token do usuário autenticado,
@@ -81,9 +82,10 @@ def submit_coleta(
         "msg": "Coleta recebida com sucesso",
         "id": db_coleta.id,
         "client_uuid": db_coleta.client_uuid,
+        "setor_id": db_coleta.setor_id,
     }
 
-@router.get("/pesquisas/{pesquisa_id}/coletas/monitoramento/")
+@router.get("/pesquisas/{pesquisa_id}/coletas/monitoramento/", dependencies=[Depends(require_permissao(Permissao.CAMPO_MONITORAR))])
 def read_coletas_monitoramento(
     *,
     db: Session = Depends(get_db),
@@ -105,6 +107,7 @@ def read_coletas_monitoramento(
         models.Coleta.id,
         models.Coleta.pesquisa_id,
         models.Coleta.agente_id,
+        models.Coleta.setor_id,
         models.Usuario.nome.label("agente_nome"),
         models.Coleta.data_inicio_coleta,
         models.Coleta.data_fim_coleta,
@@ -149,6 +152,7 @@ def read_coletas_monitoramento(
             "id": coleta.id,
             "pesquisa_id": coleta.pesquisa_id,
             "agente_id": coleta.agente_id,
+            "setor_id": coleta.setor_id,
             "agente_nome": coleta.agente_nome,
             "data_inicio_coleta": coleta.data_inicio_coleta.isoformat() if coleta.data_inicio_coleta else None,
             "data_fim_coleta": coleta.data_fim_coleta.isoformat() if coleta.data_fim_coleta else None,
@@ -162,7 +166,7 @@ def read_coletas_monitoramento(
 
     return resultado
 
-@router.get("/pesquisas/{pesquisa_id}/coletas/monitoramento/filtros/")
+@router.get("/pesquisas/{pesquisa_id}/coletas/monitoramento/filtros/", dependencies=[Depends(require_permissao(Permissao.CAMPO_MONITORAR))])
 def read_coletas_monitoramento_filtros(
     *,
     db: Session = Depends(get_db),
@@ -181,7 +185,7 @@ def read_coletas_monitoramento_filtros(
     .join(models.Coleta, models.Coleta.agente_id == models.Usuario.id)\
     .filter(
         models.Coleta.pesquisa_id == pesquisa_id,
-        models.Usuario.company_id == current_user.company_id
+        acessos.filtro_usuario_visivel(current_user)
     )\
     .group_by(models.Usuario.id, models.Usuario.nome)\
     .order_by(models.Usuario.nome)\
@@ -226,7 +230,7 @@ def read_coletas_monitoramento_filtros(
         ],
     }
 
-@router.get("/pesquisas/{pesquisa_id}/coletas/")
+@router.get("/pesquisas/{pesquisa_id}/coletas/", dependencies=[Depends(require_permissao(Permissao.CAMPO_MONITORAR))])
 def read_coletas_por_pesquisa(
     *,
     db: Session = Depends(get_db),
@@ -250,6 +254,7 @@ def read_coletas_por_pesquisa(
         models.Coleta.id,
         models.Coleta.pesquisa_id,
         models.Coleta.agente_id,
+        models.Coleta.setor_id,
         models.Coleta.data_inicio_coleta,
         models.Coleta.data_fim_coleta,
         models.Coleta.foi_offline,
@@ -297,6 +302,7 @@ def read_coletas_por_pesquisa(
             "id": c.id,
             "pesquisa_id": c.pesquisa_id,
             "agente_id": c.agente_id,
+            "setor_id": c.setor_id,
             "data_inicio_coleta": c.data_inicio_coleta,
             "data_fim_coleta": c.data_fim_coleta,
             "foi_offline": c.foi_offline,

@@ -16,6 +16,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 from pesquisa360.api.endpoints import empresas, login
 from pesquisa360.core import security
 from pesquisa360.core.dependencies import get_db
+from tests.acl_fixture import criar_tabelas_acl
 
 
 class TenantValidationTests(unittest.TestCase):
@@ -26,6 +27,7 @@ class TenantValidationTests(unittest.TestCase):
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
+        criar_tabelas_acl(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine)
         cls.password_hash = security.get_password_hash("correct-password")
         with cls.engine.begin() as connection:
@@ -227,8 +229,18 @@ class TenantValidationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
 
     def test_migration_has_one_new_head(self):
+        """A migration desta fase nao pode ter criado um segundo head.
+
+        O que este teste sempre quis dizer e "nao ramifiquei a cadeia" -- nao
+        "o head sera eternamente esta revision". Fixar o hash fazia com que
+        QUALQUER migration valida futura reprovasse aqui, e foi o que
+        aconteceu: a expectativa ficou em `b2c3d4e5f6a7`, de antes das FASES
+        A e B. Quem pina a revision e caminha a linhagem e
+        `tests/test_migration_chain.py`, dono desse contrato; duplicar o hash
+        aqui so criava um segundo lugar para esquecer de atualizar.
+        """
         heads = ScriptDirectory.from_config(Config("alembic.ini")).get_heads()
-        self.assertEqual(heads, ["b2c3d4e5f6a7"])
+        self.assertEqual(len(heads), 1, f"Cadeia ramificada: {heads}")
 
 
 if __name__ == "__main__":

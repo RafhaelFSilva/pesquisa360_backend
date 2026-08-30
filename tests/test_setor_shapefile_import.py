@@ -25,6 +25,7 @@ from pesquisa360.services.setor_shapefile_import import (
     validate_shapefile_components,
 )
 from pesquisa360.schemas import FinalidadeSetor
+from tests.acl_fixture import criar_tabelas_acl
 from scripts import importar_setor_shapefile as cli
 
 
@@ -144,6 +145,7 @@ def test_tolerance_must_be_non_negative(value):
 @pytest.fixture
 def db():
     engine = create_engine("sqlite:///:memory:")
+    criar_tabelas_acl(engine)
     Session = sessionmaker(bind=engine)
     with engine.begin() as connection:
         connection.execute(text("""
@@ -177,8 +179,7 @@ def db():
             CREATE TABLE setores (
                 id INTEGER PRIMARY KEY, nome TEXT, meta INTEGER, tolerancia INTEGER,
                 finalidade TEXT DEFAULT 'OPERACAO' NOT NULL,
-                geometria TEXT, pesquisa_id INTEGER, agente_id INTEGER
-            )
+                geometria TEXT, pesquisa_id INTEGER, agente_id INTEGER, municipio_territorio_id INTEGER)
         """))
         connection.execute(text("INSERT INTO companies VALUES (10, 'A', NULL, NULL, 1, NULL), (20, 'B', NULL, NULL, 1, NULL)"))
         connection.execute(text("INSERT INTO perfis VALUES (1, 'Gerente', NULL), (2, 'Agente', NULL), (3, 'Outro', NULL)"))
@@ -201,7 +202,7 @@ def db():
               (2000, 'Survey B', NULL, 1, 200, NULL, NULL),
               (1001, 'Inactive', NULL, 0, 100, NULL, NULL)
         """))
-        connection.execute(text("INSERT INTO setores VALUES (1, '  Centro   Norte ', 1, 0, 'OPERACAO', NULL, 1000, 2)"))
+        connection.execute(text("INSERT INTO setores (id, nome, meta, tolerancia, finalidade, geometria, pesquisa_id, agente_id) VALUES (1, '  Centro   Norte ', 1, 0, 'OPERACAO', NULL, 1000, 2)"))
     session = Session()
     try:
         yield session

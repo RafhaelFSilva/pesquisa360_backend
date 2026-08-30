@@ -1,0 +1,237 @@
+{
+  "plano_cota_perfil_ativo": true,
+  "prioridades_perfil": [
+    {
+      "territorio_id": 900,
+      "territorio_nome": "Macapa",
+      "sexo": "MASCULINO",
+      "sexo_rotulo": "Homem",
+      "faixa_etaria": "60+",
+      "meta": 10,
+      "realizado": 2,
+      "restante": 8,
+      "percentual_atingimento": 20.0,
+      "percentual_territorio": 60.0,
+      "desvio_pp": -40.0,
+      "prioridade": "ALTO"
+    },
+    {
+      "territorio_id": 900,
+      "territorio_nome": "Macapa",
+      "sexo": "MASCULINO",
+      "sexo_rotulo": "Homem",
+      "faixa_etaria": "45-59",
+      "meta": 10,
+      "realizado": 4,
+      "restante": 6,
+      "percentual_atingimento": 40.0,
+      "percentual_territorio": 60.0,
+      "desvio_pp": -20.0,
+      "prioridade": "MEDIO"
+    }
+  ],
+  "perfil_status_territorios": {
+    "900": "PRIORIDADES"
+  },
+  "prioridades_perfil_snapshot_em": "2026-08-30T17:26:10.687496+00:00",
+  "tem_setor": true,
+  "setor_id": 500,
+  "setor_nome": "Setor A",
+  "meta": 10,
+  "realizado": 5,
+  "restante": 5,
+  "excedente": 0,
+  "percentual_atingimento": 50.0,
+  "cota_atingida": false,
+  "status_cota": "ABERTO",
+  "tolerancia_metros": 50,
+  "geometria": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          -51.08,
+          0.02
+        ],
+        [
+          -51.06,
+          0.02
+        ],
+        [
+          -51.06,
+          0.05
+        ],
+        [
+          -51.08,
+          0.05
+        ],
+        [
+          -51.08,
+          0.02
+        ]
+      ]
+    ]
+  },
+  "setores": [
+    {
+      "id": 500,
+      "nome": "Setor A",
+      "meta": 10,
+      "realizado": 5,
+      "restante": 5,
+      "excedente": 0,
+      "percentual_atingimento": 50.0,
+      "cota_atingida": false,
+      "status_cota": "ABERTO",
+      "limite_atencao_realizado": 9,
+      "snapshot_ate_coleta_id": 5,
+      "snapshot_em": "2026-08-30T17:26:10.677794+00:00",
+      "agentes_atribuidos_total": 1,
+      "tolerancia_metros": 50,
+      "geometria": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -51.08,
+              0.02
+            ],
+            [
+              -51.06,
+              0.02
+            ],
+            [
+              -51.06,
+              0.05
+            ],
+            [
+              -51.08,
+              0.05
+            ],
+            [
+              -51.08,
+              0.02
+            ]
+          ]
+        ]
+      },
+      "territorio_status": "RESOLVIDO",
+      "municipio": {
+        "id": 900,
+        "nome": "Macapa"
+      },
+      "pergunta_ids_aplicaveis": [
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "id": 501,
+      "nome": "Setor B",
+      "meta": 10,
+      "realizado": 9,
+      "restante": 1,
+      "excedente": 0,
+      "percentual_atingimento": 90.0,
+      "cota_atingida": false,
+      "status_cota": "ATENCAO",
+      "limite_atencao_realizado": 9,
+      "snapshot_ate_coleta_id": 14,
+      "snapshot_em": "2026-08-30T17:26:10.677794+00:00",
+      "agentes_atribuidos_total": 2,
+      "tolerancia_metros": 50,
+      "geometria": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -51.07,
+              0.02
+            ],
+            [
+              -51.050000000000004,
+              0.02
+            ],
+            [
+              -51.050000000000004,
+              0.05
+            ],
+            [
+              -51.07,
+              0.05
+            ],
+            [
+              -51.07,
+              0.02
+            ]
+          ]
+        ]
+      },
+      "territorio_status": "RESOLVIDO",
+      "municipio": {
+        "id": 900,
+        "nome": "Macapa"
+      },
+      "pergunta_ids_aplicaveis": [
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "id": 502,
+      "nome": "Setor C",
+      "meta": 10,
+      "realizado": 10,
+      "restante": 0,
+      "excedente": 0,
+      "percentual_atingimento": 100.0,
+      "cota_atingida": true,
+      "status_cota": "ENCERRADO",
+      "limite_atencao_realizado": 9,
+      "snapshot_ate_coleta_id": 24,
+      "snapshot_em": "2026-08-30T17:26:10.677794+00:00",
+      "agentes_atribuidos_total": 1,
+      "tolerancia_metros": 50,
+      "geometria": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -51.059999999999995,
+              0.02
+            ],
+            [
+              -51.04,
+              0.02
+            ],
+            [
+              -51.04,
+              0.05
+            ],
+            [
+              -51.059999999999995,
+              0.05
+            ],
+            [
+              -51.059999999999995,
+              0.02
+            ]
+          ]
+        ]
+      },
+      "territorio_status": "RESOLVIDO",
+      "municipio": {
+        "id": 900,
+        "nome": "Macapa"
+      },
+      "pergunta_ids_aplicaveis": [
+        11,
+        12,
+        13
+      ]
+    }
+  ],
+  "possui_perguntas_territoriais": false
+}

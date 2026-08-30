@@ -14,6 +14,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 from pesquisa360 import crud
 from pesquisa360.api.endpoints import relatorios
 from pesquisa360.core.dependencies import get_current_user, get_db
+from tests.acl_fixture import criar_tabelas_acl
 
 
 class RelatorioSimplesOpcoesVaziasTests(unittest.TestCase):
@@ -32,6 +33,9 @@ class RelatorioSimplesOpcoesVaziasTests(unittest.TestCase):
             connection.create_function("ST_AsGeoJSON", 1, lambda value: None)
             connection.create_function("AsGeoJSON", 1, lambda value: None)
 
+        criar_tabelas_acl(cls.engine)
+
+        criar_tabelas_acl(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine)
         with cls.engine.begin() as connection:
             connection.execute(text("""
@@ -88,8 +92,10 @@ class RelatorioSimplesOpcoesVaziasTests(unittest.TestCase):
                     papel_analitico VARCHAR(50),
                     metadados_analiticos JSON NOT NULL DEFAULT '{}',
                     ativo BOOLEAN NOT NULL,
-                    pesquisa_id INTEGER NOT NULL
-                )
+                    pesquisa_id INTEGER NOT NULL,
+                -- FASE F
+                aplicabilidade VARCHAR(20) NOT NULL DEFAULT 'GLOBAL'
+)
             """))
             connection.execute(text("""
                 CREATE TABLE opcoes (

@@ -219,3 +219,72 @@ Permanece para evolução futura:
 
 O resultado atual é evidência descritiva. Ele não afirma causalidade nem produz
 interpretação eleitoral automática.
+
+## Entregue — Cadastro por convite e ativação de conta (ADR-035)
+
+`POST /usuarios/` sem senha cria conta inativa e envia convite; o usuário define
+a primeira senha em `/ativar-conta` (token de uso único, 24h). Política mínima
+de senha centralizada em `core/password_policy.py`.
+
+### Próximas etapas desta linha
+
+- **RBAC completo** (matriz Gerente/Coordenador/Supervisor/Cliente/Agente) — a
+  regra de perfil atual na criação foi **preservada**, não ampliada.
+- **Recuperação de senha** ("esqueci minha senha") — reutilizar
+  `password_policy` e o mesmo padrão de token com hash.
+- Aplicar a política de senha também aos fluxos administrativos de troca/reset
+  (hoje seguem a validação anterior).
+- Auditoria (`audit_events`), notificação de acesso, rate limiting e MFA.
+
+## Entregue — Documentação OpenAPI restrita por ambiente (ADR-038)
+
+`APP_ENV=production` faz o FastAPI não registrar `/docs`, `/redoc` e
+`/openapi.json`. Default `development` preserva o Swagger local.
+
+### Pendências desta linha
+
+- **Definir `APP_ENV=production` no deploy** — sem isso a documentação continua
+  pública. É o único passo operacional desta entrega.
+- Reverse proxy: se um Nginx próprio passar a ser versionado, adicionar
+  `return 404` para as três rotas como defesa em profundidade.
+- Próximas fases de segurança: audit_events, rate limiting, MFA, CSP/headers.
+
+## Entregue — Auditoria central (ADR-039)
+
+`audit_events` alimentada no Backend: login (inclusive conta inativa), token
+(expirado / inválido / rejeitado), RBAC, ACL (com cross-tenant), acesso a
+projeto (deduplicado por 15 min), ativação e mudança de ACL. Leitura em
+`GET /admin/auditoria/eventos` — Superadmin global, Gerente só o próprio
+tenant — com filtros por período, evento, severidade, usuário, projeto e IP,
+página máxima de 100 e ordenação `occurred_at DESC`. `X-Request-ID` em toda
+resposta. Índice composto para a deduplicação na migration `a4b5c6d7e8f9`.
+
+## Entregue — Notificação de acesso ao projeto (ADR-040)
+
+`PROJECT_ACCESS` persistido (fora da janela de 15 min) dispara e-mail ao
+Gerente responsável (`projetos.coordenador_id`), com resultado auditado em
+`PROJECT_ACCESS_NOTIFICATION_SENT / SUPPRESSED / FAILED`. Autoacesso do Gerente
+é suprimido; Superadmin notifica; falha de SMTP nunca bloqueia o acesso. Sem
+migration, sem fila, sem retry, Web e Mobile intocados.
+
+Próximo desta linha: preferências de notificação (por projeto/Gerente, resumo
+diário) e retry idempotente de SMTP.
+
+## Entregue — Painel administrativo de segurança (ADR-041)
+
+`GET /admin/auditoria/resumo` (agregação SQL: totais, top IPs, contas mais
+tentadas, série temporal) + rota Web `/admin/seguranca` para Gerente (próprio
+tenant) e Superadmin (global), com cards, gráfico, rankings, tabela paginada
+(máx. 100), filtros e detalhe do evento. Só observação: nenhuma ação
+automática ou manual de bloqueio. Sem migration.
+
+Próximos desta linha (não implementados): rate limiting, bloqueio de IP/usuário,
+alertas de brute force, MFA/CAPTCHA, exportação CSV/PDF, retenção/purge, SIEM.
+
+### Próximas fases desta linha (não implementadas)
+
+- ~~Notificação ao Gerente quando um projeto for acessado~~ — entregue na ADR-040.
+- ~~Painel administrativo de segurança~~ — entregue na ADR-041.
+- Indicadores/detecção de comportamento suspeito (ex.: N `LOGIN_FAILED` por IP).
+- Retenção/expurgo da trilha por política — hoje é append-only sem limite.
+- `AUDIT_TRUST_PROXY=true` + `--proxy-headers` quando houver reverse proxy declarado.

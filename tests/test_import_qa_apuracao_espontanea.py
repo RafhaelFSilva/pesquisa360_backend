@@ -12,6 +12,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 
+from pesquisa360.db import models
+from tests.acl_fixture import criar_tabelas_acl
+
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "import_qa_apuracao_espontanea.py"
 SPEC = importlib.util.spec_from_file_location("import_qa_apuracao_espontanea", SCRIPT_PATH)
 importer = importlib.util.module_from_spec(SPEC)
@@ -34,6 +37,9 @@ class ImportQaApuracaoEspontaneaTests(unittest.TestCase):
             connection.create_function("ST_AsEWKB", 1, lambda value: value)
             connection.create_function("GeomFromEWKT", 1, lambda value: value)
 
+        criar_tabelas_acl(cls.engine)
+
+        criar_tabelas_acl(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine)
         with cls.engine.begin() as connection:
             connection.execute(text("""
@@ -98,8 +104,10 @@ class ImportQaApuracaoEspontaneaTests(unittest.TestCase):
                     papel_analitico VARCHAR(50),
                     metadados_analiticos JSON NOT NULL DEFAULT '{}',
                     ativo BOOLEAN NOT NULL,
-                    pesquisa_id INTEGER NOT NULL
-                )
+                    pesquisa_id INTEGER NOT NULL,
+                -- FASE F
+                aplicabilidade VARCHAR(20) NOT NULL DEFAULT 'GLOBAL'
+)
             """))
             connection.execute(text("""
                 CREATE TABLE opcoes (
@@ -117,6 +125,11 @@ class ImportQaApuracaoEspontaneaTests(unittest.TestCase):
                     agente_id INTEGER NOT NULL,
                     company_id INTEGER NOT NULL,
                     client_uuid TEXT NOT NULL,
+                    -- Coluna da FASE B. Nullable: coleta importada aqui nao tem
+                    -- Setor explicito, e NULL e a representacao correta disso.
+                    -- Sem FK, seguindo o resto desta fixture, que e um schema
+                    -- minimo deliberado e nao tem a tabela `setores`.
+                    setor_id INTEGER,
                     foi_offline BOOLEAN,
                     endereco_estimado TEXT,
                     status_sincronizacao TEXT,
@@ -378,6 +391,34 @@ class ImportQaApuracaoEspontaneaTests(unittest.TestCase):
                 "WHERE p.pesquisa_id = :pesquisa_id AND p.texto_pergunta = 'Quem é o seu candidato?'"
             ), {"pesquisa_id": result["survey_id"]}).scalar_one()
         self.assertEqual(stored, "Clécio ")
+
+    def test_coleta_legada_sem_setor_continua_legivel_pelo_orm(self):
+        """Compatibilidade da FASE B: `setor_id` NULL e leitura normal.
+
+        Coleta importada por este fluxo nao tem Setor explicito. O vinculo
+        territorial passou a existir depois, e nao pode virar requisito
+        retroativo: o registro antigo precisa continuar sendo lido pelo ORM
+        atual, com `setor_id` None -- e nao 0, nem um setor inventado.
+        """
+        csv_path, profile = self.write_csv()
+        result = self.execute(csv_path, profile, apply=True)
+
+        session = self.Session()
+        try:
+            coletas = (
+                session.query(models.Coleta)
+                .filter(models.Coleta.pesquisa_id == result["survey_id"])
+                .all()
+            )
+            self.assertTrue(coletas, "a importacao deveria ter criado coletas")
+            for coleta in coletas:
+                self.assertIsNone(coleta.setor_id)
+                # O objeto continua utilizavel, nao so a coluna: se o mapeamento
+                # da FASE B tivesse quebrado a leitura, isto falharia aqui.
+                self.assertEqual(coleta.pesquisa_id, result["survey_id"])
+                self.assertIsNotNone(coleta.client_uuid)
+        finally:
+            session.close()
 
     def test_categories_and_mappings_are_not_created(self):
         csv_path, profile = self.write_csv()

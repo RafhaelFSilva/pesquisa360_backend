@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from pesquisa360 import crud
 from pesquisa360.db import models
+from pesquisa360.services import acessos
 from pesquisa360.services.filtros_universo import aplicar_filtros_respostas
 from pesquisa360.services import base_eleitoral as base_service
 from pesquisa360.services.setor_territorio import (
@@ -366,7 +367,7 @@ def analisar_liderancas(
         db.query(models.Projeto)
         .filter(
             models.Projeto.id == projeto_id,
-            models.Projeto.company_id == current_user.company_id,
+            acessos.filtro_projeto_acessivel(current_user),
         )
         .first()
     )

@@ -1,6 +1,7 @@
 # pesquisa360/crud.py
 
 import json
+import secrets
 from collections import defaultdict
 from math import ceil
 import pandas as pd
@@ -10,7 +11,7 @@ from typing import List, Optional
 from .utils import geocoding
 from geopy.geocoders import Nominatim
 from sqlalchemy.orm import Session, aliased, joinedload, load_only
-from sqlalchemy import func, Text, and_, exists
+from sqlalchemy import func, Text, and_, exists, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import text, bindparam
 from geoalchemy2.shape import from_shape
@@ -18,7 +19,12 @@ from shapely.geometry import Point, Polygon
 from .db import models
 from . import schemas
 from .core import security
-from .question_types import is_categorical_question_type, normalize_question_type
+from .services import acessos
+from .question_types import (
+    is_categorical_question_type,
+    is_multiple_response_question_type,
+    normalize_question_type,
+)
 from .utils.response_normalization import normalizar_resposta_espontanea
 
 # ==============================================================================
@@ -35,6 +41,17 @@ def get_user_by_email(db: Session, email: str):
 def get_user_by_id(db: Session, usuario_id: int):
     return db.query(models.Usuario).filter(models.Usuario.id == usuario_id).first()
 
+def _hash_senha_ou_placeholder(senha: Optional[str]) -> str:
+    """Hash da senha informada, ou de um segredo aleatorio quando nao houver.
+
+    Cadastro por convite nao tem senha ainda, e `senha_hash` e NOT NULL. Guardar
+    string vazia ou um marcador conhecido criaria uma senha adivinhavel; um
+    aleatorio de 48 bytes e simplesmente inutilizavel ate a ativacao gravar a
+    senha real. A conta tambem nasce inativa, entao o login ja estaria barrado.
+    """
+    return security.get_password_hash(senha if senha else secrets.token_urlsafe(48))
+
+
 def create_user(
     db: Session,
     user: schemas.UsuarioCreate,
@@ -44,7 +61,7 @@ def create_user(
     """
     Cria um novo usuário VINCULADO à empresa do administrador logado.
     """
-    hashed_password = security.get_password_hash(user.senha)
+    hashed_password = _hash_senha_ou_placeholder(user.senha)
     db_user = models.Usuario(
         email=user.email, 
         nome=user.nome,
@@ -55,6 +72,10 @@ def create_user(
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
+    # ADR-024: usuario novo ja nasce com a ACL equivalente ao comportamento
+    # legado (acesso total a propria empresa principal). Sem isto, um usuario
+    # criado depois da migration ficaria sem enxergar nada.
+    acessos.garantir_acesso_principal(db, db_user)
     return db_user
 
 def get_users(db: Session, current_user: models.Usuario, skip: int = 0, limit: int = 100):
@@ -62,7 +83,7 @@ def get_users(db: Session, current_user: models.Usuario, skip: int = 0, limit: i
     Retorna apenas usuários da MESMA EMPRESA que o solicitante.
     """
     return db.query(models.Usuario)\
-             .filter(models.Usuario.company_id == current_user.company_id)\
+             .filter(acessos.filtro_usuario_visivel(current_user))\
              .offset(skip).limit(limit).all()
 
 def get_admin_users(
@@ -94,7 +115,7 @@ def create_perfil(db: Session, perfil: schemas.PerfilCreate):
 
 def create_admin_user(db: Session, user: schemas.UsuarioAdminCreate):
     perfil_id = user.perfil_id
-    hashed_password = security.get_password_hash(user.senha)
+    hashed_password = _hash_senha_ou_placeholder(user.senha)
     db_user = models.Usuario(
         email=user.email,
         nome=user.nome,
@@ -113,6 +134,8 @@ def create_admin_user(db: Session, user: schemas.UsuarioAdminCreate):
         )
     db.commit()
     db.refresh(db_user)
+    # ADR-024: mesma ACL default do fluxo comum de criacao.
+    acessos.garantir_acesso_principal(db, db_user)
     return db_user
 
 def update_admin_user(
@@ -197,9 +220,14 @@ def update_company(
 # ==============================================================================
 
 def get_projetos(db: Session, current_user: models.Usuario, skip: int = 0, limit: int = 100):
-    """Lista apenas projetos da empresa do usuário."""
+    """Projetos ACESSÍVEIS ao usuário (ADR-024).
+
+    Pode devolver projetos de empresas diferentes na mesma resposta: é o que
+    permite um agente multiempresa sincronizar as missões dos dois clientes em
+    um único login. O recorte é SQL, não filtro em Python.
+    """
     return db.query(models.Projeto)\
-             .filter(models.Projeto.company_id == current_user.company_id)\
+             .filter(acessos.filtro_projeto_acessivel(current_user))\
              .offset(skip).limit(limit).all()
 
 def validate_project_coordinator(
@@ -256,7 +284,7 @@ def get_projeto(
     """Busca um projeto específico validando a empresa."""
     query = db.query(models.Projeto).filter(models.Projeto.id == projeto_id)
     if not allow_global:
-        query = query.filter(models.Projeto.company_id == current_user.company_id)
+        query = query.filter(acessos.filtro_projeto_acessivel(current_user))
     return query.first()
 
 
@@ -305,14 +333,14 @@ def get_pesquisa(db: Session, pesquisa_id: int, current_user: models.Usuario):
     """
     return db.query(models.Pesquisa).join(models.Projeto).filter(
         models.Pesquisa.id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id
+        acessos.filtro_projeto_acessivel(current_user)
     ).first()
 
 def create_pesquisa(db: Session, pesquisa: schemas.PesquisaCreate, projeto_id: int, current_user: models.Usuario):
     # 1. Validação de Segurança Correta: Verifica se o projeto existe e pertence à empresa do usuário
     projeto = db.query(models.Projeto).filter(
         models.Projeto.id == projeto_id,
-        models.Projeto.company_id == current_user.company_id
+        acessos.filtro_projeto_acessivel(current_user)
     ).first()
     
     if not projeto:
@@ -329,8 +357,29 @@ def create_pesquisa(db: Session, pesquisa: schemas.PesquisaCreate, projeto_id: i
     db.refresh(db_pesquisa)
     return db_pesquisa
 
-def create_pergunta(db: Session, pergunta: schemas.PerguntaCreate, pesquisa_id: int):
+def create_pergunta(
+    db: Session,
+    pergunta: schemas.PerguntaCreate,
+    pesquisa_id: int,
+    *,
+    projeto_id: Optional[int] = None,
+    current_user=None,
+):
+    from pesquisa360.services import pergunta_territorio
+
     pergunta_data = pergunta.model_dump(exclude_unset=True)
+    # Aplicabilidade e municipios sao validados ANTES de qualquer escrita.
+    aplicabilidade = pergunta_data.pop("aplicabilidade", None) or "GLOBAL"
+    aplicabilidade = getattr(aplicabilidade, "value", aplicabilidade)
+    municipio_ids = pergunta_territorio.validar_configuracao(
+        str(aplicabilidade), pergunta_data.pop("municipio_ids", None)
+    )
+    if municipio_ids:
+        if projeto_id is None or current_user is None:
+            raise HTTPException(status_code=422, detail="Contexto do projeto ausente.")
+        pergunta_territorio.validar_municipios(db, projeto_id, municipio_ids, current_user)
+    pergunta_data["aplicabilidade"] = str(aplicabilidade)
+
     opcoes_data = _validate_question_options(
         db,
         pesquisa_id=pesquisa_id,
@@ -353,6 +402,9 @@ def create_pergunta(db: Session, pergunta: schemas.PerguntaCreate, pesquisa_id: 
             nova_opcao = models.Opcao(**opt, pergunta_id=db_pergunta.id)
             db.add(nova_opcao)
             db.flush()
+
+        if municipio_ids:
+            pergunta_territorio.definir_municipios(db, db_pergunta, municipio_ids)
 
         db.commit()
         db.refresh(db_pergunta)
@@ -454,7 +506,17 @@ def _validate_proximas_perguntas(db: Session, pesquisa_id: int, opcoes) -> None:
         raise HTTPException(status_code=404, detail="Pergunta não encontrada.")
 
 
-def update_pergunta(db: Session, pesquisa_id: int, pergunta_id: int, pergunta_in: schemas.PerguntaUpdate):
+def update_pergunta(
+    db: Session,
+    pesquisa_id: int,
+    pergunta_id: int,
+    pergunta_in: schemas.PerguntaUpdate,
+    *,
+    projeto_id: Optional[int] = None,
+    current_user=None,
+):
+    from pesquisa360.services import pergunta_territorio
+
     # 1. Busca a pergunta existente
     db_pergunta = get_pergunta(db, pesquisa_id=pesquisa_id, pergunta_id=pergunta_id)
     if not db_pergunta:
@@ -463,6 +525,38 @@ def update_pergunta(db: Session, pesquisa_id: int, pergunta_id: int, pergunta_in
     # 2. Transforma os dados que vieram do React em dicionário
     update_data = pergunta_in.model_dump(exclude_unset=True)
     update_data.pop("ordem", None)
+
+    # 2b. Aplicabilidade/municipios. `exclude_unset` e o que distingue "campo
+    # ausente" (nao mexe) de "lista vazia explicita" (substitui). A
+    # configuracao resultante -- o que muda mais o que ja estava -- precisa
+    # respeitar as invariantes antes de qualquer escrita.
+    toca_territorio = "aplicabilidade" in update_data or "municipio_ids" in update_data
+    municipio_ids_final = []
+    if toca_territorio:
+        aplicabilidade_final = update_data.pop("aplicabilidade", None)
+        if aplicabilidade_final is None:
+            aplicabilidade_final = db_pergunta.aplicabilidade
+        aplicabilidade_final = str(getattr(aplicabilidade_final, "value", aplicabilidade_final))
+        if "municipio_ids" in update_data:
+            municipio_ids_final = update_data.pop("municipio_ids") or []
+        elif aplicabilidade_final == pergunta_territorio.APLICABILIDADE_GLOBAL:
+            # TERRITORIAL -> GLOBAL sem lista: as associacoes saem. Nao fica
+            # municipio "inativo" escondido atras de uma pergunta GLOBAL.
+            municipio_ids_final = []
+        else:
+            municipio_ids_final = [
+                t.territorio_eleitoral_id for t in db_pergunta.territorios_municipais
+            ]
+        municipio_ids_final = pergunta_territorio.validar_configuracao(
+            aplicabilidade_final, municipio_ids_final
+        )
+        if municipio_ids_final:
+            if projeto_id is None or current_user is None:
+                raise HTTPException(status_code=422, detail="Contexto do projeto ausente.")
+            pergunta_territorio.validar_municipios(
+                db, projeto_id, municipio_ids_final, current_user
+            )
+        update_data["aplicabilidade"] = aplicabilidade_final
 
     # 3. EXTRAI as opções para não quebrar o banco (Igual fizemos no Create)
     opcoes_data = None
@@ -486,6 +580,9 @@ def update_pergunta(db: Session, pesquisa_id: int, pergunta_id: int, pergunta_in
             for opt in opcoes_data:
                 db.add(models.Opcao(**opt, pergunta_id=db_pergunta.id))
                 db.flush()
+
+        if toca_territorio:
+            pergunta_territorio.definir_municipios(db, db_pergunta, municipio_ids_final)
 
         db.commit()
         db.refresh(db_pergunta)
@@ -574,7 +671,7 @@ def delete_projeto(db: Session, *, db_obj: models.Projeto) -> models.Projeto:
 def _get_spontaneous_pesquisa(db: Session, pesquisa_id: int, current_user: models.Usuario):
     pesquisa = db.query(models.Pesquisa).join(models.Projeto).filter(
         models.Pesquisa.id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id,
+        acessos.filtro_projeto_acessivel(current_user),
     ).first()
     if not pesquisa:
         raise HTTPException(status_code=404, detail="Pesquisa nao encontrada.")
@@ -592,7 +689,7 @@ def _get_spontaneous_category(
         .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id).filter(
         models.CategoriaRespostaEspontanea.id == categoria_id,
         models.CategoriaRespostaEspontanea.pesquisa_id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id,
+        acessos.filtro_projeto_acessivel(current_user),
     ).first()
 
 
@@ -601,7 +698,7 @@ def _get_spontaneous_categories(db: Session, pesquisa_id: int, current_user: mod
         .join(models.Pesquisa, models.Pesquisa.id == models.CategoriaRespostaEspontanea.pesquisa_id)\
         .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id).filter(
         models.CategoriaRespostaEspontanea.pesquisa_id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id,
+        acessos.filtro_projeto_acessivel(current_user),
         models.CategoriaRespostaEspontanea.ativo.is_(True),
     ).order_by(models.CategoriaRespostaEspontanea.nome_normalizado, models.CategoriaRespostaEspontanea.id).all()
 
@@ -612,7 +709,7 @@ def _get_spontaneous_mappings(db: Session, pesquisa_id: int, current_user: model
         .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id)\
         .join(models.CategoriaRespostaEspontanea, models.CategoriaRespostaEspontanea.id == models.MapeamentoRespostaEspontanea.categoria_id).filter(
         models.MapeamentoRespostaEspontanea.pesquisa_id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id,
+        acessos.filtro_projeto_acessivel(current_user),
         models.MapeamentoRespostaEspontanea.ativo.is_(True),
         models.CategoriaRespostaEspontanea.ativo.is_(True),
     ).all()
@@ -636,8 +733,8 @@ def _get_spontaneous_raw_answers(
         .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id)\
         .filter(
             models.Pesquisa.id == pesquisa_id,
-            models.Projeto.company_id == current_user.company_id,
-            models.Coleta.company_id == current_user.company_id,
+            acessos.filtro_projeto_acessivel(current_user),
+            acessos.filtro_company_acessivel(models.Coleta.company_id, current_user),
             models.Pergunta.pesquisa_id == pesquisa_id,
             models.Pergunta.ativo.is_(True),
             models.Pergunta.eh_resposta_espontanea.is_(True),
@@ -974,8 +1071,8 @@ def mapear_respostas_espontaneas_em_lote(
         .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id)
         .filter(
             models.Pesquisa.id == pesquisa_id,
-            models.Projeto.company_id == current_user.company_id,
-            models.Coleta.company_id == current_user.company_id,
+            acessos.filtro_projeto_acessivel(current_user),
+            acessos.filtro_company_acessivel(models.Coleta.company_id, current_user),
             models.Pergunta.pesquisa_id == pesquisa_id,
             models.Pergunta.ativo.is_(True),
             models.Pergunta.eh_resposta_espontanea.is_(True),
@@ -1053,7 +1150,7 @@ def delete_resposta_espontanea_mapeamento(
         .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id).filter(
         models.MapeamentoRespostaEspontanea.id == mapeamento_id,
         models.MapeamentoRespostaEspontanea.pesquisa_id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id,
+        acessos.filtro_projeto_acessivel(current_user),
         models.MapeamentoRespostaEspontanea.ativo.is_(True),
     ).first()
     if not mapeamento:
@@ -1113,20 +1210,69 @@ def _validate_collection_answers(
         raise HTTPException(status_code=404, detail="Pergunta nao encontrada.")
 
 
+def validar_setor_da_coleta(
+    db: Session,
+    setor_id: int,
+    pesquisa_id: int,
+    current_user: models.Usuario,
+) -> models.Setor:
+    """Valida pesquisa, tenant e atribuicao ativa sem revelar outro tenant."""
+    setor = (
+        db.query(models.Setor)
+        .join(models.Pesquisa, models.Pesquisa.id == models.Setor.pesquisa_id)
+        .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id)
+        .filter(
+            models.Setor.id == setor_id,
+            models.Setor.pesquisa_id == pesquisa_id,
+            acessos.filtro_projeto_acessivel(current_user),
+        )
+        .first()
+    )
+    if setor is None:
+        raise HTTPException(status_code=404, detail="Setor nao encontrado.")
+
+    atribuicao_ativa = (
+        db.query(models.SetorAgente.id)
+        .filter(
+            models.SetorAgente.setor_id == setor.id,
+            models.SetorAgente.agente_id == current_user.id,
+            models.SetorAgente.ativo.is_(True),
+        )
+        .first()
+    )
+    if atribuicao_ativa is None and setor.agente_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Agente nao atribuido ao setor.")
+    return setor
+
+
 def create_coleta(
     db: Session,
     coleta_in: schemas.ColetaCreate,
     pesquisa_id: int,
-    agente_id: int,
-    company_id: int,
+    current_user: models.Usuario,
 ):
     # Coletas vêm do App Mobile. A validação de empresa geralmente é feita
     # garantindo que o Agente só baixou pesquisas da empresa dele.
     
     client_uuid = str(coleta_in.client_uuid)
+    agente_id = current_user.id
+    # ADR-024: o tenant vem da Pesquisa -> Projeto -> Company, NUNCA do usuario.
+    # Um agente multiempresa coletando no projeto da Empresa B gravaria o dado
+    # como da Empresa A se derivassemos de `current_user.company_id`.
+    company_id = acessos.company_id_da_pesquisa(db, pesquisa_id)
+    if company_id is None:
+        raise HTTPException(status_code=404, detail="Pesquisa nao encontrada.")
     existing_coleta = _get_coleta_by_client_uuid(db, company_id, client_uuid)
     if existing_coleta:
         return _return_idempotent_coleta_or_reject(existing_coleta, agente_id)
+
+    if coleta_in.setor_id is not None:
+        validar_setor_da_coleta(
+            db=db,
+            setor_id=coleta_in.setor_id,
+            pesquisa_id=pesquisa_id,
+            current_user=current_user,
+        )
 
     _validate_collection_answers(
         db=db,
@@ -1134,6 +1280,20 @@ def create_coleta(
         pesquisa_id=pesquisa_id,
         company_id=company_id,
     )
+
+    # FASE F. Validacao territorial RIGIDA so para o cliente que declarou ter
+    # filtrado o questionario. O cliente legado ainda apresenta todas as
+    # perguntas e nao envia o marcador: rejeita-lo agora quebraria coletas
+    # pendentes em campo. Janela de transicao, documentada -- nao regra final.
+    if getattr(coleta_in, "questionario_territorial", False):
+        from pesquisa360.services import pergunta_territorio
+
+        pergunta_territorio.validar_respostas_territoriais(
+            db,
+            pesquisa_id=pesquisa_id,
+            setor_id=coleta_in.setor_id,
+            pergunta_ids=[resposta.pergunta_id for resposta in coleta_in.respostas],
+        )
 
     # Converte lat/lon para GeoAlchemy Element
     ponto_inicio = None
@@ -1171,6 +1331,7 @@ def create_coleta(
         agente_id=agente_id,
         company_id=company_id,
         client_uuid=client_uuid,
+        setor_id=coleta_in.setor_id,
         foi_offline=coleta_in.foi_offline,
         status_sincronizacao="sincronizado"  # Sempre "sincronizado" quando chega via POST
     )
@@ -1212,29 +1373,196 @@ def _setor_polygon_wkt(coords: List[List[float]]) -> str:
         raise ValueError("Polygon invalido.")
     return polygon.wkt
 
+
+def validar_agentes_setor(
+    db: Session,
+    agente_ids: List[int],
+    current_user: models.Usuario,
+    projeto_id: Optional[int] = None,
+) -> List[models.Usuario]:
+    """Valida atomicamente agentes ativos do tenant usando a regra de /agentes."""
+    ids = list(dict.fromkeys(agente_ids))
+    if len(ids) != len(agente_ids):
+        raise ValueError("agente_ids nao pode conter IDs duplicados")
+    if not ids:
+        return []
+
+    agentes = (
+        db.query(models.Usuario)
+        .join(models.Perfil)
+        .filter(
+            models.Usuario.id.in_(ids),
+            acessos.filtro_usuario_visivel(current_user),
+            models.Usuario.ativo.is_(True),
+            models.Perfil.nome.ilike("%agente%"),
+        )
+        .all()
+    )
+    por_id = {agente.id: agente for agente in agentes}
+    if set(por_id) != set(ids):
+        # 404 preserva o isolamento: nao revela se o ID existe em outro tenant.
+        raise HTTPException(status_code=404, detail="Agente nao encontrado.")
+    if projeto_id is not None:
+        # ADR-024 §33: pertencer a alguma empresa nao basta -- o agente precisa
+        # ter ACL NESTE projeto para ser vinculado ao setor dele.
+        autorizados = acessos.ids_com_acesso_ao_projeto(db, projeto_id, ids)
+        if set(ids) - autorizados:
+            raise HTTPException(status_code=404, detail="Agente nao encontrado.")
+    return [por_id[agente_id] for agente_id in ids]
+
+
+def listar_agentes_ativos_setor(db: Session, setor_id: int) -> List[models.Usuario]:
+    return (
+        db.query(models.Usuario)
+        .join(models.SetorAgente, models.SetorAgente.agente_id == models.Usuario.id)
+        .filter(
+            models.SetorAgente.setor_id == setor_id,
+            models.SetorAgente.ativo.is_(True),
+        )
+        .order_by(models.Usuario.id.asc())
+        .all()
+    )
+
+
+def sincronizar_agentes_setor(
+    db: Session,
+    setor: models.Setor,
+    agente_ids: List[int],
+    current_user: models.Usuario,
+    agentes_validados: Optional[List[models.Usuario]] = None,
+) -> None:
+    """Faz o conjunto ativo ficar exatamente igual a ``agente_ids`` sem commit."""
+    if agentes_validados is None:
+        agentes_validados = validar_agentes_setor(db, agente_ids, current_user)
+    desejados = {agente.id for agente in agentes_validados}
+    atribuicoes = (
+        db.query(models.SetorAgente)
+        .filter(models.SetorAgente.setor_id == setor.id)
+        .all()
+    )
+    existentes = {atribuicao.agente_id: atribuicao for atribuicao in atribuicoes}
+
+    for agente_id, atribuicao in existentes.items():
+        atribuicao.ativo = agente_id in desejados
+    for agente_id in desejados - set(existentes):
+        db.add(models.SetorAgente(setor_id=setor.id, agente_id=agente_id, ativo=True))
+
+
+def garantir_agente_legado_associado(
+    db: Session,
+    setor: models.Setor,
+    agente_id: int,
+    current_user: models.Usuario,
+    agente_validado: Optional[models.Usuario] = None,
+) -> None:
+    """Ativa/cria o legado sem desativar qualquer outro agente do setor."""
+    if agente_validado is None:
+        agente_validado = validar_agentes_setor(db, [agente_id], current_user)[0]
+    atribuicao = (
+        db.query(models.SetorAgente)
+        .filter(
+            models.SetorAgente.setor_id == setor.id,
+            models.SetorAgente.agente_id == agente_validado.id,
+        )
+        .first()
+    )
+    if atribuicao is None:
+        db.add(
+            models.SetorAgente(
+                setor_id=setor.id,
+                agente_id=agente_validado.id,
+                ativo=True,
+            )
+        )
+    else:
+        atribuicao.ativo = True
+
+def setor_possui_coletas(db: Session, setor_id: int) -> bool:
+    """Existe alguma coleta APONTANDO explicitamente para este setor?
+
+    Vinculo explicito apenas (`Coleta.setor_id`). Coleta historica com
+    `setor_id` NULL nao conta, mesmo que o GPS caia dentro do poligono:
+    classificacao espacial e outro assunto e nao decide exclusao aqui.
+
+    EXISTS em vez de `len(setor.coletas)`: a resposta e um booleano, e carregar
+    a colecao inteira so para saber se ela e vazia custa a tabela toda.
+    """
+    return db.query(
+        db.query(models.Coleta.id)
+        .filter(models.Coleta.setor_id == setor_id)
+        .exists()
+    ).scalar() is True
+
+
 def create_setor(db: Session, setor_in: schemas.SetorCreate, pesquisa_id: int, current_user: models.Usuario):
     # Valida acesso à pesquisa através do projeto
     # (Juntando tabelas para validar empresa numa query só)
     pesquisa_valida = db.query(models.Pesquisa).join(models.Projeto)\
-        .filter(models.Pesquisa.id == pesquisa_id, models.Projeto.company_id == current_user.company_id)\
+        .filter(models.Pesquisa.id == pesquisa_id, acessos.filtro_projeto_acessivel(current_user))\
         .first()
         
     if not pesquisa_valida:
         raise Exception("Acesso negado à pesquisa.")
 
     wkt = _setor_polygon_wkt(setor_in.geometria_coords)
+    lista_explicita = "agente_ids" in setor_in.model_fields_set
+    agente_ids = setor_in.agente_ids or []
+    agentes_validados = None
+    agente_legado_validado = None
+    if lista_explicita:
+        agentes_validados = validar_agentes_setor(
+            db, agente_ids, current_user, projeto_id=pesquisa_valida.projeto_id
+        )
+        agente_id_legado = (
+            setor_in.agente_id
+            if setor_in.agente_id in agente_ids
+            else (agente_ids[0] if agente_ids else None)
+        )
+    else:
+        agente_id_legado = setor_in.agente_id
+        if agente_id_legado is not None:
+            agente_legado_validado = validar_agentes_setor(
+                db, [agente_id_legado], current_user, projeto_id=pesquisa_valida.projeto_id
+            )[0]
 
     db_setor = models.Setor(
         nome=setor_in.nome,
         meta=setor_in.meta,
         pesquisa_id=pesquisa_id,
-        agente_id=setor_in.agente_id,
+        agente_id=agente_id_legado,
         tolerancia=setor_in.tolerancia,
         finalidade=setor_in.finalidade.value,
         geometria=func.ST_GeomFromText(wkt, 4326)
     )
     db.add(db_setor)
-    db.commit()
+    try:
+        db.flush()
+        if lista_explicita:
+            sincronizar_agentes_setor(
+                db,
+                db_setor,
+                agente_ids,
+                current_user,
+                agentes_validados=agentes_validados,
+            )
+        elif agente_id_legado is not None:
+            garantir_agente_legado_associado(
+                db,
+                db_setor,
+                agente_id_legado,
+                current_user,
+                agente_validado=agente_legado_validado,
+            )
+        # ADR-035: municipio de referencia (geometria > composicao; manual validado).
+        from pesquisa360.services import setor_municipio
+
+        setor_municipio.aplicar(
+            db, db_setor, pesquisa_valida.projeto_id, current_user, setor_in.municipio_territorio_id
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(
         db_setor,
         attribute_names=[
@@ -1260,7 +1588,7 @@ def update_setor(
 ):
     projeto = db.query(models.Projeto.id).filter(
         models.Projeto.id == projeto_id,
-        models.Projeto.company_id == current_user.company_id,
+        acessos.filtro_projeto_acessivel(current_user),
     ).first()
     if not projeto:
         raise HTTPException(status_code=404, detail="Projeto nao encontrado.")
@@ -1283,6 +1611,7 @@ def update_setor(
                 models.Setor.finalidade,
                 models.Setor.pesquisa_id,
                 models.Setor.agente_id,
+                models.Setor.municipio_territorio_id,
             )
         )
         .filter(
@@ -1295,15 +1624,23 @@ def update_setor(
         raise HTTPException(status_code=404, detail="Setor nao encontrado.")
 
     fields_set = setor_update.model_fields_set
-    if "agente_id" in fields_set and setor_update.agente_id is not None:
-        agente = db.query(models.Usuario.id).join(models.Perfil).filter(
-            models.Usuario.id == setor_update.agente_id,
-            models.Usuario.company_id == current_user.company_id,
-            models.Usuario.ativo.is_(True),
-            models.Perfil.nome.ilike("%agente%"),
-        ).first()
-        if not agente:
-            raise HTTPException(status_code=404, detail="Agente nao encontrado.")
+    lista_explicita = "agente_ids" in fields_set
+    agente_ids = setor_update.agente_ids or []
+    agentes_validados = None
+    agente_legado_validado = None
+    projeto_do_setor = (
+        db.query(models.Pesquisa.projeto_id)
+        .filter(models.Pesquisa.id == db_setor.pesquisa_id)
+        .scalar()
+    )
+    if lista_explicita:
+        agentes_validados = validar_agentes_setor(
+            db, agente_ids, current_user, projeto_id=projeto_do_setor
+        )
+    elif "agente_id" in fields_set and setor_update.agente_id is not None:
+        agente_legado_validado = validar_agentes_setor(
+            db, [setor_update.agente_id], current_user, projeto_id=projeto_do_setor
+        )[0]
 
     coords = setor_update.get_coords()
     geometry_wkt = _setor_polygon_wkt(coords) if coords is not None else None
@@ -1328,20 +1665,50 @@ def update_setor(
             db, db_setor, setor_update.finalidade.value
         )
         db_setor.finalidade = setor_update.finalidade.value
-    if "agente_id" in fields_set:
+    if lista_explicita:
+        db_setor.agente_id = (
+            setor_update.agente_id
+            if setor_update.agente_id in agente_ids
+            else (agente_ids[0] if agente_ids else None)
+        )
+        sincronizar_agentes_setor(
+            db,
+            db_setor,
+            agente_ids,
+            current_user,
+            agentes_validados=agentes_validados,
+        )
+    elif "agente_id" in fields_set:
         db_setor.agente_id = setor_update.agente_id
+        if setor_update.agente_id is not None:
+            garantir_agente_legado_associado(
+                db,
+                db_setor,
+                setor_update.agente_id,
+                current_user,
+                agente_validado=agente_legado_validado,
+            )
     if geometry_wkt is not None:
         db_setor.geometria = func.ST_GeomFromText(geometry_wkt, 4326)
 
     db.add(db_setor)
     try:
+        # ADR-035: poligono editado ou municipio informado -> recalcula a
+        # referencia (nunca mantem o municipio anterior em silencio).
+        if geometry_wkt is not None or "municipio_territorio_id" in fields_set or "finalidade" in fields_set:
+            from pesquisa360.services import setor_municipio
+
+            db.flush()
+            setor_municipio.aplicar(
+                db, db_setor, projeto_id, current_user, setor_update.municipio_territorio_id
+            )
         db.commit()
     except Exception:
         db.rollback()
         raise
     db.refresh(
         db_setor,
-        attribute_names=["id", "nome", "meta", "tolerancia", "finalidade", "pesquisa_id", "agente_id"],
+        attribute_names=["id", "nome", "meta", "tolerancia", "finalidade", "pesquisa_id", "agente_id", "municipio_territorio_id"],
     )
     return db_setor
 
@@ -1357,6 +1724,7 @@ def get_setores_by_pesquisa(
         models.Setor.meta,
         models.Setor.tolerancia,
         models.Setor.finalidade,
+        models.Setor.municipio_territorio_id,
         models.Usuario.id.label("agente_id"),
         models.Usuario.nome.label("agente_nome"),
         func.ST_AsGeoJSON(models.Setor.geometria).label("geojson")
@@ -1370,12 +1738,166 @@ def get_setores_by_pesquisa(
         models.Usuario,
         and_(
             models.Usuario.id == models.Setor.agente_id,
-            models.Usuario.company_id == models.Projeto.company_id,
+            models.Usuario.id.in_(
+                    select(models.UsuarioEmpresaAcesso.usuario_id).where(
+                        models.UsuarioEmpresaAcesso.company_id == models.Projeto.company_id,
+                        models.UsuarioEmpresaAcesso.ativo.is_(True),
+                    )
+                ),
         )
     ).filter(models.Setor.pesquisa_id == pesquisa_id)
     if finalidade is not None:
         query = query.filter(models.Setor.finalidade == finalidade.value)
     return query.all()
+
+
+def calcular_progresso_setor(meta: int, realizado: int) -> dict:
+    """Calcula metricas derivadas; meta nao positiva nao tem percentual/cota."""
+    meta_normalizada = int(meta or 0)
+    realizado_normalizado = int(realizado or 0)
+    return {
+        "meta": meta_normalizada,
+        "realizado": realizado_normalizado,
+        "restante": max(meta_normalizada - realizado_normalizado, 0),
+        "excedente": max(realizado_normalizado - meta_normalizada, 0),
+        "percentual_atingimento": (
+            (realizado_normalizado * 100) / meta_normalizada
+            if meta_normalizada > 0
+            else None
+        ),
+        "cota_atingida": (
+            realizado_normalizado >= meta_normalizada
+            if meta_normalizada > 0
+            else None
+        ),
+    }
+
+
+# --- Cota territorial por setor (PROMPT 04) ----------------------------------
+# Estados operacionais da meta territorial. ENCERRADO bloqueia NOVAS abordagens
+# no Mobile; nunca rejeita a sincronizacao de uma coleta legitima (offline
+# concorrente pode gerar pequeno excedente, e ele e aceito).
+STATUS_COTA_SEM_COTA = "SEM_COTA"
+STATUS_COTA_ABERTO = "ABERTO"
+STATUS_COTA_ATENCAO = "ATENCAO"
+STATUS_COTA_ENCERRADO = "ENCERRADO"
+
+# Limiar unico e centralizado: ATENCAO a partir de 90% da meta.
+FRACAO_ATENCAO_COTA = 0.90
+
+
+def limite_atencao_realizado(meta) -> Optional[int]:
+    """Realizado a partir do qual o setor entra em ATENCAO; None sem meta."""
+    meta_normalizada = int(meta or 0)
+    if meta_normalizada <= 0:
+        return None
+    import math
+
+    return int(math.ceil(meta_normalizada * FRACAO_ATENCAO_COTA))
+
+
+def classificar_status_cota(meta, realizado) -> str:
+    meta_normalizada = int(meta or 0)
+    realizado_normalizado = int(realizado or 0)
+    if meta_normalizada <= 0:
+        return STATUS_COTA_SEM_COTA
+    if realizado_normalizado >= meta_normalizada:
+        return STATUS_COTA_ENCERRADO
+    if realizado_normalizado >= limite_atencao_realizado(meta_normalizada):
+        return STATUS_COTA_ATENCAO
+    return STATUS_COTA_ABERTO
+
+
+def calcular_cota_territorial(
+    meta,
+    realizado,
+    *,
+    snapshot_ate_coleta_id: Optional[int] = None,
+    snapshot_em=None,
+    agentes_atribuidos_total: int = 0,
+) -> dict:
+    """Progresso legado + campos da cota territorial (aditivo)."""
+    progresso = calcular_progresso_setor(meta=meta, realizado=realizado)
+    progresso.update(
+        {
+            "status_cota": classificar_status_cota(meta, realizado),
+            "limite_atencao_realizado": limite_atencao_realizado(meta),
+            # Corte do snapshot: MAX(coletas.id) do setor na MESMA consulta do
+            # COUNT. O Mobile usa este id (nunca o relogio) para saber quais
+            # coletas locais ja estao dentro de `realizado`.
+            "snapshot_ate_coleta_id": snapshot_ate_coleta_id,
+            "snapshot_em": snapshot_em,
+            # Agentes VINCULADOS (N:N ativo ou legado), nao "atuando agora".
+            "agentes_atribuidos_total": int(agentes_atribuidos_total or 0),
+        }
+    )
+    return progresso
+
+
+def contar_agentes_atribuidos_setores(db: Session, setores) -> dict[int, int]:
+    """Agentes distintos vinculados a cada setor: N:N ativo U agente_id legado."""
+    setores_lista = list(setores)
+    setor_ids = [setor.id for setor in setores_lista]
+    vinculados: dict[int, set] = {setor.id: set() for setor in setores_lista}
+    if setor_ids:
+        linhas = (
+            db.query(models.SetorAgente.setor_id, models.SetorAgente.agente_id)
+            .filter(
+                models.SetorAgente.setor_id.in_(setor_ids),
+                models.SetorAgente.ativo.is_(True),
+            )
+            .all()
+        )
+        for setor_id, agente_id in linhas:
+            vinculados.setdefault(setor_id, set()).add(agente_id)
+    for setor in setores_lista:
+        if getattr(setor, "agente_id", None) is not None:
+            vinculados[setor.id].add(setor.agente_id)
+    return {setor_id: len(agentes) for setor_id, agentes in vinculados.items()}
+
+
+def obter_progressos_setores(
+    db: Session,
+    setores,
+    pesquisa_id: Optional[int] = None,
+) -> dict[int, dict]:
+    """Conta coletas explicitas de varios setores em uma unica query agrupada.
+
+    A mesma query traz COUNT e MAX(id) por setor: `realizado` e
+    `snapshot_ate_coleta_id` saem de uma leitura coerente, sem janela entre
+    duas consultas.
+    """
+    from datetime import datetime, timezone
+
+    setores_lista = list(setores)
+    setor_ids = [setor.id for setor in setores_lista]
+    contagens: dict[int, tuple] = {}
+    if setor_ids:
+        query = db.query(
+            models.Coleta.setor_id,
+            func.count(models.Coleta.id).label("realizado"),
+            func.max(models.Coleta.id).label("snapshot_ate_coleta_id"),
+        ).filter(models.Coleta.setor_id.in_(setor_ids))
+        if pesquisa_id is not None:
+            query = query.filter(models.Coleta.pesquisa_id == pesquisa_id)
+        contagens = {
+            setor_id: (int(realizado), (int(ultimo_id) if ultimo_id is not None else None))
+            for setor_id, realizado, ultimo_id in query.group_by(models.Coleta.setor_id).all()
+        }
+    agentes = contar_agentes_atribuidos_setores(db, setores_lista)
+    snapshot_em = datetime.now(timezone.utc)
+
+    resultado = {}
+    for setor in setores_lista:
+        realizado, ultimo_id = contagens.get(setor.id, (0, None))
+        resultado[setor.id] = calcular_cota_territorial(
+            meta=setor.meta,
+            realizado=realizado,
+            snapshot_ate_coleta_id=ultimo_id,
+            snapshot_em=snapshot_em,
+            agentes_atribuidos_total=agentes.get(setor.id, 0),
+        )
+    return resultado
 
 # ==============================================================================
 # DASHBOARD E RELATÓRIOS (Com Filtro de Empresa)
@@ -1387,7 +1909,7 @@ def get_coletas_monitoramento(db: Session, pesquisa_id: int, current_user: model
     """
     # Validação
     pesquisa_valida = db.query(models.Pesquisa).join(models.Projeto)\
-        .filter(models.Pesquisa.id == pesquisa_id, models.Projeto.company_id == current_user.company_id)\
+        .filter(models.Pesquisa.id == pesquisa_id, acessos.filtro_projeto_acessivel(current_user))\
         .first()
     if not pesquisa_valida:
         return []
@@ -1404,7 +1926,7 @@ def get_dashboard_stats(db: Session, pesquisa_id: int, current_user: models.Usua
     """Retorna estatísticas simples validando a empresa."""
     # Validação rápida
     pesquisa_valida = db.query(models.Pesquisa).join(models.Projeto)\
-        .filter(models.Pesquisa.id == pesquisa_id, models.Projeto.company_id == current_user.company_id)\
+        .filter(models.Pesquisa.id == pesquisa_id, acessos.filtro_projeto_acessivel(current_user))\
         .first()
     if not pesquisa_valida:
         return {"total_coletas": 0, "coletas_hoje": 0}
@@ -1420,7 +1942,7 @@ def get_dashboard_stats(db: Session, pesquisa_id: int, current_user: models.Usua
 def _validar_pesquisa_relatorio(db: Session, pesquisa_id: int, current_user: models.Usuario):
     pesquisa = db.query(models.Pesquisa).join(models.Projeto).filter(
         models.Pesquisa.id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id
+        acessos.filtro_projeto_acessivel(current_user)
     ).first()
     if not pesquisa:
         raise HTTPException(status_code=404, detail="Pesquisa não encontrada.")
@@ -1434,7 +1956,7 @@ def _validar_setores_relatorio(db: Session, pesquisa_id: int, setor_ids: Optiona
     setores = db.query(models.Setor.id).join(models.Pesquisa).join(models.Projeto).filter(
         models.Setor.id.in_(ids_unicos),
         models.Setor.pesquisa_id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id
+        acessos.filtro_projeto_acessivel(current_user)
     ).all()
     ids_validos = {setor.id for setor in setores}
 
@@ -1449,7 +1971,7 @@ def _aplicar_filtros_coletas(query, db: Session, current_user: models.Usuario, a
         setor_match = db.query(models.Setor.id).join(models.Pesquisa).join(models.Projeto).filter(
             models.Setor.id.in_(setor_ids),
             models.Setor.pesquisa_id == models.Coleta.pesquisa_id,
-            models.Projeto.company_id == current_user.company_id,
+            acessos.filtro_projeto_acessivel(current_user),
             models.Setor.geometria.isnot(None),
             models.Coleta.localizacao_inicio.isnot(None),
             func.ST_Intersects(models.Setor.geometria, models.Coleta.localizacao_inicio)
@@ -1469,7 +1991,7 @@ def get_relatorio_filtros(db: Session, pesquisa_id: int, current_user: models.Us
     .join(models.Coleta, models.Coleta.agente_id == models.Usuario.id)\
     .filter(
         models.Coleta.pesquisa_id == pesquisa_id,
-        models.Usuario.company_id == current_user.company_id
+        acessos.filtro_usuario_visivel(current_user)
     )\
     .group_by(models.Usuario.id, models.Usuario.nome)\
     .order_by(models.Usuario.nome)\
@@ -1517,6 +2039,87 @@ def get_relatorio_filtros(db: Session, pesquisa_id: int, current_user: models.Us
 NAO_CATEGORIZADA = "Não categorizada"
 
 
+# --- Canonicalizacao de respostas categoricas (HOTFIX G.1) --------------------
+#
+# O valor persistido de uma pergunta categorica nem sempre e byte a byte igual
+# ao texto da opcao: versoes do app gravaram "ACACIO FAVACHO" para a opcao
+# "Acacio Favacho" e "BRANCO NULO" para "BRANCO/NULO". Comparar literalmente
+# faz respostas validas sumirem dos mapas. A partir daqui, para pergunta
+# categorica NAO espontanea, o valor reportavel e o `Opcao.texto` cuja chave
+# normalizada coincide com a do valor persistido.
+#
+# A chave e a MESMA regra ja usada nas espontaneas (casefold, NFKD sem
+# acentos, pontuacao/separadores viram espaco, espacos colapsados): uma unica
+# forma de normalizar no projeto.
+
+
+def normalizar_chave_categoria(texto) -> str:
+    """Chave de matching entre valor persistido e opcao cadastrada."""
+    return normalizar_resposta_espontanea(texto)
+
+
+_ATTR_MAPA_CANONICO = "_mapa_opcoes_canonicas"
+
+
+def mapa_opcoes_canonicas(pergunta) -> dict[str, str]:
+    """`chave normalizada -> Opcao.texto`, calculado UMA vez por pergunta.
+
+    Memoizado na propria instancia: as engines chamam o resolvedor em loop por
+    resposta, e as opcoes nao podem ser reconsultadas a cada chamada.
+
+    Colisao: duas opcoes da mesma pergunta com a mesma chave (ex.: "A/B" e
+    "A B") sao AMBIGUAS. Nenhuma das duas entra no mapa, entao o valor
+    persistido segue como esta -- comportamento identico ao anterior, nunca
+    uma associacao arbitraria.
+    """
+    cache = getattr(pergunta, _ATTR_MAPA_CANONICO, None)
+    if cache is not None:
+        return cache
+
+    por_chave: dict[str, str] = {}
+    colididas: set[str] = set()
+    for opcao in getattr(pergunta, "opcoes", None) or []:
+        texto = opcao.get("texto") if isinstance(opcao, dict) else getattr(opcao, "texto", None)
+        if not texto:
+            continue
+        chave = normalizar_chave_categoria(texto)
+        if not chave:
+            continue
+        if chave in por_chave and por_chave[chave] != texto:
+            colididas.add(chave)
+        else:
+            por_chave.setdefault(chave, texto)
+
+    mapa = {chave: texto for chave, texto in por_chave.items() if chave not in colididas}
+    try:
+        setattr(pergunta, _ATTR_MAPA_CANONICO, mapa)
+    except (AttributeError, TypeError):
+        pass
+    return mapa
+
+
+def canonicalizar_valor_categorico(pergunta, valor: str) -> str:
+    """Rotulo canonico da opcao, ou o valor bruto quando nao ha correspondencia.
+
+    Valor desconhecido (historico fora das opcoes) e preservado: decidir se ele
+    vira "Outros" ou "sem categoria" e do relatorio, nao daqui. Texto livre nao
+    passa por aqui porque nao e categorico.
+    """
+    if not valor:
+        return valor
+    tipo = getattr(pergunta, "tipo_pergunta", None)
+    if not tipo or not is_categorical_question_type(tipo):
+        return valor
+    # Multipla escolha persiste listas: fora do escopo deste hotfix, que so
+    # trata resposta unica (o contrato dos mapas ja recusa multipla).
+    if is_multiple_response_question_type(tipo):
+        return valor
+    mapa = mapa_opcoes_canonicas(pergunta)
+    if not mapa:
+        return valor
+    return mapa.get(normalizar_chave_categoria(valor), valor)
+
+
 def resolve_reportable_response_value(
     *,
     pergunta,
@@ -1525,7 +2128,8 @@ def resolve_reportable_response_value(
 ) -> str:
     valor_original = "" if valor_resposta is None else str(valor_resposta)
     if not pergunta.eh_resposta_espontanea:
-        return valor_original
+        # Categorica: rotulo oficial da opcao. Demais tipos: valor bruto.
+        return canonicalizar_valor_categorico(pergunta, valor_original)
 
     chave_normalizada = normalizar_resposta_espontanea(valor_resposta)
     return spontaneous_mapping.get(chave_normalizada, NAO_CATEGORIZADA)
@@ -1557,7 +2161,7 @@ def get_active_spontaneous_mapping_for_report(
         models.MapeamentoRespostaEspontanea.pesquisa_id == pesquisa_id,
         models.MapeamentoRespostaEspontanea.ativo.is_(True),
         models.CategoriaRespostaEspontanea.ativo.is_(True),
-        models.Projeto.company_id == current_user.company_id,
+        acessos.filtro_projeto_acessivel(current_user),
     ).all()
     return {row.chave_normalizada: row.nome for row in rows}
 
@@ -1744,7 +2348,7 @@ def _validar_setores_analiticos(
         func.ST_AsGeoJSON(models.Setor.geometria).label("geometria"),
     ).join(models.Pesquisa).join(models.Projeto).filter(
         models.Setor.pesquisa_id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id,
+        acessos.filtro_projeto_acessivel(current_user),
         models.Setor.finalidade.in_(FINALIDADES_ANALITICAS),
         models.Setor.geometria.isnot(None),
     )
@@ -1821,7 +2425,7 @@ def _classificar_coletas_territorio(
         func.ST_X(ponto).label("lng"),
     ).filter(
         models.Coleta.pesquisa_id == pesquisa_id,
-        models.Coleta.company_id == current_user.company_id,
+        acessos.filtro_company_acessivel(models.Coleta.company_id, current_user),
     )
     base_query = _aplicar_filtros_mapa(base_query, payload)
     coletas = base_query.all()
@@ -1843,7 +2447,7 @@ def _classificar_coletas_territorio(
             ),
         ).filter(
             models.Coleta.id.in_(com_coordenada),
-            models.Coleta.company_id == current_user.company_id,
+            acessos.filtro_company_acessivel(models.Coleta.company_id, current_user),
         ).all()
         for row in matches:
             matches_por_coleta[row.coleta_id].append(row.setor_id)
@@ -1924,7 +2528,7 @@ def get_mapa_territorio_diagnostico(
         setor_a.pesquisa_id == pesquisa_id,
         setor_a.finalidade.in_(FINALIDADES_ANALITICAS),
         setor_a.geometria.isnot(None),
-        models.Projeto.company_id == current_user.company_id,
+        acessos.filtro_projeto_acessivel(current_user),
         func.ST_Area(func.ST_Intersection(setor_a.geometria, setor_b.geometria)) > 0,
     ).order_by(setor_a.id, setor_b.id).all()
 
@@ -2124,7 +2728,7 @@ def _get_configuracao_executiva(
     ).filter(
         models.ConfiguracaoRelatorioExecutivo.id == configuracao_id,
         models.ConfiguracaoRelatorioExecutivo.pesquisa_id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id,
+        acessos.filtro_projeto_acessivel(current_user),
     )
     if somente_ativa:
         query = query.filter(models.ConfiguracaoRelatorioExecutivo.ativo.is_(True))
@@ -2233,7 +2837,7 @@ def _validar_parametros_gerais_executivo(
         validos = {
             row.id for row in db.query(models.Usuario.id).filter(
                 models.Usuario.id.in_(agente_ids),
-                models.Usuario.company_id == current_user.company_id,
+                acessos.filtro_usuario_visivel(current_user),
                 models.Usuario.ativo.is_(True),
             ).all()
         }
@@ -2316,7 +2920,7 @@ def _validar_parametros_gerais_executivo(
                 row.id for row in db.query(models.Setor.id).join(models.Pesquisa).join(models.Projeto).filter(
                     models.Setor.id.in_(setor_ids_visao),
                     models.Setor.pesquisa_id == pesquisa_id,
-                    models.Projeto.company_id == current_user.company_id,
+                    acessos.filtro_projeto_acessivel(current_user),
                     models.Setor.finalidade.in_(FINALIDADES_ANALITICAS),
                 ).all()
             }
@@ -2695,3 +3299,98 @@ def get_report_crosstab(
         })
         
     return data
+
+
+# ==============================================================================
+# TENTATIVA DE CAMPO (PROMPT 03)
+# Mesmo padrao de create_coleta: idempotencia por (company_id, client_uuid),
+# agente/company do token, setor validado contra pesquisa e tenant.
+# ==============================================================================
+def _get_tentativa_by_client_uuid(db: Session, company_id: int, client_uuid: str):
+    return db.query(models.TentativaCampo).filter(
+        models.TentativaCampo.company_id == company_id,
+        models.TentativaCampo.client_uuid == client_uuid,
+    ).first()
+
+
+def _return_idempotent_tentativa_or_reject(db_tentativa, agente_id: int):
+    if db_tentativa.agente_id != agente_id:
+        raise HTTPException(status_code=409, detail="Operacao de tentativa em conflito.")
+    return db_tentativa
+
+
+def create_tentativa_campo(
+    db: Session,
+    tentativa_in: schemas.TentativaCampoCreate,
+    pesquisa_id: int,
+    current_user: models.Usuario,
+) -> models.TentativaCampo:
+    client_uuid = str(tentativa_in.client_uuid)
+    agente_id = current_user.id
+    # ADR-024: tenant da tentativa = tenant da Pesquisa, igual a Coleta.
+    company_id = acessos.company_id_da_pesquisa(db, pesquisa_id)
+    if company_id is None:
+        raise HTTPException(status_code=404, detail="Pesquisa nao encontrada.")
+
+    existente = _get_tentativa_by_client_uuid(db, company_id, client_uuid)
+    if existente:
+        return _return_idempotent_tentativa_or_reject(existente, agente_id)
+
+    if tentativa_in.setor_id is not None:
+        validar_setor_da_coleta(
+            db=db,
+            setor_id=tentativa_in.setor_id,
+            pesquisa_id=pesquisa_id,
+            current_user=current_user,
+        )
+
+    coleta_id = None
+    if tentativa_in.coleta_client_uuid is not None:
+        coleta = _get_coleta_by_client_uuid(
+            db, company_id, str(tentativa_in.coleta_client_uuid)
+        )
+        # A coleta precisa ja estar sincronizada, ser da mesma pesquisa e do
+        # mesmo agente. 422 (e nao 404) para o Mobile manter a tentativa
+        # pendente e reenviar depois da coleta.
+        if (
+            coleta is None
+            or coleta.pesquisa_id != pesquisa_id
+            or coleta.agente_id != agente_id
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Coleta vinculada ainda nao sincronizada para esta pesquisa.",
+            )
+        coleta_id = coleta.id
+
+    db_tentativa = models.TentativaCampo(
+        client_uuid=client_uuid,
+        pesquisa_id=pesquisa_id,
+        setor_id=tentativa_in.setor_id,
+        agente_id=agente_id,
+        company_id=company_id,
+        iniciada_em=tentativa_in.iniciada_em,
+        encerrada_em=tentativa_in.encerrada_em,
+        latitude=tentativa_in.localizacao.lat,
+        longitude=tentativa_in.localizacao.lng,
+        precisao_metros=tentativa_in.localizacao.accuracy,
+        capturada_em=tentativa_in.localizacao.capturada_em,
+        resultado=tentativa_in.resultado.value,
+        motivo=tentativa_in.motivo,
+        observacao=tentativa_in.observacao,
+        coleta_id=coleta_id,
+    )
+    db.add(db_tentativa)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existente = _get_tentativa_by_client_uuid(db, company_id, client_uuid)
+        if existente:
+            return _return_idempotent_tentativa_or_reject(existente, agente_id)
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(db_tentativa)
+    return db_tentativa

@@ -12,12 +12,14 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 from pesquisa360 import schemas
 from pesquisa360.api.endpoints import projetos
 from pesquisa360.db import models
+from tests.acl_fixture import criar_tabelas_acl
 
 
 class ProjectCoordinatorValidationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.engine = create_engine("sqlite:///:memory:")
+        criar_tabelas_acl(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine)
         with cls.engine.begin() as connection:
             connection.execute(text("""

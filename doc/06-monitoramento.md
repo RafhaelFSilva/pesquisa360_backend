@@ -9,6 +9,16 @@ O monitoramento atual exibe **coletas já sincronizadas**.
 
 Ele não mostra ainda a posição viva do agente em tempo real. Essa funcionalidade será evolução futura.
 
+## 1.1 Relação com o Controle de Campo (PROMPT 07)
+
+O monitoramento desta página lista **coletas** (uma linha por entrevista, com
+endereço estimado). O painel **Controle de Campo**
+(`/projetos/:projectId/pesquisas/:surveyId/controle-campo`, contrato em
+`02-contratos-api.md §8.4`) é a visão gerencial consolidada: cota territorial
+oficial, cotas de perfil, abordagens por resultado e mapa de atividade
+deduplicado. Ambos são snapshots do servidor com atualização manual; nenhum
+deles é tempo real (ver §7 para a evolução prevista).
+
 ## 2. Endpoint
 
 ```http

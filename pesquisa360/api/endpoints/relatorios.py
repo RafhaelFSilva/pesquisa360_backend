@@ -4,12 +4,14 @@ from typing import List
 
 from pesquisa360 import crud, schemas
 from pesquisa360.db import models
+from pesquisa360.services import acessos
 from pesquisa360.core.dependencies import get_db, get_current_user
 from pesquisa360.services.multidimensional_cross import (
     build_multidimensional_cross,
     get_multidimensional_cross_options,
 )
 from pesquisa360.services import mapa_respostas_geo
+from pesquisa360.core.rbac import Permissao, require_permissao
 
 router = APIRouter()
 
@@ -19,7 +21,7 @@ def check_access(db: Session, pesquisa_id: int, current_user: models.Usuario):
     """
     pesquisa = db.query(models.Pesquisa).join(models.Projeto).filter(
         models.Pesquisa.id == pesquisa_id,
-        models.Projeto.company_id == current_user.company_id
+        acessos.filtro_projeto_acessivel(current_user)
     ).first()
     
     if not pesquisa:
@@ -38,7 +40,7 @@ def parse_csv_ids(value: str | None) -> list[int] | None:
         raise ValueError("IDs devem ser inteiros separados por vírgula.") from exc
     return ids or None
 
-@router.get("/relatorios/pesquisas/{pesquisa_id}/filtros/")
+@router.get("/relatorios/pesquisas/{pesquisa_id}/filtros/", dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def read_relatorio_filtros(
     *,
     db: Session = Depends(get_db),
@@ -54,7 +56,7 @@ def read_relatorio_filtros(
         current_user=current_user
     )
 
-@router.get("/relatorios/pesquisas/{pesquisa_id}/mapas/territorio/diagnostico/")
+@router.get("/relatorios/pesquisas/{pesquisa_id}/mapas/territorio/diagnostico/", dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def read_mapa_territorio_diagnostico(
     *,
     db: Session = Depends(get_db),
@@ -71,7 +73,7 @@ def read_mapa_territorio_diagnostico(
         current_user=current_user,
     )
 
-@router.post("/relatorios/pesquisas/{pesquisa_id}/mapas/preview/")
+@router.post("/relatorios/pesquisas/{pesquisa_id}/mapas/preview/", dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def read_mapa_preview(
     *,
     db: Session = Depends(get_db),
@@ -93,8 +95,7 @@ def read_mapa_preview(
 
 @router.post(
     "/relatorios/pesquisas/{pesquisa_id}/mapas/respostas-georreferenciadas/",
-    response_model=schemas.MapaRespostasGeoResponse,
-)
+    response_model=schemas.MapaRespostasGeoResponse, dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def read_mapa_respostas_georreferenciadas(
     *,
     db: Session = Depends(get_db),
@@ -133,8 +134,7 @@ def read_mapa_respostas_georreferenciadas(
 
 @router.get(
     "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/",
-    response_model=List[schemas.ConfiguracaoRelatorioExecutivoRead],
-)
+    response_model=List[schemas.ConfiguracaoRelatorioExecutivoRead], dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def list_configuracoes_executivas(
     *, db: Session = Depends(get_db), pesquisa_id: int,
     tipo_relatorio: schemas.TipoRelatorioExecutivo | None = None,
@@ -148,8 +148,7 @@ def list_configuracoes_executivas(
 @router.post(
     "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/",
     response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
-    status_code=status.HTTP_201_CREATED,
-)
+    status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissao(Permissao.RELATORIO_CONFIGURAR))])
 def create_configuracao_executiva(
     *, db: Session = Depends(get_db), pesquisa_id: int,
     payload: schemas.ConfiguracaoRelatorioExecutivoCreate,
@@ -160,8 +159,7 @@ def create_configuracao_executiva(
 
 @router.get(
     "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/",
-    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
-)
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead, dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def get_configuracao_executiva(
     *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
     current_user: models.Usuario = Depends(get_current_user),
@@ -171,8 +169,7 @@ def get_configuracao_executiva(
 
 @router.patch(
     "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/",
-    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
-)
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead, dependencies=[Depends(require_permissao(Permissao.RELATORIO_CONFIGURAR))])
 def update_configuracao_executiva(
     *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
     payload: schemas.ConfiguracaoRelatorioExecutivoUpdate,
@@ -183,7 +180,7 @@ def update_configuracao_executiva(
     )
 
 
-@router.delete("/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/")
+@router.delete("/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/", dependencies=[Depends(require_permissao(Permissao.RELATORIO_CONFIGURAR))])
 def delete_configuracao_executiva(
     *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
     current_user: models.Usuario = Depends(get_current_user),
@@ -194,8 +191,7 @@ def delete_configuracao_executiva(
 @router.post(
     "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/",
     response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
-    status_code=status.HTTP_201_CREATED,
-)
+    status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissao(Permissao.RELATORIO_CONFIGURAR))])
 def create_secao_executiva(
     *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
     payload: schemas.SecaoRelatorioExecutivoCreate,
@@ -208,8 +204,7 @@ def create_secao_executiva(
 
 @router.patch(
     "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/",
-    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
-)
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead, dependencies=[Depends(require_permissao(Permissao.RELATORIO_CONFIGURAR))])
 def update_secao_executiva(
     *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int, secao_id: int,
     payload: schemas.SecaoRelatorioExecutivoUpdate,
@@ -221,8 +216,7 @@ def update_secao_executiva(
 
 
 @router.delete(
-    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/"
-)
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/", dependencies=[Depends(require_permissao(Permissao.RELATORIO_CONFIGURAR))])
 def delete_secao_executiva(
     *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int, secao_id: int,
     current_user: models.Usuario = Depends(get_current_user),
@@ -234,8 +228,7 @@ def delete_secao_executiva(
 
 @router.patch(
     "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/reordenar-secoes/",
-    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
-)
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead, dependencies=[Depends(require_permissao(Permissao.RELATORIO_CONFIGURAR))])
 def reorder_secoes_executivas(
     *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
     payload: schemas.ReordenarRelatorioExecutivoRequest,
@@ -249,8 +242,7 @@ def reorder_secoes_executivas(
 @router.post(
     "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/analises/",
     response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
-    status_code=status.HTTP_201_CREATED,
-)
+    status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permissao(Permissao.RELATORIO_CONFIGURAR))])
 def create_analise_executiva(
     *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int, secao_id: int,
     payload: schemas.AnaliseRelatorioExecutivoCreate,
@@ -263,8 +255,7 @@ def create_analise_executiva(
 
 @router.put(
     "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/analises/{analise_id}/",
-    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
-)
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead, dependencies=[Depends(require_permissao(Permissao.RELATORIO_CONFIGURAR))])
 def update_analise_executiva(
     *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
     secao_id: int, analise_id: int, payload: schemas.AnaliseRelatorioExecutivoUpdate,
@@ -276,8 +267,7 @@ def update_analise_executiva(
 
 
 @router.delete(
-    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/analises/{analise_id}/"
-)
+    "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/analises/{analise_id}/", dependencies=[Depends(require_permissao(Permissao.RELATORIO_CONFIGURAR))])
 def delete_analise_executiva(
     *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int,
     secao_id: int, analise_id: int,
@@ -290,8 +280,7 @@ def delete_analise_executiva(
 
 @router.patch(
     "/relatorios/pesquisas/{pesquisa_id}/configuracoes-executivas/{configuracao_id}/secoes/{secao_id}/reordenar-analises/",
-    response_model=schemas.ConfiguracaoRelatorioExecutivoRead,
-)
+    response_model=schemas.ConfiguracaoRelatorioExecutivoRead, dependencies=[Depends(require_permissao(Permissao.RELATORIO_CONFIGURAR))])
 def reorder_analises_executivas(
     *, db: Session = Depends(get_db), pesquisa_id: int, configuracao_id: int, secao_id: int,
     payload: schemas.ReordenarRelatorioExecutivoRequest,
@@ -301,8 +290,8 @@ def reorder_analises_executivas(
         db, pesquisa_id, configuracao_id, secao_id, payload, current_user
     )
 
-@router.get("/relatorios/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa)
-@router.get("/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa)
+@router.get("/relatorios/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa, dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
+@router.get("/pesquisas/{pesquisa_id}/simples/", response_model=schemas.RelatorioPesquisa, dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def read_relatorio_simples(
     *,
     db: Session = Depends(get_db),
@@ -338,8 +327,8 @@ def read_relatorio_simples(
          
     return relatorio
 
-@router.post("/relatorios/pesquisas/{pesquisa_id}/crosstab/", response_model=schemas.CrosstabResponse)
-@router.post("/pesquisas/{pesquisa_id}/crosstab/", response_model=schemas.CrosstabResponse)
+@router.post("/relatorios/pesquisas/{pesquisa_id}/crosstab/", response_model=schemas.CrosstabResponse, dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
+@router.post("/pesquisas/{pesquisa_id}/crosstab/", response_model=schemas.CrosstabResponse, dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def read_relatorio_crosstab(
     *,
     db: Session = Depends(get_db),
@@ -433,11 +422,11 @@ def read_relatorio_crosstab(
 @router.post(
     "/relatorios/pesquisas/{pesquisa_id}/cruzamentos-multidimensionais/",
     response_model=schemas.CruzamentoMultidimensionalResponse,
+    dependencies=[Depends(require_permissao(Permissao.INTELIGENCIA_VER))],
 )
 @router.post(
     "/pesquisas/{pesquisa_id}/cruzamentos-multidimensionais/",
-    response_model=schemas.CruzamentoMultidimensionalResponse,
-)
+    response_model=schemas.CruzamentoMultidimensionalResponse, dependencies=[Depends(require_permissao(Permissao.INTELIGENCIA_VER))])
 def read_cruzamento_multidimensional(
     *,
     db: Session = Depends(get_db),
@@ -451,8 +440,7 @@ def read_cruzamento_multidimensional(
 
 @router.get(
     "/relatorios/pesquisas/{pesquisa_id}/cruzamentos-multidimensionais/opcoes/",
-    response_model=schemas.CruzamentoOpcoesResponse,
-)
+    response_model=schemas.CruzamentoOpcoesResponse, dependencies=[Depends(require_permissao(Permissao.INTELIGENCIA_VER))])
 def read_cruzamento_multidimensional_opcoes(
     *,
     db: Session = Depends(get_db),

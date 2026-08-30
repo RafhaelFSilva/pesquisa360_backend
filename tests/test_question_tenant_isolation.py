@@ -47,7 +47,23 @@ class QuestionTenantIsolationTests(unittest.TestCase):
                     eh_obrigatoria BOOLEAN NOT NULL, eh_resposta_espontanea BOOLEAN NOT NULL DEFAULT 0,
                     papel_analitico VARCHAR(50), metadados_analiticos JSON NOT NULL DEFAULT '{}',
                     ativo BOOLEAN NOT NULL,
-                    pesquisa_id INTEGER NOT NULL
+                    pesquisa_id INTEGER NOT NULL,
+                    -- FASE F: coluna que o ORM passou a selecionar/inserir.
+                    aplicabilidade VARCHAR(20) NOT NULL DEFAULT 'GLOBAL'
+                )
+            """))
+            connection.execute(text("""
+                CREATE TABLE pergunta_territorio_eleitoral (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pergunta_id INTEGER NOT NULL,
+                    territorio_eleitoral_id INTEGER NOT NULL,
+                    CONSTRAINT uq_pergunta_territorio UNIQUE (pergunta_id, territorio_eleitoral_id)
+                )
+            """))
+            connection.execute(text("""
+                CREATE TABLE territorio_eleitoral (
+                    id INTEGER PRIMARY KEY, base_eleitoral_id INTEGER, parent_id INTEGER,
+                    tipo TEXT, nome TEXT, nome_normalizado TEXT, municipio_id INTEGER
                 )
             """))
             connection.execute(text("""

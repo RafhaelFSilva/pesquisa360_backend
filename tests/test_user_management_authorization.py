@@ -12,12 +12,14 @@ from pesquisa360 import crud, schemas
 from pesquisa360.api.endpoints import usuarios
 from pesquisa360.core import dependencies, security
 from pesquisa360.db import models
+from tests.acl_fixture import criar_tabelas_acl
 
 
 class UserManagementAuthorizationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.engine = create_engine("sqlite:///:memory:")
+        criar_tabelas_acl(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine)
         with cls.engine.begin() as connection:
             connection.execute(text("""

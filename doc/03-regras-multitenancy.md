@@ -24,6 +24,51 @@ A empresa do usuário autenticado deve ser obtida exclusivamente por:
 JWT -> get_current_user -> current_user.company_id
 ```
 
+## 1.1 ACL multiempresa (ADR-034)
+
+Desde a ADR-034 a autorização deixou de ser `usuario.company_id`:
+
+```
+ANTES:   Usuario → Company → dados
+DEPOIS:  Usuario → Acessos → Projeto → Company → dados
+```
+
+`usuarios.company_id` continua no banco e no contrato, mas significa apenas
+**empresa principal/default**. Quem responde "pode ver este projeto?" é
+`services/acessos.py`:
+
+```python
+Superadmin
+OU (vínculo ATIVO com a Company do Projeto
+    E (acesso_todos_projetos OU projeto explicitamente autorizado))
+```
+
+Em código, o que substituiu os filtros antigos:
+
+| Antes | Agora |
+|---|---|
+| `Projeto.company_id == current_user.company_id` | `acessos.filtro_projeto_acessivel(current_user)` |
+| `Coleta.company_id == current_user.company_id` | `acessos.filtro_company_acessivel(models.Coleta.company_id, current_user)` |
+| `Usuario.company_id == current_user.company_id` | `acessos.filtro_usuario_visivel(current_user)` |
+| `coleta.company_id = current_user.company_id` | `acessos.company_id_da_pesquisa(db, pesquisa_id)` |
+
+Administração da ACL é exclusiva do Superadmin
+(`GET/PUT /admin/usuarios/{id}/acessos`): um Gerente da Empresa A conceder
+acesso à Empresa B seria escalação de privilégio.
+
+## 1.2 Capacidade x escopo (ADR-037)
+
+ACL responde *onde*; perfil responde *o quê*. As duas regras são independentes e
+ambas precisam passar:
+
+```python
+acessos.filtro_projeto_acessivel(current_user)   # escopo  → 404 quando falha
+rbac.require_permissao(Permissao.X)              # capacidade → 403 quando falha
+```
+
+Matriz em `core/rbac.py`. Papel derivado do NOME do perfil (nunca do id); perfil
+desconhecido não recebe capacidade nenhuma.
+
 ## 2. Regra de ouro
 
 **Nenhum cliente deve conseguir escolher o tenant no payload.**
@@ -219,6 +264,15 @@ projeto de um tenant vinculado a base privada de outro tenant
 O Projeto fixa a versão usada via `projeto_base_eleitoral`. A Pesquisa não se
 vincula à base eleitoral. Acesso inválido retorna 404, como no restante do projeto.
 
+**Contexto de Projeto (ADR-034).** Em `GET /projetos/{id}/base-eleitoral`,
+`GET /projetos/{id}/bases-eleitorais-disponiveis` e
+`POST /projetos/{id}/base-eleitoral/{base}/vincular`, a elegibilidade da Base é
+comparada com **`Projeto.company_id`**, nunca com a empresa principal do
+usuário: primeiro a ACL autoriza o Projeto, depois o tenant do Projeto define
+as Bases (oficiais + privadas dele). Superadmin de outra empresa e Gerente com
+ACL cruzada veem a mesma Base principal e as mesmas candidatas que o dono do
+Projeto; Base privada de outro tenant continua 404 para todos.
+
 ## 7. Testes obrigatórios Empresa A x Empresa B
 
 | Cenário | Resultado esperado |
@@ -252,3 +306,10 @@ usar dados locais do mobile para determinar tenant
 - O endpoint retorna dados de outro tenant por acidente?
 - Existe teste manual A vs B?
 - A resposta em acesso inválido é 404?
+
+## 6.2 Setor → Município de referência (ADR-035-B)
+
+`setores.municipio_territorio_id` aponta para um MUNICIPIO da **Base principal
+do Projeto**. Manual só é aceito se pertencer a essa Base (senão 404) e não
+contradisser a geometria; Gerente principal da Empresa A com ACL no Projeto B
+resolve pela Base B. `current_user.company_id` nunca participa.

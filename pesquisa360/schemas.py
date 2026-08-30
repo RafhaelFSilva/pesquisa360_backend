@@ -1,5 +1,6 @@
 # pesquisa360/schemas.py (versão final simplificada)
 
+from enum import Enum
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator, ConfigDict
 from typing import Optional, List, Any, Union, Dict, Literal
 from datetime import date, datetime
@@ -39,6 +40,7 @@ class WebPoint(BaseModel):
     lng: float = Field(ge=-180, le=180)
 
 class ColetaBase(BaseModel):
+    setor_id: Optional[int] = Field(default=None, gt=0)
     localizacao_inicio: Optional[Point] = None
     localizacao_fim: Optional[Point] = None
     # Adicionamos aqui para que a API saiba que pode receber datas!
@@ -51,6 +53,10 @@ class ColetaCreate(ColetaBase):
     client_uuid: UUID
     # Garantimos que data_inicio seja obrigatória na criação, se desejar
     data_inicio_coleta: datetime
+    # FASE F. Marcador de capability do cliente: True significa "este
+    # questionario foi filtrado por pergunta_ids_aplicaveis", e liga a
+    # validacao territorial rigida. Cliente legado nao envia -> False.
+    questionario_territorial: bool = False
 
 # Schema de SAÍDA simplificado. A conversão da geolocalização será feita manualmente no endpoint.
 class Coleta(BaseModel):
@@ -58,6 +64,7 @@ class Coleta(BaseModel):
     client_uuid: UUID
     pesquisa_id: int
     agente_id: int
+    setor_id: Optional[int] = None
     status_sincronizacao: str
     data_inicio_coleta: datetime
     data_fim_coleta: Optional[datetime] = None
@@ -71,6 +78,7 @@ class Coleta(BaseModel):
 class ColetaMonitoramento(BaseModel):
     id: int
     agente_id: int
+    setor_id: Optional[int] = None
     agente_nome: Optional[str] = None
     data_inicio_coleta: datetime
     data_fim_coleta: Optional[datetime]
@@ -99,6 +107,11 @@ class Opcao(OpcaoBase):
     class Config:
         from_attributes = True
         
+class AplicabilidadePergunta(str, Enum):
+    GLOBAL = "GLOBAL"
+    TERRITORIAL = "TERRITORIAL"
+
+
 class PerguntaBase(BaseModel):
     texto_pergunta: str
     tipo_pergunta: str
@@ -108,6 +121,10 @@ class PerguntaBase(BaseModel):
     papel_analitico: Optional[PapelAnalitico] = None
     metadados_analiticos: Dict[str, Any] = Field(default_factory=dict)
     opcoes: Optional[List[OpcaoCreate]] = None # <--- Alterado para OpcaoCreate
+    # FASE F. Default GLOBAL preserva todo cliente que ainda nao envia o campo.
+    aplicabilidade: AplicabilidadePergunta = AplicabilidadePergunta.GLOBAL
+    # TerritorioEleitoral de tipo MUNICIPIO da base principal do projeto.
+    municipio_ids: Optional[List[int]] = None
 
     @field_validator("tipo_pergunta")
     @classmethod
@@ -141,6 +158,9 @@ class PerguntaUpdate(BaseModel):
     metadados_analiticos: Optional[Dict[str, Any]] = None
     opcoes: Optional[List[Any]] = None
     ativo: Optional[bool] = None
+    # Ausente nao mexe na aplicabilidade/associacao; presente substitui.
+    aplicabilidade: Optional[AplicabilidadePergunta] = None
+    municipio_ids: Optional[List[int]] = None
 
     @field_validator("tipo_pergunta")
     @classmethod
@@ -170,11 +190,18 @@ class PerguntaReordenarItem(BaseModel):
 class PerguntasReordenarPayload(BaseModel):
     perguntas: List[PerguntaReordenarItem]
 
+class MunicipioPergunta(BaseModel):
+    id: int
+    nome: str
+
+
 class Pergunta(PerguntaBase):
     id: int
     pesquisa_id: int
     ativo: bool
     opcoes: List[Opcao] = [] # <--- Força o uso do schema com ID na leitura
+    municipio_ids: List[int] = Field(default_factory=list)
+    municipios: List[MunicipioPergunta] = Field(default_factory=list)
     class Config:
         from_attributes = True
 
@@ -225,13 +252,17 @@ class UsuarioBase(BaseModel):
     ativo: Optional[bool] = True
 
 class UsuarioCreate(UsuarioBase):
-    senha: str
+    # Opcional desde o fluxo de convite: SEM senha o usuario nasce inativo e
+    # recebe link para definir a propria. Com senha, mantem o comportamento
+    # anterior (criacao direta) -- compatibilidade com scripts e testes.
+    senha: Optional[str] = None
     company_id: Optional[int] = None
 
 class UsuarioAdminCreate(BaseModel):
     email: EmailStr
     nome: Optional[str] = None
-    senha: str
+    # Ver `UsuarioCreate.senha`: ausente = convite por e-mail.
+    senha: Optional[str] = None
     perfil_id: int
     company_id: int
     ativo: Optional[bool] = True
@@ -270,9 +301,18 @@ class UsuarioParaProjeto(UsuarioBase):
 
 class Usuario(UsuarioBase):
     id: int
+    # EMPRESA PRINCIPAL/default (ADR-024). Nao e mais a autoridade de
+    # autorizacao -- continua no contrato por compatibilidade e branding.
     company_id: int
     perfil_nome: Optional[str] = None
-    
+    # Aditivos: preenchidos onde a rota conhece a ACL (ex.: /usuarios/me/).
+    company_ids: Optional[List[int]] = None
+    multiempresa: Optional[bool] = None
+    # ADR-037: papel normalizado e capacidades do perfil. O Web REPRESENTA
+    # estas permissoes; quem autoriza continua sendo o Backend, rota a rota.
+    papel: Optional[str] = None
+    permissions: Optional[List[str]] = None
+
     class Config:
         from_attributes = True
 
@@ -378,12 +418,39 @@ class FinalidadeSetor(StrEnum):
     RELATORIO = "RELATORIO"
     AMBOS = "AMBOS"
 
+
+def _validar_agente_ids(value: Optional[List[int]]) -> Optional[List[int]]:
+    if value is None:
+        raise ValueError("agente_ids deve ser uma lista quando informado")
+    if any(agente_id <= 0 for agente_id in value):
+        raise ValueError("agente_ids deve conter apenas IDs positivos")
+    if len(value) != len(set(value)):
+        raise ValueError("agente_ids nao pode conter IDs duplicados")
+    return value
+
+
+class AgenteSetor(BaseModel):
+    id: int
+    nome: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
 class SetorBase(BaseModel):
     nome: str
     meta: int
     agente_id: Optional[int] = None
+    agente_ids: Optional[List[int]] = None
     tolerancia: int = 50
     finalidade: FinalidadeSetor = FinalidadeSetor.OPERACAO
+    # ADR-035: opcional -- o Backend detecta pelo poligono/composicao; quando
+    # informado, e validado contra a Base principal e a geometria.
+    municipio_territorio_id: Optional[int] = Field(default=None, gt=0)
+
+    @field_validator("agente_ids")
+    @classmethod
+    def validar_agente_ids(cls, value: Optional[List[int]]) -> Optional[List[int]]:
+        return _validar_agente_ids(value)
 
 class SetorCreate(SetorBase):
     # Receberemos a geometria como uma lista de coordenadas [[lat, lon], ...]
@@ -406,10 +473,17 @@ class SetorGeofenceCreate(BaseModel):
     nome: str
     meta: int
     agente_id: Optional[int] = None
+    agente_ids: Optional[List[int]] = None
     tolerancia_metros: Optional[int] = 50
     finalidade: FinalidadeSetor = FinalidadeSetor.OPERACAO
     geometria: Optional[List[dict]] = None
     poligono: Optional[List[dict]] = None
+    municipio_territorio_id: Optional[int] = Field(default=None, gt=0)
+
+    @field_validator("agente_ids")
+    @classmethod
+    def validar_agente_ids(cls, value: Optional[List[int]]) -> Optional[List[int]]:
+        return _validar_agente_ids(value)
 
     def get_coords(self) -> List[List[float]]:
         coords = self.geometria or self.poligono
@@ -438,10 +512,17 @@ class SetorUpdate(BaseModel):
     nome: Optional[str] = None
     meta: Optional[int] = None
     agente_id: Optional[int] = None
+    agente_ids: Optional[List[int]] = None
     tolerancia_metros: Optional[int] = None
     finalidade: Optional[FinalidadeSetor] = None
     geometria: Optional[List[dict]] = None
     poligono: Optional[List[dict]] = None
+    municipio_territorio_id: Optional[int] = Field(default=None, gt=0)
+
+    @field_validator("agente_ids")
+    @classmethod
+    def validar_agente_ids(cls, value: Optional[List[int]]) -> Optional[List[int]]:
+        return _validar_agente_ids(value)
 
     @field_validator("nome")
     @classmethod
@@ -482,6 +563,8 @@ class SetorUpdate(BaseModel):
 class Setor(SetorBase):
     id: int
     pesquisa_id: int
+    agente_ids: List[int] = Field(default_factory=list)
+    agentes: List[AgenteSetor] = Field(default_factory=list)
     # Para visualização, retornaremos GeoJSON manualmente no endpoint, 
     # então aqui focamos nos dados alfanuméricos
     
@@ -500,6 +583,11 @@ class Projeto(ProjetoBase):
     id: int
     coordenador_id: int
     status: str
+    # ADR-024: com ACL multiempresa, `GET /projetos/` pode devolver projetos de
+    # empresas diferentes na mesma resposta. Sem o tenant do projeto, a UI nao
+    # tem como agrupar nem rotular a origem. Campo aditivo e de leitura -- o
+    # cliente nunca o envia de volta em dado operacional.
+    company_id: Optional[int] = None
     coordenador: UsuarioParaProjeto
     pesquisas: List[PesquisaResumo] = [] # Usa resumo sem cerca_eletronica para evitar WKBElement
     class Config:
@@ -508,6 +596,13 @@ class Projeto(ProjetoBase):
 class Token(BaseModel):
     access_token: str
     token_type: str
+    # Aditivos: cliente antigo que so le `access_token` continua funcionando.
+    refresh_token: Optional[str] = None
+    expires_in: Optional[int] = None
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 class TokenData(BaseModel):
     email: Optional[EmailStr] = None
@@ -2354,3 +2449,617 @@ class LiderancaAnaliseResponse(BaseModel):
 Projeto.model_rebuild()
 Usuario.model_rebuild()
 Pesquisa.model_rebuild()
+
+
+# --- Tentativa de Campo (PROMPT 03) -------------------------------------------
+# Abordagem operacional; nao confundir com Coleta (entrevista concluida).
+
+class TentativaResultado(StrEnum):
+    EM_ANDAMENTO = "EM_ANDAMENTO"
+    RECUSA = "RECUSA"
+    NAO_ELEGIVEL = "NAO_ELEGIVEL"
+    DESISTENCIA = "DESISTENCIA"
+    INCOMPLETA = "INCOMPLETA"
+    PROBLEMA_TECNICO = "PROBLEMA_TECNICO"
+    OUTRO = "OUTRO"
+    CONCLUIDA = "CONCLUIDA"
+
+
+class TentativaLocalizacao(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+    accuracy: Optional[float] = Field(default=None, ge=0)
+    capturada_em: Optional[datetime] = None
+
+    @field_validator("lat", "lng")
+    @classmethod
+    def _finito(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("coordenada invalida")
+        return value
+
+
+class TentativaCampoCreate(BaseModel):
+    # `company_id`/`agente_id` NAO existem aqui de proposito: chaves extras do
+    # payload sao ignoradas pelo Pydantic e nunca chegam ao banco.
+    client_uuid: UUID
+    setor_id: Optional[int] = Field(default=None, gt=0)
+    iniciada_em: datetime
+    encerrada_em: Optional[datetime] = None
+    localizacao: TentativaLocalizacao
+    resultado: TentativaResultado
+    motivo: Optional[str] = Field(default=None, max_length=60)
+    observacao: Optional[str] = Field(default=None, max_length=1000)
+    # Vinculo com a Coleta ja sincronizada (ordem: coleta antes da tentativa).
+    coleta_client_uuid: Optional[UUID] = None
+
+    @field_validator("motivo")
+    @classmethod
+    def _motivo_codigo(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if not re.fullmatch(r"[A-Z0-9_]{2,60}", value):
+            raise ValueError("motivo deve ser um codigo (ex.: NAO_QUIS_PARTICIPAR)")
+        return value
+
+    @model_validator(mode="after")
+    def _coerencia(self):
+        if self.resultado == TentativaResultado.EM_ANDAMENTO:
+            raise ValueError("tentativa EM_ANDAMENTO nao pode ser sincronizada")
+        if self.encerrada_em is None:
+            raise ValueError("encerrada_em e obrigatoria para tentativa encerrada")
+        if self.encerrada_em < self.iniciada_em:
+            raise ValueError("encerrada_em anterior a iniciada_em")
+        if self.coleta_client_uuid is not None and self.resultado not in (
+            TentativaResultado.CONCLUIDA,
+            TentativaResultado.DESISTENCIA,
+            TentativaResultado.INCOMPLETA,
+        ):
+            raise ValueError(
+                "coleta_client_uuid so faz sentido em CONCLUIDA/DESISTENCIA/INCOMPLETA"
+            )
+        return self
+
+
+class TentativaCampoRead(BaseModel):
+    id: int
+    client_uuid: UUID
+    pesquisa_id: int
+    setor_id: Optional[int] = None
+    agente_id: int
+    iniciada_em: datetime
+    encerrada_em: Optional[datetime] = None
+    resultado: TentativaResultado
+    motivo: Optional[str] = None
+    coleta_id: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# --- Cotas de Perfil (PROMPT 05) ----------------------------------------------
+# Amostral e ORIENTATIVA: nunca bloqueia abordagem, entrevista ou sync.
+
+class SexoCota(StrEnum):
+    MASCULINO = "MASCULINO"
+    FEMININO = "FEMININO"
+
+
+class ModoIdadeCota(StrEnum):
+    NUMERICA = "NUMERICA"
+    CATEGORICA = "CATEGORICA"
+
+
+class PrioridadePerfil(StrEnum):
+    EQUILIBRADO = "EQUILIBRADO"
+    BAIXO = "BAIXO"
+    MEDIO = "MEDIO"
+    ALTO = "ALTO"
+
+
+class CotaPerfilItem(BaseModel):
+    sexo: SexoCota
+    faixa_etaria: str = Field(min_length=1, max_length=40)
+    idade_min: Optional[int] = Field(default=None, ge=0, le=130)
+    idade_max: Optional[int] = Field(default=None, ge=0, le=130)
+    idade_valores: Optional[List[str]] = None
+    meta: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _faixa(self):
+        if self.idade_min is not None and self.idade_max is not None and self.idade_min > self.idade_max:
+            raise ValueError("idade_min nao pode ser maior que idade_max")
+        if self.idade_valores is not None:
+            limpos = [v.strip() for v in self.idade_valores if v and v.strip()]
+            if not limpos:
+                raise ValueError("idade_valores nao pode ser vazio")
+            self.idade_valores = limpos
+        return self
+
+
+class CotaPerfilTerritorio(BaseModel):
+    territorio_id: int = Field(gt=0)
+    cotas: List[CotaPerfilItem] = Field(min_length=1)
+
+
+class PlanoCotaPerfilRequest(BaseModel):
+    pergunta_sexo_id: int = Field(gt=0)
+    pergunta_idade_id: int = Field(gt=0)
+    modo_idade: ModoIdadeCota = ModoIdadeCota.NUMERICA
+    # Valores REAIS da pergunta de sexo que significam cada categoria.
+    sexo_valores: Dict[SexoCota, List[str]]
+    territorios: List[CotaPerfilTerritorio] = Field(min_length=1)
+    ativo: bool = True
+
+    @model_validator(mode="after")
+    def _coerencia(self):
+        if self.pergunta_sexo_id == self.pergunta_idade_id:
+            raise ValueError("pergunta de sexo e de idade devem ser diferentes")
+        for sexo in (SexoCota.MASCULINO, SexoCota.FEMININO):
+            valores = [v.strip() for v in self.sexo_valores.get(sexo, []) if v and v.strip()]
+            if not valores:
+                raise ValueError(f"sexo_valores precisa mapear {sexo.value}")
+            self.sexo_valores[sexo] = valores
+        todos = [v.casefold() for vs in self.sexo_valores.values() for v in vs]
+        if len(todos) != len(set(todos)):
+            raise ValueError("um mesmo valor nao pode mapear dois sexos")
+        vistos = set()
+        for territorio in self.territorios:
+            if territorio.territorio_id in vistos:
+                raise ValueError("territorio repetido no plano")
+            vistos.add(territorio.territorio_id)
+            for cota in territorio.cotas:
+                if self.modo_idade == ModoIdadeCota.NUMERICA and cota.idade_min is None:
+                    raise ValueError("modo NUMERICA exige idade_min em cada cota")
+                if self.modo_idade == ModoIdadeCota.CATEGORICA and not cota.idade_valores:
+                    raise ValueError("modo CATEGORICA exige idade_valores em cada cota")
+        return self
+
+
+class CotaPerfilRead(BaseModel):
+    id: int
+    territorio_id: int
+    territorio_nome: Optional[str] = None
+    sexo: SexoCota
+    faixa_etaria: str
+    idade_min: Optional[int] = None
+    idade_max: Optional[int] = None
+    idade_valores: Optional[List[str]] = None
+    meta: int
+
+
+class SetorOperacionalCota(BaseModel):
+    id: int
+    nome: str
+    meta: int
+
+
+class DiagnosticoTerritorioCota(BaseModel):
+    territorio_id: int
+    territorio_nome: Optional[str] = None
+    total_cotas_perfil: int
+    # ADR-035: soma das metas dos setores OPERACIONAIS referenciados ao municipio.
+    meta_territorial: Optional[int] = None
+    diferenca: Optional[int] = None
+    setores_operacionais: List[SetorOperacionalCota] = Field(default_factory=list)
+
+
+class ContextoTerritorialCota(BaseModel):
+    """Municipios da Base principal com os setores operacionais que os alimentam."""
+    territorio_id: int
+    territorio_nome: str
+    setores_operacionais: List[SetorOperacionalCota]
+    meta_territorial: int
+
+
+class PlanoCotaPerfilRead(BaseModel):
+    id: int
+    pesquisa_id: int
+    ativo: bool
+    pergunta_sexo_id: int
+    pergunta_idade_id: int
+    modo_idade: ModoIdadeCota
+    sexo_valores: Dict[str, List[str]]
+    cotas: List[CotaPerfilRead]
+    diagnostico: List[DiagnosticoTerritorioCota]
+
+
+class PrioridadePerfilItem(BaseModel):
+    territorio_id: int
+    territorio_nome: Optional[str] = None
+    sexo: SexoCota
+    sexo_rotulo: str
+    faixa_etaria: str
+    meta: int
+    realizado: int
+    restante: int
+    percentual_atingimento: float
+    percentual_territorio: float
+    desvio_pp: float
+    prioridade: PrioridadePerfil
+
+
+class ProgressoCotaPerfilTerritorio(BaseModel):
+    territorio_id: int
+    territorio_nome: Optional[str] = None
+    meta_total: int
+    realizado_total: int
+    percentual_territorio: float
+    fase_inicial: bool
+    status: str  # FASE_INICIAL | EQUILIBRADO | PRIORIDADES
+    celulas: List[PrioridadePerfilItem]
+
+
+class ProgressoCotaPerfilRead(BaseModel):
+    pesquisa_id: int
+    plano_ativo: bool
+    snapshot_em: datetime
+    nao_classificadas: int
+    motivos_nao_classificadas: Dict[str, int]
+    territorios: List[ProgressoCotaPerfilTerritorio]
+
+
+# --- Cobertura territorial de campo (PROMPT 06) -------------------------------
+# Atividade CONHECIDA (snapshot), orientativa. Sem dados pessoais.
+
+class EventoCoberturaCampo(BaseModel):
+    tipo: Literal["COLETA", "TENTATIVA"]
+    server_id: int
+    setor_id: int
+    lat: float
+    lng: float
+    accuracy: Optional[float] = None
+    ocorrido_em: Optional[datetime] = None
+    resultado: Optional[TentativaResultado] = None
+
+
+class CoberturaCampoRead(BaseModel):
+    pesquisa_id: int
+    snapshot_em: datetime
+    distancia_recomendada_entre_abordagens_metros: int
+    distancia_configurada: bool
+    setor_ids: List[int]
+    eventos: List[EventoCoberturaCampo]
+
+
+class ConfiguracaoCampoRequest(BaseModel):
+    # null limpa a configuracao (volta ao default centralizado do servico).
+    distancia_recomendada_entre_abordagens_metros: Optional[int] = Field(default=None, gt=0, le=5000)
+
+
+class ConfiguracaoCampoRead(BaseModel):
+    pesquisa_id: int
+    distancia_recomendada_entre_abordagens_metros: int
+    distancia_configurada: bool
+
+
+# --- Painel de Controle de Campo (PROMPT 07) ----------------------------------
+# Supervisao/coordenacao. Snapshot do servidor; nunca tempo real.
+
+class ControleCampoSetor(BaseModel):
+    setor_id: int
+    setor_nome: str
+    finalidade: Optional[str] = None
+    municipio_id: Optional[int] = None
+    municipio_nome: Optional[str] = None
+    meta: int
+    realizado: int
+    restante: int
+    excedente: int
+    percentual_atingimento: Optional[float] = None
+    status_cota: str
+    limite_atencao_realizado: Optional[int] = None
+    agentes_atribuidos_total: int
+    snapshot_ate_coleta_id: Optional[int] = None
+
+
+class ControleCampoResumo(BaseModel):
+    meta_territorial: int
+    realizado_territorial: int
+    entrevistas_concluidas: int
+    coletas_com_tentativa: int
+    coletas_sem_tentativa: int
+    tentativas_encerradas: int
+    tentativas_em_andamento: int
+    tentativas_concluidas: int
+    recusas: int
+    nao_elegiveis: int
+    desistencias: int
+    incompletas: int
+    problemas_tecnicos: int
+    outros: int
+    taxa_conclusao_tentativas: Optional[float] = None
+    nota_taxa: str
+
+
+class ControleCampoResumoTerritorial(BaseModel):
+    abertos: int
+    atencao: int
+    encerrados: int
+    sem_cota: int
+    com_excedente: int
+
+
+class ControleCampoAlerta(BaseModel):
+    tipo: str
+    total: int
+    mensagem: str
+
+
+class ControleCampoOpcao(BaseModel):
+    id: int
+    nome: Optional[str] = None
+
+
+class ControleCampoOpcoes(BaseModel):
+    municipios: List[ControleCampoOpcao]
+    setores: List[ControleCampoOpcao]
+    agentes: List[ControleCampoOpcao]
+
+
+class ControleCampoFiltros(BaseModel):
+    municipio_id: Optional[int] = None
+    setor_ids: List[int]
+    agente_ids: List[int]
+    data_inicio: Optional[datetime] = None
+    data_fim: Optional[datetime] = None
+    resultado: Optional[str] = None
+    nota: str
+
+
+class ControleCampoPerfilTerritorio(BaseModel):
+    territorio_id: int
+    territorio_nome: Optional[str] = None
+    meta_total: int
+    realizado_total: int
+    percentual_territorio: float
+    fase_inicial: bool
+    status: str
+    celulas: List[PrioridadePerfilItem]
+
+
+class ControleCampoCotasPerfil(BaseModel):
+    plano_ativo: bool
+    territorios: List[ControleCampoPerfilTerritorio]
+    nao_classificadas: int
+    motivos_nao_classificadas: Dict[str, int]
+    snapshot_em: Optional[datetime] = None
+
+
+class ControleCampoTentativaResultado(BaseModel):
+    resultado: str
+    total: int
+
+
+class EventoCoberturaGerencial(EventoCoberturaCampo):
+    # Identificacao do agente: permitida ao coordenador do MESMO tenant.
+    # Nunca email/telefone/CPF; nunca respostas ou dados do entrevistado.
+    agente_id: Optional[int] = None
+    agente_nome: Optional[str] = None
+
+
+class ControleCampoAtividade(BaseModel):
+    distancia_recomendada_entre_abordagens_metros: int
+    distancia_configurada: bool
+    eventos: List[EventoCoberturaGerencial]
+
+
+class ControleCampoRead(BaseModel):
+    pesquisa_id: int
+    snapshot_em: datetime
+    filtros: ControleCampoFiltros
+    opcoes: ControleCampoOpcoes
+    resumo: ControleCampoResumo
+    resumo_territorial: ControleCampoResumoTerritorial
+    alertas: List[ControleCampoAlerta]
+    setores: List[ControleCampoSetor]
+    cotas_perfil: ControleCampoCotasPerfil
+    tentativas_por_resultado: List[ControleCampoTentativaResultado]
+    atividade_campo: ControleCampoAtividade
+
+
+class CoberturaCampoGerencialRead(BaseModel):
+    pesquisa_id: int
+    snapshot_em: datetime
+    setores: List[ControleCampoSetor]
+    distancia_recomendada_entre_abordagens_metros: int
+    distancia_configurada: bool
+    eventos: List[EventoCoberturaGerencial]
+
+
+# --- ACL multiempresa/multiprojeto (ADR-024) ---------------------------------
+# `company_id` do usuario continua no contrato como EMPRESA PRINCIPAL/default.
+# Os campos abaixo sao ADITIVOS: nenhum consumidor antigo quebra.
+
+
+class UsuarioEmpresaAcessoItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    company_id: int
+    company_nome: Optional[str] = None
+    acesso_todos_projetos: bool = True
+    ativo: bool = True
+    principal: bool = False
+    projeto_ids: List[int] = Field(default_factory=list)
+
+
+class UsuarioAcessosResponse(BaseModel):
+    usuario_id: int
+    empresa_principal_id: Optional[int] = None
+    empresas: List[UsuarioEmpresaAcessoItem] = Field(default_factory=list)
+
+
+class UsuarioEmpresaAcessoInput(BaseModel):
+    # `extra="forbid"`: payload administrativo nao aceita campo desconhecido.
+    model_config = ConfigDict(extra="forbid")
+
+    company_id: int = Field(gt=0)
+    acesso_todos_projetos: bool = False
+    projeto_ids: List[int] = Field(default_factory=list)
+
+
+class UsuarioAcessosRequest(BaseModel):
+    """ACL completa do usuario: o PUT substitui, nao acumula."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    empresa_principal_id: Optional[int] = Field(default=None, gt=0)
+    empresas: List[UsuarioEmpresaAcessoInput] = Field(default_factory=list)
+
+
+class UsuarioResumoAcessos(BaseModel):
+    """Resumo para a listagem administrativa (evita N+1 na tabela)."""
+
+    usuario_id: int
+    empresas: List[str] = Field(default_factory=list)
+    total_empresas: int = 0
+    total_projetos_explicitos: int = 0
+    acesso_total_em_alguma_empresa: bool = False
+
+# --- Ativacao de conta por convite -------------------------------------------
+# O token viaja apenas no link do e-mail; o banco guarda so o hash.
+
+
+class AtivacaoTokenStatus(BaseModel):
+    """Resposta publica da validacao do link.
+
+    Sem `senha_hash`, `token_hash`, ids internos ou dado de terceiros: `email`
+    e `nome` so aparecem quando o token e valido -- e para quem ja tem o link.
+    """
+
+    status: str
+    valido: bool
+    email: Optional[EmailStr] = None
+    nome: Optional[str] = None
+    expira_em: Optional[datetime] = None
+
+
+class AtivacaoContaRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=1)
+    senha: str
+    # Confirmacao e opcional no contrato: quando vem, o Backend confere -- nao
+    # delega ao cliente uma validacao que ele pode pular.
+    confirmacao_senha: Optional[str] = None
+
+
+class AtivacaoContaResponse(BaseModel):
+    ativado: bool
+    email: EmailStr
+    mensagem: str
+
+
+class ReenvioAtivacaoResponse(BaseModel):
+    # `enviado` reflete a entrega do e-mail; o convite existe de qualquer forma,
+    # e por isso `activation_url` vem sempre.
+    enviado: bool
+    email: EmailStr
+    expira_em: datetime
+    activation_url: str
+
+# --- Link de convite devolvido ao painel administrativo ----------------------
+# TRANSITORIO: `activation_url` embute o token puro e vale como credencial de
+# ativacao ate ser usado. So aparece na resposta de quem acabou de criar/renovar
+# o convite -- nunca em listagem, nunca em GET, nunca no banco.
+
+
+class ConviteAtivacao(BaseModel):
+    activation_url: str
+    expira_em: datetime
+    email_enviado: bool
+
+
+class UsuarioCriadoResponse(Usuario):
+    """Resposta da CRIACAO de usuario.
+
+    Schema proprio de proposito: `GET /usuarios/` continua respondendo
+    `schemas.Usuario`, sem qualquer campo de convite. `convite` fica `null`
+    quando a criacao veio com senha administrativa -- nao se inventa link para
+    um convite que nao existe.
+    """
+
+    convite: Optional[ConviteAtivacao] = None
+
+
+# --- Auditoria (ADR-039) -----------------------------------------------------
+class AuditEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    occurred_at: datetime
+    event_type: str
+    severity: str
+    user_id: Optional[int] = None
+    company_id: Optional[int] = None
+    project_id: Optional[int] = None
+    attempted_email: Optional[str] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    http_method: Optional[str] = None
+    path: Optional[str] = None
+    status_code: Optional[int] = None
+    request_id: Optional[str] = None
+    details: Optional[dict] = None
+
+
+class AuditEventPage(BaseModel):
+    """Mesmo formato de pagina ja usado em TerritorioEleitoralPage."""
+    model_config = ConfigDict(extra="forbid")
+
+    items: List[AuditEventRead]
+    total: int
+    limit: int
+    offset: int
+
+
+# --- painel de seguranca (ADR-041) --------------------------------------------
+
+class AuditPeriodo(BaseModel):
+    data_inicio: datetime
+    data_fim: datetime
+
+
+class AuditTotais(BaseModel):
+    total_eventos: int
+    login_failed: int          # LOGIN_FAILED + ACCOUNT_INACTIVE_LOGIN
+    access_denied: int         # RBAC_DENIED + ACCESS_DENIED (cross-tenant NAO entra aqui)
+    cross_tenant: int          # CROSS_TENANT_ACCESS_ATTEMPT
+    project_access: int        # PROJECT_ACCESS (ja deduplicado na origem)
+    notification_failed: int   # PROJECT_ACCESS_NOTIFICATION_FAILED (SUPPRESSED nao e falha)
+    high: int                  # severity = HIGH
+
+
+class AuditTopIp(BaseModel):
+    ip_address: str
+    total: int
+    login_failed: int
+    access_denied: int
+    cross_tenant: int
+    last_event_at: Optional[datetime] = None
+
+
+class AuditTopAccount(BaseModel):
+    attempted_email: str
+    total: int
+    last_event_at: Optional[datetime] = None
+
+
+class AuditTimelinePoint(BaseModel):
+    periodo: str               # inicio do bucket, ISO sem offset (UTC)
+    login_failed: int
+    access_denied: int
+    cross_tenant: int
+
+
+class AuditSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    periodo: AuditPeriodo
+    granularidade: str         # "hora" (<= 48h) | "dia"
+    totais: AuditTotais
+    top_ips: List[AuditTopIp]
+    top_attempted_accounts: List[AuditTopAccount]
+    timeline: List[AuditTimelinePoint]

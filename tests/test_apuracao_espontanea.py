@@ -15,6 +15,7 @@ from pesquisa360 import crud, schemas
 from pesquisa360.api.endpoints import apuracao_espontanea
 from pesquisa360.core.dependencies import get_current_user, get_db
 from pesquisa360.utils.response_normalization import normalizar_resposta_espontanea
+from tests.acl_fixture import criar_tabelas_acl
 
 
 class ApuracaoEspontaneaTests(unittest.TestCase):
@@ -32,6 +33,9 @@ class ApuracaoEspontaneaTests(unittest.TestCase):
             connection.create_function("AsGeoJSON", 1, lambda value: None)
             connection.create_function("ST_AsGeoJSON", 1, lambda value: None)
 
+        criar_tabelas_acl(cls.engine)
+
+        criar_tabelas_acl(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine)
         with cls.engine.begin() as connection:
             connection.execute(text("""
@@ -72,8 +76,10 @@ class ApuracaoEspontaneaTests(unittest.TestCase):
                     tipo_pergunta TEXT NOT NULL, ordem INTEGER NOT NULL,
                     eh_obrigatoria BOOLEAN NOT NULL, eh_resposta_espontanea BOOLEAN NOT NULL DEFAULT 0,
                     papel_analitico VARCHAR(50), metadados_analiticos JSON NOT NULL DEFAULT '{}',
-                    ativo BOOLEAN NOT NULL, pesquisa_id INTEGER NOT NULL
-                )
+                    ativo BOOLEAN NOT NULL, pesquisa_id INTEGER NOT NULL,
+                -- FASE F
+                aplicabilidade VARCHAR(20) NOT NULL DEFAULT 'GLOBAL'
+)
             """))
             connection.execute(text("""
                 CREATE TABLE opcoes (

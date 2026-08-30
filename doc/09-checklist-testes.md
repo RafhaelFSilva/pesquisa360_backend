@@ -270,3 +270,269 @@ E2E CDP consolidado: PASS, zero respostas HTTP >= 400
 
 No E2E, os únicos avisos observados foram os avisos preexistentes de flags
 futuras do React Router.
+
+## ACL multiempresa/multiprojeto (ADR-034)
+
+Backend — `tests/test_acl_multiempresa.py`:
+
+- [x] backfill dá a todo usuário legado `acesso_todos_projetos` na própria empresa
+- [x] backfill não cria linha por projeto e é idempotente (downgrade/re-upgrade)
+- [x] `GET /projetos/` devolve A1, A2 e B1; nunca B2
+- [x] acesso direto: A1/A2/B1 → 200, B2 → 404
+- [x] projeto de outra empresa autorizado explicitamente → 200 (empresa principal continua A)
+- [x] revogação vale com o MESMO token, sem novo login
+- [x] `acesso_todos_projetos` alcança projeto criado depois
+- [x] vínculo de empresa inativo bloqueia até projeto autorizado
+- [x] Superadmin enxerga tudo sem nenhuma linha de ACL
+- [x] coleta grava o `company_id` do PROJETO (não a empresa principal do agente)
+- [x] `PUT /acessos` recusa projeto de outra empresa (422) sem gravar nada
+- [x] payload inválido (empresa inexistente/inativa, duplicata, campo extra) → 422
+- [x] rotas de ACL exigem Superadmin
+- [x] `/usuarios/me/` mantém `company_id` e acrescenta `company_ids`
+- [x] o filtro de ACL entra na própria query SQL (sem N+1)
+
+Web — `tests/userAccess.test.mjs`: draft de 1 e de 2 empresas, seleção/remoção
+de projetos, `acesso_todos_projetos`, empresa principal, payload sem
+tenant/usuário, validação local, resumo "Empresa A +1", loading, erro e ausência
+de request por linha na tabela.
+
+## Cadastro por convite e ativação (ADR-035)
+
+Backend — `tests/test_ativacao_conta.py` (23 testes):
+
+- [x] política de senha: `abc123`/`pesquisa9` aceitas; `123456`, `abcdef`, `a12` recusadas
+- [x] mensagens de senha não citam bcrypt/hash/salt
+- [x] convite cria conta **inativa** no tenant do criador
+- [x] `company_id` do payload é ignorado (Gerente não planta conta em outro tenant)
+- [x] e-mail duplicado → 400, sem criar e sem convidar
+- [x] criação não é anônima
+- [x] banco guarda só o SHA-256 do token; token puro não aparece na tabela
+- [x] e-mail traz link e validade, sem senha
+- [x] validação distingue VALIDO / INVALIDO / EXPIRADO / UTILIZADO
+- [x] ativação define senha, ativa a conta e consome o token
+- [x] token é de uso único (2º uso → 400, senha não muda)
+- [x] token expirado não ativa
+- [x] senha fraca → 422 e o token **não** é consumido
+- [x] confirmação divergente → 422
+- [x] conta inativa não autentica; ativada autentica
+- [x] usuário antigo continua logando
+- [x] criação com senha mantém o comportamento anterior
+- [x] reenvio invalida o convite anterior; recusado para conta ativa
+- [x] falha ao gravar senha faz rollback e preserva o token
+- [x] falha de e-mail não perde o convite
+
+Web — `tests/activateAccount.test.mjs` (13 testes): política espelhada,
+checklist de requisitos, textos por desfecho do token, `/ativar-conta` fora do
+`ProtectedRoute`, rotas do service, estados (validando/formulário/bloqueado/
+sucesso), bloqueio de senha inválida e divergente, ausência de login automático,
+falha de rede distinta de token inválido, convite pela tela de admin.
+
+## Link de convite no painel (ADR-036)
+
+Backend — `tests/test_ativacao_conta.py::LinkConviteTests` (10 testes):
+
+- [x] criação por convite devolve `activation_url` utilizável (valida e ativa)
+- [x] **o token do link não existe em nenhuma tabela** (dump completo do banco)
+- [x] criação com senha não inventa link (`convite: null`)
+- [x] `GET /usuarios/` e `GET /admin/usuarios/` não vazam `activation_url`
+- [x] reenvio devolve link novo e invalida o anterior
+- [x] usuário ativo não recebe convite (400, sem link na resposta)
+- [x] falha de e-mail mantém o link utilizável e sinaliza `email_enviado: false`
+- [x] link usa `WEB_BASE_URL`, sem domínio fixo
+- [x] gerar convite exige autorização administrativa
+- [x] não existe rota para reler link antigo
+
+Web — `tests/activationInvite.test.mjs` (13 testes): expiração formatada,
+mensagem/URL do WhatsApp codificada e sem telefone, resumo da URL, texto de
+falha de e-mail, cópia com fallback e sem `console`, modal (dados, ações,
+feedback "✓ Copiado" temporário, responsivo, aviso de que o link não volta),
+criação abrindo o modal, "Gerar novo convite" só para conta inativa, e o link
+saindo do estado ao fechar — sem storage/store/analytics.
+
+## RBAC por perfil (ADR-037)
+
+Backend — `tests/test_rbac_perfis.py` (23 testes, chamadas HTTP diretas):
+
+- [x] matriz: Cliente sem nenhuma capacidade de escrita; Agente só campo;
+      Supervisor sem administração; Coordenador sem tenant; só Superadmin em empresas
+- [x] perfil desconhecido não recebe permissão; usuário inativo idem
+- [x] Cliente + ACL A1 + GET → 200
+- [x] Cliente sem ACL em A2 → **404**
+- [x] Cliente + ACL A1 + PATCH → **403** (e o dado não muda)
+- [x] projeto de outro tenant → 404 para todos menos Superadmin
+- [x] Cliente é read-only em 10 rotas de escrita
+- [x] Cliente não administra usuários nem empresas
+- [x] Agente faz missão/sync e recebe 403 no painel inteiro
+- [x] `/usuarios/me/` aberto a qualquer autenticado, com `papel` e `permissions`
+- [x] Supervisor monitora mas não administra
+- [x] Coordenador gerencia só onde tem ACL
+- [x] Gerente não atravessa tenant; Superadmin preserva capacidades
+- [x] escopo é avaliado antes da capacidade (404 vence 403)
+- [x] permissão não substitui ACL
+
+Web — `tests/permissions.test.mjs` (13 testes): capacidades vindas do Backend,
+fallback de sessão antiga, Cliente read-only, Agente fora do painel, papéis
+intermediários, `PermissionRoute`, `/sem-permissao`, ações não renderizadas e
+ausência de comparação de perfil solta nas telas.
+
+## Documentação por ambiente (ADR-038)
+
+Backend — `tests/test_documentacao_ambiente.py` (12 testes):
+
+- [x] produção desliga `docs_url`, `redoc_url` e `openapi_url` **juntas**
+- [x] desenvolvimento mantém os três caminhos padrão
+- [x] `APP_ENV` decide o ambiente; default (ausente/vazio) = desenvolvimento;
+      `production`/`producao`/`prod` (case-insensitive) = produção
+- [x] o ambiente não é inferido de host/porta/Docker (análise da AST: só `APP_ENV`)
+- [x] produção: `/docs`, `/redoc` e `/openapi.json` → **404**, sem redirect
+- [x] produção: variantes com barra final também → 404, sem HTML do Swagger
+- [x] produção: as rotas não estão sequer registradas em `app.routes`
+- [x] produção: `/login/token`, `/usuarios/me/`, `/projetos/` e `/agente/pesquisas/`
+      continuam registradas
+- [x] produção: login não é 404 e rota protegida sem token responde 401
+- [x] desenvolvimento: `/docs` e `/redoc` → 200 (HTML)
+- [x] desenvolvimento: `/openapi.json` → JSON válido, com `openapi`, `paths` e `/login/token`
+- [x] sem `APP_ENV`, o comportamento é o de hoje (compatibilidade)
+
+## Auditoria de segurança (ADR-039)
+
+Backend — `tests/test_auditoria.py` (41 testes, por HTTP com o middleware real):
+
+- [x] login inválido registra `attempted_email`, motivo interno e **nenhuma senha**
+- [x] conta inativa e login válido (motivo só na trilha; cliente vê mensagem genérica)
+- [x] ip, user-agent e `request_id` vêm do middleware; `request_id` == header `X-Request-ID`
+- [x] `X-Forwarded-For` só vale com `AUDIT_TRUST_PROXY=true` (primeiro IP da cadeia)
+- [x] `RBAC_DENIED` registra permissões exigidas, papel, método e caminho
+- [x] negação de projeto classificada: `sem_acl` / `outro_tenant` (HIGH) / `inexistente`
+- [x] `PROJECT_ACCESS` nasce no Backend, no `GET /projetos/{id}`
+- [x] evento sobrevive ao rollback da request (sessão própria)
+- [x] falha na auditoria **não** derruba a request
+- [x] `details` nunca carrega segredo (filtro por chave, inclusive aninhado)
+- [x] registro fora de request funciona sem contexto
+- [x] leitura restrita a Gerente/Superadmin via dependency declarada, com filtros
+- [x] trilha append-only: FKs nullable sem cascade; serviço sem `update`/`delete`
+
+PROJECT_ACCESS — deduplicação de 15 min (AU14–AU19):
+
+- [x] GET autorizado cria `PROJECT_ACCESS`
+- [x] mesmo usuário + mesmo projeto dentro de 15 min → continua 1 evento
+- [x] fora da janela (relógio controlado por `agora`/`occurred_at`) → novo evento
+- [x] usuário diferente → novo evento
+- [x] projeto diferente → novo evento
+- [x] Superadmin em projeto de outro tenant → `company_id` do evento = tenant do projeto
+
+API `GET /admin/auditoria/eventos` (AU20–AU36):
+
+- [x] Superadmin lista eventos globais e filtra `company_id`
+- [x] Gerente lista só o próprio tenant; `company_id` de outro tenant não vaza; evento de outro tenant não aparece
+- [x] Coordenador, Supervisor, Cliente e Agente → 403
+- [x] filtros `event_type`, `severity`, `project_id`, `user_id`, `ip_address`, `data_inicio`/`data_fim`
+- [x] mais recente primeiro (`occurred_at DESC`)
+- [x] limite máximo da página = 100 (`limit=500` → 422; `limit=100` aceito)
+
+Segredos e regressões de contrato (AU37–AU41):
+
+- [x] senha marcadora, JWT emitido, `Authorization: Bearer`, token de ativação e `activation_url`: **0 ocorrências** na tabela serializada
+- [x] query string (`?token=SEGREDO_QUERY`) nunca persiste; `path` = só o caminho
+- [x] token expirado → `TOKEN_EXPIRED`; token inválido → `TOKEN_INVALID` (sem segundo parse)
+- [x] Empresa A pede projeto da B: 404 externo **e** `CROSS_TENANT_ACCESS_ATTEMPT` HIGH interno
+- [x] Cliente com ACL faz PATCH: 403 externo e **um único** `RBAC_DENIED`
+
+## Notificação de acesso ao projeto (ADR-040)
+
+Backend — `tests/test_notificacao_acesso_projeto.py` (21 testes, por HTTP, SMTP mockado com contador real):
+
+- [x] acesso autorizado → 1 `PROJECT_ACCESS` → 1 e-mail ao Gerente responsável → `NOTIFICATION_SENT`
+- [x] segundo GET na janela de 15 min → nenhum evento novo, nenhum segundo e-mail
+- [x] fora da janela (relógio controlado) → novo evento, novo e-mail
+- [x] usuário diferente → e-mail próprio; projeto diferente → destinatário do outro projeto
+- [x] Gerente responsável acessa o próprio projeto → `PROJECT_ACCESS` continua, `SUPPRESSED self_access`
+- [x] Superadmin acessa projeto → Gerente responsável é notificado (`company_id` = tenant do projeto)
+- [x] projeto sem responsável / responsável inativo / sem e-mail → `SUPPRESSED` (`no_project_manager` · `inactive_recipient` · `missing_recipient_email`), sem 500
+- [x] SMTP ok → `SENT`; SMTP recusa ou lança exceção → GET continua 200, evento persistido, `FAILED` WARNING
+- [x] `SMTP_HOST` ausente → `SUPPRESSED smtp_not_configured`, não `FAILED`
+- [x] e-mail não contém JWT, `Authorization`, `Bearer`, senha, token, activation, cookie, nem dado de coleta
+- [x] cross-tenant (404), sem ACL (404) e RBAC (403) → zero notificações
+- [x] dois Gerentes no tenant → **somente** o responsável recebe (1 × 0)
+- [x] conteúdo mínimo: assunto com nome do projeto, destinatário, ator, perfil, empresa, data/hora `(UTC)`, IP, User-Agent, link `WEB_BASE_URL/projetos/{id}` (sem link de API)
+- [x] 10 GETs consecutivos → 1 evento, 1 tentativa de e-mail
+- [x] `montar_mensagem` é pura: formata UTC e trunca User-Agent em 160 chars
+
+## Painel administrativo de segurança (ADR-041)
+
+Backend — `tests/test_painel_seguranca.py` (22 testes, `GET /admin/auditoria/resumo` por HTTP):
+
+- [x] Superadmin: totais exatos globais (PS01); Gerente: só o próprio tenant (PS02)
+- [x] Gerente com `company_id` de outro tenant não atravessa (PS03)
+- [x] Cliente, Supervisor, Coordenador e Agente → 403 (PS04–PS07)
+- [x] `login_failed` = LOGIN_FAILED + ACCOUNT_INACTIVE_LOGIN; LOGIN_SUCCESS não conta (PS08)
+- [x] `access_denied` = RBAC + ACL; cross-tenant separado, sem dupla contagem (PS09)
+- [x] `project_access` usa os eventos já deduplicados: 5 GETs → 1 (PS10)
+- [x] `notification_failed` ignora SUPPRESSED/SENT (PS11); `high` conta severidade (PS12)
+- [x] top IPs ordenado por volume, ≤ 10 (PS13); LOGIN_SUCCESS/PROJECT_ACCESS/SENT não contaminam (PS14)
+- [x] top contas agrupa `attempted_email`, sem senha (PS15)
+- [x] período exclui eventos fora da janela; granularidade hora/dia (PS16)
+- [x] filtro por projeto (PS17) e por usuário; Gerente pedindo `user_id` de outro tenant → 0 no resumo e na lista (PS18)
+- [x] Gerente não recebe eventos globais sem `company_id`; Superadmin recebe (PS19)
+- [x] agregação em SQL: nenhum `AuditEvent` materializado; consultar não grava evento (PS20); rota só GET com `require_manager_or_superadmin` (PS21)
+- [x] QA real por HTTP: 1 login inválido, 1 PATCH 403, 1 cross-tenant, 1 acesso legítimo, 1 falha simulada de notificação → cada um na categoria certa; lista mais recente primeiro; Gerente da outra empresa vê 0 (PS22)
+
+Web — `tests/security.test.mjs` (30 testes):
+
+- [x] menu Segurança: Superadmin e Gerente sim; Cliente, Supervisor, Coordenador, Agente não (PW01–PW06)
+- [x] rota manual sob `PermissionRoute` → `/sem-permissao` (PW07)
+- [x] cards vêm do resumo agregado; loading, erro com "Tentar novamente", vazio (PW08–PW11)
+- [x] filtros de período (24h default, 7d, 30d, personalizado), evento, severidade, IP, projeto e usuário alteram a query (PW12–PW15)
+- [x] paginação `limit/offset`, máximo 100, rótulo "1–50 de 328" (PW16)
+- [x] Gerente nunca envia `company_id` e vê empresa somente leitura; Superadmin tem seletor (PW17–PW18)
+- [x] detalhe em Dialog com todos os campos; `details` sem chaves sensíveis, nem aninhadas (PW19–PW20)
+- [x] nomes amigáveis para todos os eventos; severidade com texto/marcador (PW21–PW22)
+- [x] card cross-tenant com valor e filtro por clique, sem animação alarmista (PW23)
+- [x] rankings de IP (sem "malicioso") e de contas renderizam (PW24–PW25)
+- [x] série temporal com 3 séries, sem PROJECT_ACCESS; painel sem ação de bloqueio (extras)
+
+## Cotas por Perfil — painel Web e ADR-034
+
+Backend — `tests/test_cota_perfil.py` (+2) e `tests/test_base_eleitoral_multiempresa.py` (+1):
+
+- [x] Superadmin de outra empresa configura e lê o plano; plano gravado no tenant do Projeto (CP_B21)
+- [x] usuário principal A com ACL no Projeto B: perguntas B, Base B, municípios B, plano B (`company_id` = B); município da base A → 404; Gerente B lê o mesmo plano (CP_B22)
+- [x] territórios/detalhe da Base do Projeto legíveis por Superadmin e ACL cruzada; sem ACL → 404; leitura não concede escrita (test_13)
+- [x] suítes existentes preservadas: GET/PUT plano, progresso, classificação sexo/idade, município, tenant, pergunta de outra pesquisa, faixas sobrepostas/repetidas (CP_B01–B20)
+
+Web — `tests/profileQuota.test.mjs` (13 casos):
+
+- [x] perguntas elegíveis só da Pesquisa (escolha simples; idade também numérica); inativas/texto fora
+- [x] sugestões de mapeamento; "35 a 34 anos" gera aviso e não é corrigido
+- [x] totais por linha/coluna/geral e percentual visual
+- [x] payload real do PUT (perguntas, modo, `sexo_valores`, `territorios/cotas`, `ativo`) sem `company_id`/`tenant_id`
+- [x] validações: pergunta ausente/iguais, sexo sem mapear, faixa sem opção, sem município, duplicado, negativo
+- [x] status visual verde/amarelo/cinza/vermelho (vermelho só com erro real)
+- [x] GET real → formulário preenchido; editar meta reflete no novo PUT; progresso não é tocado
+- [x] edição só Gerente/Superadmin; mensagens por 403/404/422/500/rede sem `AxiosError`
+- [x] service com rotas reais, 404 = sem plano, PUT idempotente
+- [x] card: "Não configurada" → "Configurar Cotas por Perfil"; Ativa/Inativa; vazio ≠ erro; Base ausente bloqueia; desativar com aviso, sem DELETE; confirmação forte ao trocar variáveis com coletas; link Controle de Campo
+- [x] setup: perguntas, mapeamentos, municípios com busca/accordion, revisão, "Salvar e ativar", sem double-submit
+- [x] painel na aba Configuração Analítica com municípios da Base do Projeto; não vive na Gestão de Território
+
+## Setor → Município + Cotas (ADR-035-B)
+
+Backend — `tests/test_setor_municipio.py` (10 testes):
+
+- [x] composição em Macapá → `municipio_territorio_id` persistido e exposto no GET (47); backfill da migration preenche só composição única (47b)
+- [x] fronteira 82/18 → AMBIGUO sem escolher o maior; 100% → RESOLVIDO; ruído <1% ignorado; composição em dois municípios em setor OPERACAO → 422 (48)
+- [x] setor RELATORIO multi-municipal permitido, NULL, fora do contexto de perfil (49)
+- [x] composição movida → referência recalculada; manual válido aceito; fora da Base ou bairro → 404 (50)
+- [x] coleta Centro/Homem/23 → Centro realizado +1 e Macapá Homem 16–24 +1; não depende do nome do setor (51)
+- [x] Centro + Zona Norte → cada setor +1, Macapá Homem 16–24 +2; meta territorial consolidada 250 no diagnóstico (52)
+- [x] Macapá e Santana não se misturam (53)
+- [x] usuário principal A com ACL no Projeto B resolve pela Base B; município da Base A → 404; sem ACL → 404 (54)
+- [x] contexto territorial e situação para a UI (55)
+
+Web — `tests/setorMunicipio.test.mjs` (5) e `tests/profileQuota.test.mjs` (+1):
+
+- [x] tipo Setor com `municipio`/`municipio_status`; card "Município: X" pelo vínculo; "Município indefinido" sem esconder
+- [x] formulário: referência detectada (somente leitura), sem seleção manual, sem hardcode, sem company_id
+- [x] composição: cabeçalho com Município de referência e compatibilidade das unidades (sinaliza, não bloqueia)
+- [x] Controle de Campo: coluna Município vem do backend
+- [x] Cotas: etapa Municípios com setores + meta consolidada; revisão com cobertura territorial e diferença informativa; referência da matriz pré-preenchida

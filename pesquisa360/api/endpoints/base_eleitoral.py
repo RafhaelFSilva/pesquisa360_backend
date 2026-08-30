@@ -14,6 +14,7 @@ from pesquisa360 import schemas
 from pesquisa360.core.dependencies import get_current_user, get_db
 from pesquisa360.db import models
 from pesquisa360.services import base_eleitoral as service
+from pesquisa360.core.rbac import Permissao, require_permissao
 
 router = APIRouter()
 
@@ -140,7 +141,7 @@ def _detalhe_completo(db: Session, base: models.BaseEleitoral) -> dict:
 # --- Leitura ------------------------------------------------------------------
 
 
-@router.get("/base-eleitoral/", response_model=List[schemas.BaseEleitoralListItem])
+@router.get("/base-eleitoral/", response_model=List[schemas.BaseEleitoralListItem], dependencies=[Depends(require_permissao(Permissao.BASE_ELEITORAL_VER))])
 def listar_bases_eleitorais(
     *,
     db: Session = Depends(get_db),
@@ -161,8 +162,7 @@ def listar_bases_eleitorais(
 
 
 @router.get(
-    "/base-eleitoral/{base_id}", response_model=schemas.BaseEleitoralDetalheCompleto
-)
+    "/base-eleitoral/{base_id}", response_model=schemas.BaseEleitoralDetalheCompleto, dependencies=[Depends(require_permissao(Permissao.BASE_ELEITORAL_VER))])
 def obter_base_eleitoral(
     *,
     db: Session = Depends(get_db),
@@ -175,8 +175,7 @@ def obter_base_eleitoral(
 
 @router.get(
     "/base-eleitoral/{base_id}/territorios",
-    response_model=schemas.TerritorioEleitoralPage,
-)
+    response_model=schemas.TerritorioEleitoralPage, dependencies=[Depends(require_permissao(Permissao.BASE_ELEITORAL_VER))])
 def listar_territorios_base_eleitoral(
     *,
     db: Session = Depends(get_db),
@@ -210,8 +209,7 @@ def listar_territorios_base_eleitoral(
 
 @router.get(
     "/base-eleitoral/{base_id}/importacoes",
-    response_model=List[schemas.ImportacaoBaseEleitoralResumo],
-)
+    response_model=List[schemas.ImportacaoBaseEleitoralResumo], dependencies=[Depends(require_permissao(Permissao.BASE_ELEITORAL_VER))])
 def listar_importacoes_base_eleitoral(
     *,
     db: Session = Depends(get_db),
@@ -230,8 +228,7 @@ def listar_importacoes_base_eleitoral(
 
 @router.get(
     "/projetos/{projeto_id}/base-eleitoral",
-    response_model=schemas.ProjetoBaseEleitoralAtualResponse,
-)
+    response_model=schemas.ProjetoBaseEleitoralAtualResponse, dependencies=[Depends(require_permissao(Permissao.BASE_ELEITORAL_VER))])
 def obter_base_eleitoral_do_projeto(
     *,
     db: Session = Depends(get_db),
@@ -255,9 +252,28 @@ def obter_base_eleitoral_do_projeto(
 
 
 @router.get(
+    "/projetos/{projeto_id}/bases-eleitorais-disponiveis",
+    response_model=List[schemas.BaseEleitoralListItem], dependencies=[Depends(require_permissao(Permissao.BASE_ELEITORAL_VER))])
+def listar_bases_eleitorais_disponiveis_para_projeto(
+    *,
+    db: Session = Depends(get_db),
+    projeto_id: int,
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    """Candidatas a vinculo para ESTE Projeto (ADR-034).
+
+    Autoriza o Projeto pela ACL (404 se invisivel) e lista bases oficiais mais
+    as privadas do tenant DO PROJETO -- nunca da empresa principal do usuario.
+    E o que o modal "Vincular Base Eleitoral" consome; `GET /base-eleitoral/`
+    continua respondendo "o que o usuario ve", que e outra pergunta.
+    """
+    bases = service.listar_bases_disponiveis_para_projeto(db, projeto_id, current_user)
+    return [_base_para_item(base) for base in bases]
+
+
+@router.get(
     "/base-eleitoral/{base_id}/divergencias",
-    response_model=List[schemas.DivergenciaBaseEleitoralResponse],
-)
+    response_model=List[schemas.DivergenciaBaseEleitoralResponse], dependencies=[Depends(require_permissao(Permissao.BASE_ELEITORAL_VER))])
 def listar_divergencias_base_eleitoral(
     *,
     db: Session = Depends(get_db),
@@ -272,8 +288,7 @@ def listar_divergencias_base_eleitoral(
 
 @router.post(
     "/projetos/{projeto_id}/base-eleitoral/{base_id}/vincular",
-    response_model=schemas.VinculoProjetoBaseResponse,
-)
+    response_model=schemas.VinculoProjetoBaseResponse, dependencies=[Depends(require_permissao(Permissao.BASE_ELEITORAL_GERENCIAR))])
 def vincular_base_ao_projeto(
     *,
     db: Session = Depends(get_db),
@@ -282,14 +297,18 @@ def vincular_base_ao_projeto(
     payload: Optional[schemas.VincularBaseProjetoRequest] = None,
     current_user: models.Usuario = Depends(get_current_user),
 ):
-    """Fixa a versao eleitoral usada pela campanha. O tenant vem do JWT."""
+    """Fixa a versao eleitoral usada pela campanha.
+
+    ACL decide se o usuario pode agir no Projeto; o tenant do PROJETO decide
+    se a Base serve a ele (ADR-034). Base privada de outro tenant: 404.
+    """
     principal = payload.principal if payload is not None else True
     return service.vincular_base_eleitoral_ao_projeto(
         db, projeto_id, base_id, current_user, principal=principal
     )
 
 
-@router.post("/base-eleitoral/{base_id}/validar", response_model=schemas.ResultadoValidacaoBase)
+@router.post("/base-eleitoral/{base_id}/validar", response_model=schemas.ResultadoValidacaoBase, dependencies=[Depends(require_permissao(Permissao.BASE_ELEITORAL_GERENCIAR))])
 def validar_base_eleitoral(
     *,
     db: Session = Depends(get_db),
@@ -308,8 +327,7 @@ def validar_base_eleitoral(
 
 @router.patch(
     "/base-eleitoral/{base_id}/parametros-projecao",
-    response_model=schemas.BaseEleitoralDetalheCompleto,
-)
+    response_model=schemas.BaseEleitoralDetalheCompleto, dependencies=[Depends(require_permissao(Permissao.BASE_ELEITORAL_GERENCIAR))])
 def definir_parametros_projecao(
     *,
     db: Session = Depends(get_db),
@@ -339,8 +357,7 @@ def definir_parametros_projecao(
 
 @router.post(
     "/base-eleitoral/territorios/{territorio_id}/resolver-divergencia",
-    response_model=schemas.TerritorioEleitoralListItem,
-)
+    response_model=schemas.TerritorioEleitoralListItem, dependencies=[Depends(require_permissao(Permissao.BASE_ELEITORAL_GERENCIAR))])
 def resolver_divergencia(
     *,
     db: Session = Depends(get_db),

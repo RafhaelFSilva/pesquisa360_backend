@@ -14,8 +14,11 @@ from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import models
+from .core import ambiente
+from .services import auditoria
+from pesquisa360.core.rbac import Permissao, require_permissao
 from .db.session import engine
-from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais, empresas, apuracao_espontanea, base_eleitoral, liderancas
+from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais, empresas, apuracao_espontanea, base_eleitoral, liderancas, setor_importacao, tentativas_campo, cotas_perfil, cobertura_campo, controle_campo
 from .core.dependencies import get_current_user
 
 
@@ -58,14 +61,36 @@ def _load_upload_settings() -> tuple[Path, int]:
 
 UPLOAD_DIRECTORY, UPLOAD_MAX_SIZE_BYTES = _load_upload_settings()
 
+# ADR-038: em producao as rotas de documentacao NAO sao registradas -- nao ha
+# rota escondida atras de senha ou perfil, simplesmente nao existem. `/docs`,
+# `/redoc` e `/openapi.json` caem juntas: manter o JSON publico deixaria a
+# estrutura inteira da API enumeravel.
 app = FastAPI(
     title="Pesquisa360 API",
     description="Backend da plataforma Pesquisa360 para gestão de pesquisas de campo.",
-    version="0.1.0"
+    version="0.1.0",
+    **ambiente.opcoes_documentacao(),
 )
 
 app.mount("/static/uploads", StaticFiles(directory=UPLOAD_DIRECTORY), name="uploads")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# --- CONTEXTO DE AUDITORIA (ADR-039) ---
+# Um request_id por requisicao; ip/user-agent/metodo/caminho ficam num
+# ContextVar para qualquer dependency ou servico auditar sem receber `Request`.
+# O id volta em `X-Request-ID` para correlacionar com o log.
+@app.middleware("http")
+async def contexto_de_auditoria(request: Request, call_next):
+    request_id = uuid.uuid4().hex
+    request.state.request_id = request_id
+    token = auditoria.definir_contexto(auditoria.contexto_de_request(request, request_id))
+    try:
+        response = await call_next(request)
+    finally:
+        auditoria.limpar_contexto(token)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
 
 # --- CONFIGURAÇÃO DO CORS ---
 cors_allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS")
@@ -115,7 +140,12 @@ async def erro_de_validacao(_request: Request, exc: RequestValidationError):
         content={"detail": _sanitizar_nao_finitos(jsonable_encoder(exc.errors()))},
     )
 
-@app.post("/upload")
+# Upload de anexo. O aplicativo de campo usa esta rota durante a coleta, entao
+# COLETA_ENVIAR (agente) tambem vale -- alem de quem administra conteudo.
+@app.post(
+    "/upload",
+    dependencies=[Depends(require_permissao(Permissao.COLETA_ENVIAR, Permissao.TERRITORIO_GERENCIAR))],
+)
 async def upload_file(
     file: UploadFile = File(...),
     current_user: models.Usuario = Depends(get_current_user),
@@ -198,6 +228,7 @@ app.include_router(login.router, prefix="/login", tags=["Login"])
 # Usuários (prefixo /usuarios + rota / = /usuarios/)
 app.include_router(usuarios.router, prefix="/usuarios", tags=["Usuarios"])
 app.include_router(usuarios.admin_router)
+app.include_router(usuarios.auditoria_router)
 app.include_router(usuarios.profiles_router)
 
 # Empresas / tenants
@@ -205,10 +236,19 @@ app.include_router(empresas.router, prefix="/empresas", tags=["Empresas"])
 
 # Projetos
 # CORREÇÃO AQUI: Removemos o prefixo porque as rotas dentro de projetos.py já começam com /projetos
+# ANTES de `projetos`: a rota `/setores/{setor_id}/territorios` de projetos
+# casa com o literal "importacao" no lugar do id e sombrearia
+# `/setores/importacao/territorios`. FastAPI resolve por ordem de registro,
+# entao a rota literal precisa vir primeiro.
+app.include_router(setor_importacao.router, tags=["Importacao de Setores"])
 app.include_router(projetos.router, tags=["Projetos"]) 
 
 # Coletas
 app.include_router(coletas.router, tags=["Coletas"])
+app.include_router(tentativas_campo.router, tags=["Tentativas de Campo"])
+app.include_router(cotas_perfil.router, tags=["Cotas de Perfil"])
+app.include_router(cobertura_campo.router, tags=["Cobertura de Campo"])
+app.include_router(controle_campo.router, tags=["Controle de Campo"])
 
 # Relatórios
 app.include_router(relatorios.router, tags=["Relatorios"])

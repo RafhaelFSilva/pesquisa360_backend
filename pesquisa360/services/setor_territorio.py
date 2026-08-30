@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from pesquisa360.crud import FINALIDADES_ANALITICAS
 from pesquisa360.db import models
+from pesquisa360.services import acessos
 from pesquisa360.services import base_eleitoral as base_service
 
 # Unico nivel aceito hoje. A Base atual so tem eleitorado em BAIRRO: SECAO e
@@ -67,7 +68,7 @@ def obter_setor(
             models.Setor.id == setor_id,
             models.Setor.pesquisa_id == pesquisa_id,
             models.Pesquisa.projeto_id == projeto_id,
-            models.Projeto.company_id == current_user.company_id,
+            acessos.filtro_projeto_acessivel(current_user),
         )
         .first()
     )
@@ -233,6 +234,13 @@ def definir_territorios(
                     setor_id=setor.id, territorio_eleitoral_id=territorio_id
                 )
             )
+        # ADR-035: composicao e a segunda fonte do municipio de referencia.
+        # Sem geometrias municipais, e ela quem resolve -- e a referencia
+        # acompanha a composicao em vez de ficar contraditoria em silencio.
+        from pesquisa360.services import setor_municipio
+
+        db.flush()
+        setor_municipio.aplicar(db, setor, projeto_id, current_user)
         db.commit()
     except Exception:
         db.rollback()

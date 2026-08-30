@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from pesquisa360 import crud
 from pesquisa360.db import models
+from pesquisa360.services import acessos
 from pesquisa360.question_types import (
     is_categorical_question_type,
     is_multiple_response_question_type,
@@ -222,7 +223,7 @@ def gerar_mapa_respostas_geo(
     # Tenant pelo company_id da coleta; o cliente nunca informa empresa.
     universo_query = db.query(models.Coleta.id).filter(
         models.Coleta.pesquisa_id == pesquisa_id,
-        models.Coleta.company_id == current_user.company_id,
+        acessos.filtro_company_acessivel(models.Coleta.company_id, current_user),
     )
     total_universo = universo_query.count()
 
@@ -344,7 +345,7 @@ def gerar_mapa_respostas_geo(
             )
             .filter(
                 models.Coleta.id.in_(coletas_filtradas),
-                models.Coleta.company_id == current_user.company_id,
+                acessos.filtro_company_acessivel(models.Coleta.company_id, current_user),
             )
             .order_by(models.Coleta.id)
             .all()

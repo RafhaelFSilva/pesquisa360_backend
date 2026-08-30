@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from pesquisa360.core.dependencies import _get_profile_name, _is_manager_name, _is_superadmin_name
 from pesquisa360.db import models
+from pesquisa360.services import acessos
 from pesquisa360.services import base_eleitoral as base_service
 
 TIPO_TERRITORIO_ACEITO = "BAIRRO"
@@ -42,7 +43,7 @@ def obter_projeto(db: Session, projeto_id: int, current_user: models.Usuario) ->
         db.query(models.Projeto)
         .filter(
             models.Projeto.id == projeto_id,
-            models.Projeto.company_id == current_user.company_id,
+            acessos.filtro_projeto_acessivel(current_user),
         )
         .first()
     )

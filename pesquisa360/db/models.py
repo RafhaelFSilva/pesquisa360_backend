@@ -78,10 +78,146 @@ class Usuario(Base):
     coletas = relationship("Coleta", back_populates="agente")
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False) # Note: nullable=False
     company = relationship("Company", back_populates="users")
+    atribuicoes_setores = relationship(
+        "SetorAgente",
+        back_populates="agente",
+        cascade="all, delete-orphan",
+    )
+    # ACL multiempresa (ADR-024). `company_id` acima continua existindo como
+    # empresa PRINCIPAL/default -- branding e contexto inicial --, nao como
+    # autoridade de autorizacao: quem responde "pode ver este projeto?" e a
+    # tabela de acessos abaixo, consultada no banco a cada request.
+    empresa_acessos = relationship(
+        "UsuarioEmpresaAcesso",
+        back_populates="usuario",
+        cascade="all, delete-orphan",
+    )
+    projeto_acessos = relationship(
+        "UsuarioProjetoAcesso",
+        back_populates="usuario",
+        cascade="all, delete-orphan",
+    )
 
     @property
     def perfil_nome(self):
         return self.perfil.nome if self.perfil else None
+
+class AuditEvent(Base):
+    """Evento de seguranca/acesso (ADR-039).
+
+    Registro append-only: nunca e atualizado nem apagado pela aplicacao. Quem
+    pergunta "quem tentou entrar / quem acessou este projeto / houve tentativa
+    cross-tenant" le daqui. Nunca guarda senha, token ou corpo de requisicao --
+    apenas identidade, contexto HTTP e um `details` pequeno e nao sensivel.
+
+    FKs sao nullable e sem cascade: apagar um usuario ou projeto nao pode apagar
+    a trilha do que ele fez.
+    """
+
+    __tablename__ = "audit_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    occurred_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    event_type = Column(String(64), nullable=False, index=True)
+    severity = Column(String(16), nullable=False, index=True)
+
+    user_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
+    project_id = Column(Integer, ForeignKey("projetos.id"), nullable=True, index=True)
+
+    # E-mail informado num login que falhou: o usuario pode nem existir.
+    attempted_email = Column(String(320), nullable=True)
+
+    ip_address = Column(String(45), nullable=True)      # IPv6 cabe em 45
+    user_agent = Column(String(512), nullable=True)
+    http_method = Column(String(10), nullable=True)
+    path = Column(String(512), nullable=True)
+    status_code = Column(Integer, nullable=True)
+    request_id = Column(String(64), nullable=True, index=True)
+
+    details = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
+
+    __table_args__ = (
+        Index("ix_audit_events_tipo_usuario_projeto_data", "event_type", "user_id", "project_id", "occurred_at"),
+    )
+
+
+class UserActivationToken(Base):
+    """Convite de ativacao de conta (uso unico, com validade).
+
+    O token em texto puro existe SOMENTE no e-mail do convidado: aqui fica
+    apenas o SHA-256 dele. Vazamento do banco nao permite ativar conta alheia.
+    Uso unico e representado por `usado_em`, nunca por DELETE -- apagar apagaria
+    tambem a evidencia de que o convite foi consumido.
+    """
+
+    __tablename__ = "user_activation_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    # SHA-256 hex do token. Unico: dois convites nunca colidem.
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    criado_em = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    expira_em = Column(DateTime(timezone=True), nullable=False)
+    usado_em = Column(DateTime(timezone=True), nullable=True)
+
+    usuario = relationship("Usuario")
+
+
+class UsuarioEmpresaAcesso(Base):
+    """Vinculo do usuario com uma Empresa (ADR-024).
+
+    `acesso_todos_projetos=True` reproduz o comportamento legado (usuario da
+    empresa enxerga todos os projetos dela) e e o que o backfill grava; com
+    `False`, o alcance passa a ser exatamente o que houver em
+    `usuario_projeto_acessos`.
+    """
+
+    __tablename__ = "usuario_empresa_acessos"
+    __table_args__ = (
+        UniqueConstraint("usuario_id", "company_id", name="uq_usuario_empresa_acesso"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    acesso_todos_projetos = Column(Boolean, nullable=False, default=True)
+    ativo = Column(Boolean, nullable=False, default=True)
+    # Espelha `usuarios.company_id` no backfill; serve de contexto padrao da UI.
+    principal = Column(Boolean, nullable=False, default=False)
+    criado_em = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    atualizado_em = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    usuario = relationship("Usuario", back_populates="empresa_acessos")
+    company = relationship("Company")
+
+
+class UsuarioProjetoAcesso(Base):
+    """Autorizacao explicita a UM projeto.
+
+    Nao carrega `company_id`: o tenant do dado ja e `Projeto.company_id`.
+    Duplicar aqui criaria uma segunda verdade sobre o mesmo fato.
+    """
+
+    __tablename__ = "usuario_projeto_acessos"
+    __table_args__ = (
+        UniqueConstraint("usuario_id", "projeto_id", name="uq_usuario_projeto_acesso"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    projeto_id = Column(Integer, ForeignKey("projetos.id"), nullable=False, index=True)
+    ativo = Column(Boolean, nullable=False, default=True)
+    criado_em = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    atualizado_em = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    usuario = relationship("Usuario", back_populates="projeto_acessos")
+    projeto = relationship("Projeto")
+
 
 class Perfil(Base):
     __tablename__ = "perfis"
@@ -165,9 +301,22 @@ class Pergunta(Base):
     
     ativo = Column(Boolean, default=True, nullable=False)
     pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False)
+
+    # GLOBAL aparece em todos os setores; TERRITORIAL so nos setores cujo
+    # municipio resolvido esta em `territorios_municipais`. Explicito de
+    # proposito: "sem municipio associado" nao pode ser lido como GLOBAL.
+    aplicabilidade = Column(
+        String(20), nullable=False, default="GLOBAL", server_default=text("'GLOBAL'")
+    )
     
     pesquisa = relationship("Pesquisa", back_populates="perguntas")
     respostas = relationship("Resposta", back_populates="pergunta")
+    territorios_municipais = relationship(
+        "PerguntaTerritorioEleitoral",
+        back_populates="pergunta",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     
     # CORREÇÃO AQUI: Adicionamos foreign_keys para desambiguar
     opcoes = relationship(
@@ -176,6 +325,39 @@ class Pergunta(Base):
         cascade="all, delete-orphan",
         foreign_keys="Opcao.pergunta_id" 
     )
+
+class PerguntaTerritorioEleitoral(Base):
+    """Municipios em que uma Pergunta TERRITORIAL e apresentada.
+
+    O alvo e um TerritorioEleitoral de tipo MUNICIPIO, que pertence a UMA
+    versao de BaseEleitoral. Nao existe identidade municipal estavel (sem IBGE,
+    sem entidade propria), entao trocar a base principal do projeto deixa
+    estas associacoes apontando para a base anterior: elas continuam
+    consistentes, mas os setores compostos pela base nova nao as encontram.
+    """
+
+    __tablename__ = "pergunta_territorio_eleitoral"
+    __table_args__ = (
+        UniqueConstraint(
+            "pergunta_id", "territorio_eleitoral_id", name="uq_pergunta_territorio"
+        ),
+        Index("ix_pergunta_territorio_pergunta", "pergunta_id"),
+        Index("ix_pergunta_territorio_territorio", "territorio_eleitoral_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    pergunta_id = Column(
+        Integer, ForeignKey("perguntas.id", ondelete="CASCADE"), nullable=False
+    )
+    territorio_eleitoral_id = Column(
+        Integer,
+        ForeignKey("territorio_eleitoral.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    pergunta = relationship("Pergunta", back_populates="territorios_municipais")
+    territorio_eleitoral = relationship("TerritorioEleitoral")
+
 
 class Opcao(Base):
     __tablename__ = "opcoes"
@@ -195,6 +377,7 @@ class Coleta(Base):
     __tablename__ = "coletas"
     __table_args__ = (
         UniqueConstraint("company_id", "client_uuid", name="uq_coletas_company_client_uuid"),
+        Index("ix_coletas_setor_id", "setor_id"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -202,6 +385,7 @@ class Coleta(Base):
     agente_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     client_uuid = Column(String(36), nullable=False)
+    setor_id = Column(Integer, ForeignKey("setores.id"), nullable=True)
 
     # --- NOVOS CAMPOS DE AUDITORIA ---
     foi_offline = Column(Boolean, default=False)  # Indica se o app estava offline
@@ -219,6 +403,7 @@ class Coleta(Base):
 
     pesquisa = relationship("Pesquisa", back_populates="coletas")
     agente = relationship("Usuario", back_populates="coletas")
+    setor = relationship("Setor", back_populates="coletas")
     respostas = relationship("Resposta", back_populates="coleta", cascade="all, delete-orphan")
 
 class Resposta(Base):
@@ -248,10 +433,76 @@ class Setor(Base):
     
     # Responsável pelo setor (Agente)
     agente_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
+
+    # ADR-035: municipio operacional de referencia (TerritorioEleitoral tipo
+    # MUNICIPIO da Base principal do Projeto). Agregacao para Cota por Perfil;
+    # NAO substitui a composicao eleitoral. Nullable: historico/analitico.
+    municipio_territorio_id = Column(
+        Integer, ForeignKey("territorio_eleitoral.id"), nullable=True, index=True
+    )
+    municipio_referencia = relationship("TerritorioEleitoral", foreign_keys=[municipio_territorio_id])
     
     # Relacionamentos
     pesquisa = relationship("Pesquisa", back_populates="setores")
-    agente = relationship("Usuario") # Agente responsável
+    # passive_deletes: sem isto o ORM CARREGA as coletas ao apagar o setor e
+    # emite UPDATE coletas SET setor_id = NULL antes do DELETE -- desvinculando
+    # o historico em silencio, com HTTP 200. O setor faz parte da identidade
+    # daquela coleta; quem decide e a FK fk_coletas_setor_id_setores (NO
+    # ACTION), que barra o DELETE e deixa o endpoint traduzir para 409.
+    coletas = relationship("Coleta", back_populates="setor", passive_deletes=True)
+    agente = relationship("Usuario", foreign_keys=[agente_id]) # Legado: responsavel singular
+    atribuicoes_agentes = relationship(
+        "SetorAgente",
+        back_populates="setor",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    agentes = relationship(
+        "Usuario",
+        secondary="setor_agentes",
+        primaryjoin=lambda: and_(
+            Setor.id == SetorAgente.setor_id,
+            SetorAgente.ativo.is_(True),
+        ),
+        secondaryjoin=lambda: Usuario.id == SetorAgente.agente_id,
+        viewonly=True,
+        order_by=lambda: Usuario.id,
+    )
+
+    @property
+    def agente_ids(self):
+        return [agente.id for agente in self.agentes]
+
+
+class SetorAgente(Base):
+    """Atribuicao N:N; ``Setor.agente_id`` permanece como legado."""
+
+    __tablename__ = "setor_agentes"
+    __table_args__ = (
+        UniqueConstraint("setor_id", "agente_id", name="uq_setor_agentes_setor_agente"),
+        Index("ix_setor_agentes_setor_id", "setor_id"),
+        Index("ix_setor_agentes_agente_id", "agente_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    setor_id = Column(
+        Integer,
+        ForeignKey("setores.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    agente_id = Column(
+        Integer,
+        ForeignKey("usuarios.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+
+    setor = relationship("Setor", back_populates="atribuicoes_agentes")
+    agente = relationship(
+        "Usuario",
+        back_populates="atribuicoes_setores",
+        foreign_keys=[agente_id],
+    )
 
 
 # --- NOVAS TABELA PARA APURAÇÃO ---
@@ -882,3 +1133,147 @@ class LiderancaTerritorioEleitoral(Base):
     territorio_eleitoral = relationship(
         "TerritorioEleitoral", foreign_keys=[territorio_eleitoral_id]
     )
+
+
+# ==============================================================================
+# TENTATIVA DE CAMPO (PROMPT 03)
+#
+# Abordagem operacional do agente. NAO e uma Coleta: registra que houve uma
+# abordagem, onde, quando, por quem e com que resultado. Quando a abordagem
+# vira entrevista concluida, `coleta_id` aponta para a Coleta correspondente.
+# Recusa, nao elegivel, desistencia etc. nunca criam Coleta.
+# ==============================================================================
+class TentativaCampo(Base):
+    __tablename__ = "tentativas_campo"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "client_uuid", name="uq_tentativas_campo_company_client_uuid"
+        ),
+        Index("ix_tentativas_campo_pesquisa_id", "pesquisa_id"),
+        Index("ix_tentativas_campo_setor_id", "setor_id"),
+        Index("ix_tentativas_campo_agente_id", "agente_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    # Idempotencia: gerado no Mobile na criacao local e estavel em todo retry.
+    client_uuid = Column(String(36), nullable=False)
+    pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False)
+    setor_id = Column(Integer, ForeignKey("setores.id"), nullable=True)
+    # Sempre derivados do usuario autenticado, nunca do payload.
+    agente_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+
+    iniciada_em = Column(DateTime(timezone=True), nullable=False)
+    encerrada_em = Column(DateTime(timezone=True), nullable=True)
+
+    # Posicao da abordagem: o MESMO GeoPoint que vira localizacao_inicio da
+    # Coleta quando a abordagem vira entrevista. Sem geometria PostGIS por
+    # enquanto: lat/lon crus bastam para auditoria e para o mapa futuro.
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    precisao_metros = Column(Float, nullable=True)
+    capturada_em = Column(DateTime(timezone=True), nullable=True)
+
+    # Classificacao principal (RECUSA, NAO_ELEGIVEL, ..., CONCLUIDA) e detalhe.
+    resultado = Column(String(30), nullable=False)
+    motivo = Column(String(60), nullable=True)
+    observacao = Column(Text, nullable=True)
+
+    coleta_id = Column(Integer, ForeignKey("coletas.id"), nullable=True)
+
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    pesquisa = relationship("Pesquisa")
+    setor = relationship("Setor")
+    agente = relationship("Usuario")
+    coleta = relationship("Coleta")
+
+
+# ==============================================================================
+# COTAS DE PERFIL (PROMPT 05) -- amostral, ORIENTATIVA. Nunca bloqueia.
+#
+# Plano por pesquisa: aponta explicitamente a pergunta de Sexo (com o mapa de
+# valores reais -> MASCULINO/FEMININO) e a pergunta de Idade (numerica ou
+# categorica). A celula municipio x sexo x faixa e a verdade planejada; totais
+# marginais sao derivados.
+# ==============================================================================
+class PlanoCotaPerfil(Base):
+    __tablename__ = "planos_cota_perfil"
+    __table_args__ = (
+        UniqueConstraint("pesquisa_id", name="uq_planos_cota_perfil_pesquisa"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    pergunta_sexo_id = Column(Integer, ForeignKey("perguntas.id"), nullable=False)
+    pergunta_idade_id = Column(Integer, ForeignKey("perguntas.id"), nullable=False)
+    # NUMERICA: classifica pelo valor inteiro; CATEGORICA: pelos textos reais.
+    modo_idade = Column(String(20), nullable=False, default="NUMERICA")
+    # {"MASCULINO": ["Masculino", ...], "FEMININO": ["Feminino", ...]}
+    sexo_valores = Column(JSON, nullable=False)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    pesquisa = relationship("Pesquisa")
+    cotas = relationship(
+        "CotaPerfil", back_populates="plano", cascade="all, delete-orphan", order_by="CotaPerfil.ordem"
+    )
+
+
+class CotaPerfil(Base):
+    __tablename__ = "cotas_perfil"
+    __table_args__ = (
+        Index("ix_cotas_perfil_plano_id", "plano_id"),
+        Index("ix_cotas_perfil_territorio_id", "territorio_eleitoral_id"),
+        CheckConstraint("meta >= 0", name="ck_cotas_perfil_meta"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    plano_id = Column(Integer, ForeignKey("planos_cota_perfil.id", ondelete="CASCADE"), nullable=False)
+    # Municipio (TerritorioEleitoral tipo MUNICIPIO da base principal do projeto).
+    territorio_eleitoral_id = Column(Integer, ForeignKey("territorio_eleitoral.id"), nullable=False)
+    sexo = Column(String(20), nullable=False)  # MASCULINO | FEMININO
+    faixa_rotulo = Column(String(40), nullable=False)  # "60+", "45-59"...
+    idade_min = Column(Integer, nullable=True)
+    idade_max = Column(Integer, nullable=True)  # null = sem teto
+    idade_valores = Column(JSON, nullable=True)  # modo CATEGORICA: textos reais
+    meta = Column(Integer, nullable=False, default=0)
+    ordem = Column(Integer, nullable=False, default=0)
+
+    plano = relationship("PlanoCotaPerfil", back_populates="cotas")
+    territorio = relationship("TerritorioEleitoral")
+
+
+# ==============================================================================
+# CONFIGURACAO DE CAMPO DA PESQUISA (PROMPT 06)
+# Parametros operacionais de campo. Tabela propria (nao coluna em `pesquisas`)
+# para nao alterar o contrato legado. Distancia nullable; > 0 quando definida.
+# ==============================================================================
+class ConfiguracaoCampoPesquisa(Base):
+    __tablename__ = "configuracoes_campo_pesquisa"
+    __table_args__ = (
+        UniqueConstraint("pesquisa_id", name="uq_configuracoes_campo_pesquisa"),
+        CheckConstraint(
+            "distancia_recomendada_entre_abordagens_metros IS NULL OR "
+            "distancia_recomendada_entre_abordagens_metros > 0",
+            name="ck_configuracoes_campo_distancia",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    distancia_recomendada_entre_abordagens_metros = Column(Integer, nullable=True)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    pesquisa = relationship("Pesquisa")

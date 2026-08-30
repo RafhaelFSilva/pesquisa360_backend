@@ -13,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 from pesquisa360.api.endpoints import usuarios
 from pesquisa360.core import security
 from pesquisa360.core.dependencies import get_db
+from tests.acl_fixture import criar_tabelas_acl
 
 
 class AssignableProfilesTests(unittest.TestCase):
@@ -23,6 +24,7 @@ class AssignableProfilesTests(unittest.TestCase):
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
+        criar_tabelas_acl(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine)
         with cls.engine.begin() as connection:
             connection.execute(text("""

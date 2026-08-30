@@ -1036,9 +1036,12 @@ class UniversoEleitoralTests(_ComposicaoFixture):
         # entao a unica variavel entre as duas medicoes e a quantidade.
         com_um = contar(32, [self.bairro_a.id])
         com_tres = contar(33, [self.bairro_a.id, self.bairro_b.id, self.bairro_c.id])
-        # Constante: sem N+1 por territorio.
+        # Constante: sem N+1 por territorio. Esta e a assercao que importa.
         self.assertEqual(com_um, com_tres)
-        self.assertLessEqual(com_tres, 5)
+        # EVOLUIDO (ADR-024): a autorizacao passou a consultar o perfil do
+        # usuario (ACL multiempresa). E UMA consulta a mais, constante -- nao
+        # cresce com a quantidade de bairros, que e o que este teste protege.
+        self.assertLessEqual(com_tres, 6)
 
 
 class UniversoEleitoralApiTests(_ComposicaoFixture):

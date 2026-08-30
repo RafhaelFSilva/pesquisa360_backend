@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from pesquisa360.core.dependencies import _get_profile_name, _is_manager_name, _is_superadmin_name
 from pesquisa360.db import models
+from pesquisa360.services import acessos
 
 STATUS_IMPORTADA = "IMPORTADA"
 STATUS_EM_CONFERENCIA = "EM_CONFERENCIA"
@@ -62,6 +63,34 @@ def filtro_visibilidade_base_eleitoral(company_id: Optional[int]):
     )
 
 
+def filtro_visibilidade_para_usuario(current_user: models.Usuario):
+    """Visibilidade de LEITURA da Base para o usuario (ADR-034).
+
+    Oficial, ou privada da empresa principal, ou principal de um Projeto que a
+    ACL do usuario alcanca: quem pode abrir o Projeto precisa ler a Base que
+    ele usa (territorios, municipios, importacoes), mesmo sendo de outra
+    empresa -- Superadmin e Gerente com ACL cruzada. A ESCRITA continua com
+    `assegurar_permissao_escrita_base` (dono ou Superadmin).
+    """
+    bases_de_projetos_acessiveis = (
+        db_select_bases_de_projetos_acessiveis(current_user)
+    )
+    return or_(
+        filtro_visibilidade_base_eleitoral(getattr(current_user, "company_id", None)),
+        models.BaseEleitoral.id.in_(bases_de_projetos_acessiveis),
+    )
+
+
+def db_select_bases_de_projetos_acessiveis(current_user: models.Usuario):
+    from sqlalchemy import select
+
+    return (
+        select(models.ProjetoBaseEleitoral.base_eleitoral_id)
+        .join(models.Projeto, models.Projeto.id == models.ProjetoBaseEleitoral.projeto_id)
+        .where(acessos.filtro_projeto_acessivel(current_user))
+    )
+
+
 def listar_bases_eleitorais_visiveis(
     db: Session,
     current_user: models.Usuario,
@@ -70,10 +99,9 @@ def listar_bases_eleitorais_visiveis(
     uf: Optional[str] = None,
     ano: Optional[int] = None,
 ):
-    """Bases oficiais mais as privadas do proprio tenant. company_id vem do JWT."""
-    query = db.query(models.BaseEleitoral).filter(
-        filtro_visibilidade_base_eleitoral(current_user.company_id)
-    )
+    """Bases oficiais, privadas do proprio tenant e as usadas por Projetos
+    acessiveis pela ACL (ADR-034)."""
+    query = db.query(models.BaseEleitoral).filter(filtro_visibilidade_para_usuario(current_user))
     if status_filtro:
         query = query.filter(models.BaseEleitoral.status == status_filtro)
     if uf:
@@ -95,7 +123,7 @@ def obter_base_eleitoral_visivel(
         db.query(models.BaseEleitoral)
         .filter(
             models.BaseEleitoral.id == base_id,
-            filtro_visibilidade_base_eleitoral(current_user.company_id),
+            filtro_visibilidade_para_usuario(current_user),
         )
         .first()
     )
@@ -146,7 +174,7 @@ def _obter_projeto_do_tenant(
         db.query(models.Projeto)
         .filter(
             models.Projeto.id == projeto_id,
-            models.Projeto.company_id == current_user.company_id,
+            acessos.filtro_projeto_acessivel(current_user),
         )
         .first()
     )
@@ -167,6 +195,57 @@ def _assegurar_base_elegivel_para_projeto(
         raise _nao_encontrada()
 
 
+def filtro_elegibilidade_para_projeto(projeto: models.Projeto):
+    """Bases que SERVEM a este Projeto: oficiais + privadas do tenant do Projeto.
+
+    ADR-034: o tenant pertence ao recurso. A empresa principal/default de quem
+    olha (`current_user.company_id`) nao entra aqui -- um Superadmin de outra
+    empresa, ou um Gerente com ACL em Projeto de outro tenant, ve exatamente
+    as mesmas candidatas que o dono do Projeto.
+    """
+    return filtro_visibilidade_base_eleitoral(projeto.company_id)
+
+
+def listar_bases_eleitorais_disponiveis_para_projeto(
+    db: Session, projeto: models.Projeto
+) -> list[models.BaseEleitoral]:
+    """Candidatas a vinculo para o Projeto ja autorizado (ACL feita antes).
+
+    Sem politica nova de status: as mesmas bases que a listagem generica
+    devolveria para um usuario do tenant do Projeto.
+    """
+    return (
+        db.query(models.BaseEleitoral)
+        .filter(filtro_elegibilidade_para_projeto(projeto))
+        .order_by(
+            models.BaseEleitoral.ano.desc(),
+            models.BaseEleitoral.uf,
+            models.BaseEleitoral.versao,
+            models.BaseEleitoral.id,
+        )
+        .all()
+    )
+
+
+def obter_base_eleitoral_elegivel_para_projeto(
+    db: Session, projeto: models.Projeto, base_id: int
+) -> models.BaseEleitoral:
+    """Base pelo id, desde que elegivel para o Projeto; senao 404.
+
+    Substitui `obter_base_eleitoral_visivel` no contexto de Projeto: aquela
+    compara com o tenant do USUARIO, esta com o tenant do PROJETO.
+    """
+    base = (
+        db.query(models.BaseEleitoral)
+        .filter(models.BaseEleitoral.id == base_id, filtro_elegibilidade_para_projeto(projeto))
+        .first()
+    )
+    if base is None:
+        raise _nao_encontrada()
+    _assegurar_base_elegivel_para_projeto(base, projeto)
+    return base
+
+
 def vincular_base_eleitoral_ao_projeto(
     db: Session,
     projeto_id: int,
@@ -175,8 +254,9 @@ def vincular_base_eleitoral_ao_projeto(
     principal: bool = True,
 ) -> models.ProjetoBaseEleitoral:
     projeto = _obter_projeto_do_tenant(db, projeto_id, current_user)
-    base = obter_base_eleitoral_visivel(db, base_eleitoral_id, current_user)
-    _assegurar_base_elegivel_para_projeto(base, projeto)
+    # ADR-034: quem autoriza e a ACL do Projeto (acima); qual Base serve ao
+    # Projeto e decidido pelo tenant do PROJETO, nao pela empresa do usuario.
+    base = obter_base_eleitoral_elegivel_para_projeto(db, projeto, base_eleitoral_id)
 
     existente = (
         db.query(models.ProjetoBaseEleitoral)
@@ -221,9 +301,16 @@ def obter_base_principal_projeto_opcional(
 ) -> Optional[models.BaseEleitoral]:
     """Base principal do projeto, ou None quando ainda nao ha vinculo.
 
-    Projeto inexistente ou de outro tenant continua sendo 404: ausencia de
+    Projeto inexistente ou invisivel pela ACL continua sendo 404: ausencia de
     vinculo e um estado funcional normal e nao deve ser confundida com projeto
     invisivel. Usada pelo Workspace/conferencia, nunca pelo caminho de calculo.
+
+    ADR-034: o vinculo e um fato do PROJETO. Quem esta autorizado a ver o
+    Projeto (Gerente do tenant, Superadmin de outra empresa, Gerente com ACL
+    cruzada) ve a MESMA base principal -- o filtro NAO usa
+    `current_user.company_id`. A integridade (base oficial ou do tenant do
+    Projeto) e verificada contra `projeto.company_id`; vinculo inconsistente
+    no banco vira 404 em vez de exibir base de outro tenant.
     """
     projeto = _obter_projeto_do_tenant(db, projeto_id, current_user)
     base = (
@@ -235,7 +322,6 @@ def obter_base_principal_projeto_opcional(
         .filter(
             models.ProjetoBaseEleitoral.projeto_id == projeto.id,
             models.ProjetoBaseEleitoral.principal.is_(True),
-            filtro_visibilidade_base_eleitoral(current_user.company_id),
         )
         .first()
     )
@@ -243,6 +329,14 @@ def obter_base_principal_projeto_opcional(
         return None
     _assegurar_base_elegivel_para_projeto(base, projeto)
     return base
+
+
+def listar_bases_disponiveis_para_projeto(
+    db: Session, projeto_id: int, current_user: models.Usuario
+) -> list[models.BaseEleitoral]:
+    """Porta do endpoint contextual: ACL do Projeto, depois tenant do Projeto."""
+    projeto = _obter_projeto_do_tenant(db, projeto_id, current_user)
+    return listar_bases_eleitorais_disponiveis_para_projeto(db, projeto)
 
 
 def _obter_base_principal(

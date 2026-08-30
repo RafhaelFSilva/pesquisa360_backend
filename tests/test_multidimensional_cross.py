@@ -18,6 +18,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 from pesquisa360 import crud, schemas
 from pesquisa360.api.endpoints import relatorios
 from pesquisa360.core.dependencies import get_current_user, get_db
+from tests.acl_fixture import criar_tabelas_acl
 
 
 @pytest.fixture
@@ -49,20 +50,30 @@ def context():
             lambda polygon, point: int(geom(polygon).covers(geom(point))) if polygon and point else 0,
         )
 
+    # ACL multiempresa (ADR-024): a expressao de autorizacao consulta as
+    # tabelas de acesso em toda leitura; sem linhas vale o fallback da empresa.
+    criar_tabelas_acl(engine)
     Session = sessionmaker(bind=engine)
     with engine.begin() as connection:
         for statement in (
+            # RBAC (ADR-037): a permissao e resolvida pelo NOME do perfil do usuario.
+            "CREATE TABLE perfis (id INTEGER PRIMARY KEY, nome TEXT, descricao TEXT)",
+            "CREATE TABLE usuarios (id INTEGER PRIMARY KEY, email TEXT, nome TEXT, senha_hash TEXT, ativo BOOLEAN, perfil_id INTEGER, company_id INTEGER)",
             "CREATE TABLE projetos (id INTEGER PRIMARY KEY, nome TEXT, descricao TEXT, status TEXT, data_inicio DATE, data_fim DATE, coordenador_id INTEGER, company_id INTEGER)",
             "CREATE TABLE pesquisas (id INTEGER PRIMARY KEY, titulo TEXT, tipo_pesquisa TEXT, ativo BOOLEAN, projeto_id INTEGER, cerca_eletronica TEXT, tolerancia_metros INTEGER)",
-            "CREATE TABLE perguntas (id INTEGER PRIMARY KEY, texto_pergunta TEXT, tipo_pergunta TEXT, ordem INTEGER, eh_obrigatoria BOOLEAN, eh_resposta_espontanea BOOLEAN, papel_analitico VARCHAR(50), metadados_analiticos JSON NOT NULL DEFAULT '{}', ativo BOOLEAN, pesquisa_id INTEGER)",
+            "CREATE TABLE perguntas (id INTEGER PRIMARY KEY, texto_pergunta TEXT, tipo_pergunta TEXT, ordem INTEGER, eh_obrigatoria BOOLEAN, eh_resposta_espontanea BOOLEAN, papel_analitico VARCHAR(50), metadados_analiticos JSON NOT NULL DEFAULT '{}', ativo BOOLEAN, pesquisa_id INTEGER, aplicabilidade VARCHAR(20) NOT NULL DEFAULT 'GLOBAL')",
             "CREATE TABLE opcoes (id INTEGER PRIMARY KEY, texto TEXT, ordem INTEGER, pergunta_id INTEGER, proxima_pergunta_id INTEGER)",
             "CREATE TABLE coletas (id INTEGER PRIMARY KEY, pesquisa_id INTEGER, agente_id INTEGER, company_id INTEGER, client_uuid TEXT, foi_offline BOOLEAN, endereco_estimado TEXT, status_sincronizacao TEXT, data_inicio_coleta DATETIME, data_fim_coleta DATETIME, localizacao_inicio TEXT, localizacao_fim TEXT, inconformidade_localizacao BOOLEAN)",
             "CREATE TABLE respostas (id INTEGER PRIMARY KEY, pergunta_id INTEGER, coleta_id INTEGER, valor_resposta TEXT)",
-            "CREATE TABLE setores (id INTEGER PRIMARY KEY, nome TEXT, meta INTEGER, tolerancia INTEGER, finalidade TEXT, geometria TEXT, pesquisa_id INTEGER, agente_id INTEGER)",
+            "CREATE TABLE setores (id INTEGER PRIMARY KEY, nome TEXT, meta INTEGER, tolerancia INTEGER, finalidade TEXT, geometria TEXT, pesquisa_id INTEGER, agente_id INTEGER, municipio_territorio_id INTEGER)",
             "CREATE TABLE categorias_resposta_espontanea (id INTEGER PRIMARY KEY, pesquisa_id INTEGER, nome TEXT, nome_normalizado TEXT, ativo BOOLEAN, criado_por_id INTEGER, atualizado_por_id INTEGER, criado_em DATETIME, atualizado_em DATETIME)",
             "CREATE TABLE mapeamentos_resposta_espontanea (id INTEGER PRIMARY KEY, pesquisa_id INTEGER, categoria_id INTEGER, chave_normalizada TEXT, texto_referencia TEXT, ativo BOOLEAN, criado_por_id INTEGER, atualizado_por_id INTEGER, criado_em DATETIME, atualizado_em DATETIME)",
         ):
             connection.execute(text(statement))
+        # Gerente possui INTELIGENCIA_VER (rbac.MATRIZ). Usuario 2 pertence a outro
+        # tenant e serve ao cenario negativo de escopo (404), nao ao de RBAC.
+        connection.execute(text("INSERT INTO perfis (id, nome) VALUES (1, 'Gerente')"))
+        connection.execute(text("INSERT INTO usuarios (id, email, nome, senha_hash, ativo, perfil_id, company_id) VALUES (1, 'gerente@a', 'Gerente A', 'x', 1, 1, 10), (2, 'gerente@b', 'Gerente B', 'x', 1, 1, 20)"))
         connection.execute(text("INSERT INTO projetos VALUES (1, 'Projeto A', NULL, 'Ativo', NULL, NULL, 1, 10), (2, 'Projeto B', NULL, 'Ativo', NULL, NULL, 2, 20)"))
         connection.execute(text("INSERT INTO pesquisas VALUES (1, 'Pesquisa A', NULL, 1, 1, NULL, NULL), (2, 'Pesquisa B', NULL, 1, 2, NULL, NULL)"))
         connection.execute(text("""
@@ -105,7 +116,7 @@ def context():
             [{"id": i, "qid": qid, "cid": cid, "value": value} for i, qid, cid, value in answers],
         )
 
-    current_user = SimpleNamespace(id=1, company_id=10, ativo=True)
+    current_user = SimpleNamespace(id=1, company_id=10, ativo=True, perfil_id=1)
     app = FastAPI()
     app.include_router(relatorios.router)
 
@@ -345,7 +356,7 @@ def test_ineligible_or_foreign_questions_return_422(context, question_ids):
 
 def test_other_tenant_receives_404_without_question_disclosure(context):
     context.app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
-        id=2, company_id=20, ativo=True
+        id=2, company_id=20, ativo=True, perfil_id=1
     )
     response = post(context, {"pergunta_ids": [11, 12]}, pesquisa_id=1)
     assert response.status_code == 404

@@ -1,0 +1,600 @@
+{
+  "pesquisa_id": 1000,
+  "snapshot_em": "2026-08-30T17:26:14.605647Z",
+  "filtros": {
+    "municipio_id": null,
+    "setor_ids": [],
+    "agente_ids": [],
+    "data_inicio": null,
+    "data_fim": null,
+    "resultado": null,
+    "nota": "Cota territorial e cota de perfil sao oficiais e acumuladas: nao respondem a agente/periodo."
+  },
+  "opcoes": {
+    "municipios": [
+      {
+        "id": 900,
+        "nome": "Macapa"
+      }
+    ],
+    "setores": [
+      {
+        "id": 500,
+        "nome": "Setor A"
+      },
+      {
+        "id": 501,
+        "nome": "Setor B"
+      },
+      {
+        "id": 502,
+        "nome": "Setor C"
+      }
+    ],
+    "agentes": [
+      {
+        "id": 4,
+        "nome": "Agente Dois"
+      },
+      {
+        "id": 2,
+        "nome": "Agente Um"
+      }
+    ]
+  },
+  "resumo": {
+    "meta_territorial": 30,
+    "realizado_territorial": 26,
+    "entrevistas_concluidas": 26,
+    "coletas_com_tentativa": 1,
+    "coletas_sem_tentativa": 25,
+    "tentativas_encerradas": 5,
+    "tentativas_em_andamento": 1,
+    "tentativas_concluidas": 1,
+    "recusas": 1,
+    "nao_elegiveis": 1,
+    "desistencias": 1,
+    "incompletas": 1,
+    "problemas_tecnicos": 0,
+    "outros": 0,
+    "taxa_conclusao_tentativas": 20.0,
+    "nota_taxa": "taxa_conclusao_tentativas = tentativas CONCLUIDA / tentativas encerradas; coletas sem TentativaCampo (legadas) entram em entrevistas_concluidas mas nao na taxa."
+  },
+  "resumo_territorial": {
+    "abertos": 1,
+    "atencao": 0,
+    "encerrados": 2,
+    "sem_cota": 0,
+    "com_excedente": 0
+  },
+  "alertas": [
+    {
+      "tipo": "PERFIL_NAO_CLASSIFICADAS",
+      "total": 1,
+      "mensagem": "1 coleta(s) não classificada(s) em cotas de perfil."
+    }
+  ],
+  "setores": [
+    {
+      "setor_id": 500,
+      "setor_nome": "Setor A",
+      "finalidade": "OPERACAO",
+      "municipio_id": 900,
+      "municipio_nome": "Macapa",
+      "meta": 10,
+      "realizado": 6,
+      "restante": 4,
+      "excedente": 0,
+      "percentual_atingimento": 60.0,
+      "status_cota": "ABERTO",
+      "limite_atencao_realizado": 9,
+      "agentes_atribuidos_total": 1,
+      "snapshot_ate_coleta_id": 25
+    },
+    {
+      "setor_id": 501,
+      "setor_nome": "Setor B",
+      "finalidade": "OPERACAO",
+      "municipio_id": 900,
+      "municipio_nome": "Macapa",
+      "meta": 10,
+      "realizado": 10,
+      "restante": 0,
+      "excedente": 0,
+      "percentual_atingimento": 100.0,
+      "status_cota": "ENCERRADO",
+      "limite_atencao_realizado": 9,
+      "agentes_atribuidos_total": 2,
+      "snapshot_ate_coleta_id": 26
+    },
+    {
+      "setor_id": 502,
+      "setor_nome": "Setor C",
+      "finalidade": "OPERACAO",
+      "municipio_id": 900,
+      "municipio_nome": "Macapa",
+      "meta": 10,
+      "realizado": 10,
+      "restante": 0,
+      "excedente": 0,
+      "percentual_atingimento": 100.0,
+      "status_cota": "ENCERRADO",
+      "limite_atencao_realizado": 9,
+      "agentes_atribuidos_total": 1,
+      "snapshot_ate_coleta_id": 24
+    }
+  ],
+  "cotas_perfil": {
+    "plano_ativo": true,
+    "territorios": [
+      {
+        "territorio_id": 900,
+        "territorio_nome": "Macapa",
+        "meta_total": 40,
+        "realizado_total": 25,
+        "percentual_territorio": 62.5,
+        "fase_inicial": false,
+        "status": "PRIORIDADES",
+        "celulas": [
+          {
+            "territorio_id": 900,
+            "territorio_nome": "Macapa",
+            "sexo": "MASCULINO",
+            "sexo_rotulo": "Homem",
+            "faixa_etaria": "60+",
+            "meta": 10,
+            "realizado": 3,
+            "restante": 7,
+            "percentual_atingimento": 30.0,
+            "percentual_territorio": 62.5,
+            "desvio_pp": -32.5,
+            "prioridade": "ALTO"
+          },
+          {
+            "territorio_id": 900,
+            "territorio_nome": "Macapa",
+            "sexo": "MASCULINO",
+            "sexo_rotulo": "Homem",
+            "faixa_etaria": "45-59",
+            "meta": 10,
+            "realizado": 4,
+            "restante": 6,
+            "percentual_atingimento": 40.0,
+            "percentual_territorio": 62.5,
+            "desvio_pp": -22.5,
+            "prioridade": "ALTO"
+          },
+          {
+            "territorio_id": 900,
+            "territorio_nome": "Macapa",
+            "sexo": "MASCULINO",
+            "sexo_rotulo": "Homem",
+            "faixa_etaria": "16-24",
+            "meta": 10,
+            "realizado": 8,
+            "restante": 2,
+            "percentual_atingimento": 80.0,
+            "percentual_territorio": 62.5,
+            "desvio_pp": 17.5,
+            "prioridade": "EQUILIBRADO"
+          },
+          {
+            "territorio_id": 900,
+            "territorio_nome": "Macapa",
+            "sexo": "FEMININO",
+            "sexo_rotulo": "Mulher",
+            "faixa_etaria": "16-24",
+            "meta": 10,
+            "realizado": 10,
+            "restante": 0,
+            "percentual_atingimento": 100.0,
+            "percentual_territorio": 62.5,
+            "desvio_pp": 37.5,
+            "prioridade": "EQUILIBRADO"
+          }
+        ]
+      }
+    ],
+    "nao_classificadas": 1,
+    "motivos_nao_classificadas": {
+      "SEM_IDADE": 1
+    },
+    "snapshot_em": "2026-08-30T17:26:14.600778Z"
+  },
+  "tentativas_por_resultado": [
+    {
+      "resultado": "RECUSA",
+      "total": 1
+    },
+    {
+      "resultado": "NAO_ELEGIVEL",
+      "total": 1
+    },
+    {
+      "resultado": "DESISTENCIA",
+      "total": 1
+    },
+    {
+      "resultado": "INCOMPLETA",
+      "total": 1
+    },
+    {
+      "resultado": "PROBLEMA_TECNICO",
+      "total": 0
+    },
+    {
+      "resultado": "OUTRO",
+      "total": 0
+    },
+    {
+      "resultado": "CONCLUIDA",
+      "total": 1
+    }
+  ],
+  "atividade_campo": {
+    "distancia_recomendada_entre_abordagens_metros": 120,
+    "distancia_configurada": true,
+    "eventos": [
+      {
+        "tipo": "COLETA",
+        "server_id": 1,
+        "setor_id": 500,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 2,
+        "setor_id": 500,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 3,
+        "setor_id": 500,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 4,
+        "setor_id": 500,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 5,
+        "setor_id": 500,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 25,
+        "setor_id": 500,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-27T12:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "TENTATIVA",
+        "server_id": 2,
+        "setor_id": 500,
+        "lat": 0.0352,
+        "lng": -51.0702,
+        "accuracy": 8.0,
+        "ocorrido_em": "2026-08-27T12:03:00",
+        "resultado": "RECUSA",
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "TENTATIVA",
+        "server_id": 3,
+        "setor_id": 500,
+        "lat": 0.0353,
+        "lng": -51.0703,
+        "accuracy": 8.0,
+        "ocorrido_em": "2026-08-27T12:03:00",
+        "resultado": "NAO_ELEGIVEL",
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 6,
+        "setor_id": 501,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 7,
+        "setor_id": 501,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 8,
+        "setor_id": 501,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 9,
+        "setor_id": 501,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 10,
+        "setor_id": 501,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 11,
+        "setor_id": 501,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 12,
+        "setor_id": 501,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 13,
+        "setor_id": 501,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 14,
+        "setor_id": 501,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 26,
+        "setor_id": 501,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-27T12:00:00",
+        "resultado": null,
+        "agente_id": 4,
+        "agente_nome": "Agente Dois"
+      },
+      {
+        "tipo": "TENTATIVA",
+        "server_id": 4,
+        "setor_id": 501,
+        "lat": 0.0354,
+        "lng": -51.0704,
+        "accuracy": 8.0,
+        "ocorrido_em": "2026-08-27T12:03:00",
+        "resultado": "DESISTENCIA",
+        "agente_id": 4,
+        "agente_nome": "Agente Dois"
+      },
+      {
+        "tipo": "TENTATIVA",
+        "server_id": 5,
+        "setor_id": 501,
+        "lat": 0.0355,
+        "lng": -51.0705,
+        "accuracy": 8.0,
+        "ocorrido_em": "2026-08-27T12:03:00",
+        "resultado": "INCOMPLETA",
+        "agente_id": 4,
+        "agente_nome": "Agente Dois"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 15,
+        "setor_id": 502,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 16,
+        "setor_id": 502,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 17,
+        "setor_id": 502,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 18,
+        "setor_id": 502,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 19,
+        "setor_id": 502,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 20,
+        "setor_id": 502,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 21,
+        "setor_id": 502,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 22,
+        "setor_id": 502,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 23,
+        "setor_id": 502,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      },
+      {
+        "tipo": "COLETA",
+        "server_id": 24,
+        "setor_id": 502,
+        "lat": 0.0349,
+        "lng": -51.0694,
+        "accuracy": null,
+        "ocorrido_em": "2026-08-01T10:00:00",
+        "resultado": null,
+        "agente_id": 2,
+        "agente_nome": "Agente Um"
+      }
+    ]
+  }
+}

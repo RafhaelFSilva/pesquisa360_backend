@@ -27,6 +27,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 from pesquisa360.api.endpoints import relatorios
 from pesquisa360.core.dependencies import get_current_user, get_db
+from tests.acl_fixture import criar_tabelas_acl
 
 ROTA = "/relatorios/pesquisas/{}/mapas/respostas-georreferenciadas/"
 
@@ -78,6 +79,7 @@ def database():
         connection.create_function("ST_X", 1, lambda value: geom(value).x if value else None)
         connection.create_function("ST_Y", 1, lambda value: geom(value).y if value else None)
 
+    criar_tabelas_acl(engine)
     Session = sessionmaker(bind=engine)
     with engine.begin() as connection:
         connection.execute(text("""
@@ -88,6 +90,11 @@ def database():
         """))
         connection.execute(text(
             "CREATE TABLE perfis (id INTEGER PRIMARY KEY, nome TEXT, descricao TEXT)"
+        ))
+        # Canonicalizacao categorica (crud.mapa_opcoes_canonicas) carrega
+        # `pergunta.opcoes`: a tabela precisa existir, mesmo vazia.
+        connection.execute(text(
+            "CREATE TABLE opcoes (id INTEGER PRIMARY KEY, texto TEXT, ordem INTEGER, pergunta_id INTEGER, proxima_pergunta_id INTEGER)"
         ))
         connection.execute(text("""
             CREATE TABLE usuarios (
@@ -112,8 +119,10 @@ def database():
                 id INTEGER PRIMARY KEY, texto_pergunta TEXT, tipo_pergunta TEXT,
                 ordem INTEGER, eh_obrigatoria BOOLEAN, eh_resposta_espontanea BOOLEAN,
                 papel_analitico VARCHAR(50), metadados_analiticos JSON NOT NULL DEFAULT '{}',
-                ativo BOOLEAN, pesquisa_id INTEGER
-            )
+                ativo BOOLEAN, pesquisa_id INTEGER,
+            -- FASE F
+            aplicabilidade VARCHAR(20) NOT NULL DEFAULT 'GLOBAL'
+)
         """))
         connection.execute(text("""
             CREATE TABLE coletas (
@@ -150,8 +159,7 @@ def database():
             CREATE TABLE setores (
                 id INTEGER PRIMARY KEY, nome TEXT, meta INTEGER, tolerancia INTEGER,
                 finalidade TEXT DEFAULT 'OPERACAO' NOT NULL,
-                geometria TEXT, pesquisa_id INTEGER, agente_id INTEGER
-            )
+                geometria TEXT, pesquisa_id INTEGER, agente_id INTEGER, municipio_territorio_id INTEGER)
         """))
 
         connection.execute(text(
@@ -175,7 +183,7 @@ def database():
               (2000,'Pesquisa B',NULL,1,200,NULL,NULL)
         """))
         connection.execute(text("""
-            INSERT INTO perguntas VALUES
+            INSERT INTO perguntas (id, texto_pergunta, tipo_pergunta, ordem, eh_obrigatoria, eh_resposta_espontanea, papel_analitico, metadados_analiticos, ativo, pesquisa_id) VALUES
               (100,'Intencao de voto','ESCOLHA_SIMPLES',1,1,0,NULL,'{}',1,1000),
               (101,'Sexo','ESCOLHA_SIMPLES',2,1,0,NULL,'{}',1,1000),
               (102,'Faixa etaria','ESCOLHA_SIMPLES',3,1,0,NULL,'{}',1,1000),
@@ -187,7 +195,7 @@ def database():
         """))
         # Dois setores analiticos disjuntos.
         connection.execute(text("""
-            INSERT INTO setores VALUES
+            INSERT INTO setores (id, nome, meta, tolerancia, finalidade, geometria, pesquisa_id, agente_id) VALUES
               (11,'Setor Norte',0,0,'RELATORIO','POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))',1000,NULL),
               (12,'Setor Sul',0,0,'AMBOS','POLYGON ((2 0, 3 0, 3 1, 2 1, 2 0))',1000,NULL)
         """))

@@ -8,12 +8,13 @@ from pesquisa360.core.dependencies import get_db, get_current_user
 from pesquisa360.core.utils import geojson_point
 from pesquisa360.db import models
 from pesquisa360.utils.importadores import processar_csv_locais, processar_geojson_bairros
+from pesquisa360.core.rbac import Permissao, require_permissao
 import shutil
 import os
 
 router = APIRouter()
 
-@router.post("/upload-csv/")
+@router.post("/upload-csv/", dependencies=[Depends(require_permissao(Permissao.TERRITORIO_GERENCIAR))])
 async def upload_locais_votacao(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -36,7 +37,7 @@ async def upload_locais_votacao(
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-@router.post("/bairros/upload-geojson/")
+@router.post("/bairros/upload-geojson/", dependencies=[Depends(require_permissao(Permissao.TERRITORIO_GERENCIAR))])
 async def upload_bairros_geojson(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -63,7 +64,7 @@ async def upload_bairros_geojson(
 
 # Adicione no topo se faltar: from sqlalchemy import text
 
-@router.get("/geojson/pontos", summary="Retorna os Locais de Votação (Pinos)")
+@router.get("/geojson/pontos", summary="Retorna os Locais de Votação (Pinos)", dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def get_locais_geojson(
     db: Session = Depends(get_db), 
     current_user: models.Usuario = Depends(get_current_user)
@@ -93,7 +94,7 @@ def get_locais_geojson(
     resultado = db.execute(text(query), {"company_id": current_user.company_id}).scalar()
     return resultado
 
-@router.get("/geojson/bairros", summary="Retorna os Bairros (Polígonos)")
+@router.get("/geojson/bairros", summary="Retorna os Bairros (Polígonos)", dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def get_bairros_geojson(
     db: Session = Depends(get_db), 
     current_user: models.Usuario = Depends(get_current_user)
@@ -123,7 +124,7 @@ def get_bairros_geojson(
     resultado = db.execute(text(query), {"company_id": current_user.company_id}).scalar()
     return resultado
 
-@router.get("/bairros/peso-eleitoral", summary="Ranking de Peso Eleitoral por Bairro")
+@router.get("/bairros/peso-eleitoral", summary="Ranking de Peso Eleitoral por Bairro", dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def get_peso_eleitoral(
     db: Session = Depends(get_db), 
     current_user: models.Usuario = Depends(get_current_user)
@@ -165,7 +166,7 @@ def get_peso_eleitoral(
         "ranking": ranking
     }
 
-@router.post("/dev/seed-coletas", summary="[DEV] Gerar Coletas Falsas no Mapa")
+@router.post("/dev/seed-coletas", summary="[DEV] Gerar Coletas Falsas no Mapa", dependencies=[Depends(require_permissao(Permissao.TERRITORIO_GERENCIAR))])
 def seed_coletas_mock(
     qtd: int = 500,
     db: Session = Depends(get_db),
@@ -239,7 +240,7 @@ def seed_coletas_mock(
     db.commit()
     return {"message": f"✅ {coletas_criadas} coletas falsas geradas e espalhadas pelo mapa com sucesso!"}
 
-@router.get("/coletas/geojson", summary="Camada de Coletas de Campo (Mapa)")
+@router.get("/coletas/geojson", summary="Camada de Coletas de Campo (Mapa)", dependencies=[Depends(require_permissao(Permissao.RELATORIO_VER))])
 def get_coletas_geojson(
     db: Session = Depends(get_db),
     current_user: models.Usuario = Depends(get_current_user)

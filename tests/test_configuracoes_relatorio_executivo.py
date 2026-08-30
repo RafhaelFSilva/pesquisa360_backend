@@ -14,6 +14,7 @@ from sqlalchemy.pool import StaticPool
 from pesquisa360 import crud, schemas
 from pesquisa360.api.endpoints import relatorios
 from pesquisa360.core.dependencies import get_current_user, get_db
+from tests.acl_fixture import criar_tabelas_acl
 
 
 @compiles(JSONB, "sqlite")
@@ -22,7 +23,8 @@ def compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 
 
 def user(user_id=1, company_id=10):
-    return SimpleNamespace(id=user_id, company_id=company_id)
+    # RBAC (ADR-037) resolve o papel pelo perfil persistido (perfis.id=1 = Gerente).
+    return SimpleNamespace(id=user_id, company_id=company_id, perfil_id=1)
 
 
 @pytest.fixture
@@ -37,13 +39,16 @@ def db():
     def register_geometry_functions(connection, _):
         connection.create_function("AsEWKB", 1, lambda value: value)
 
+    criar_tabelas_acl(engine)
     Session = sessionmaker(bind=engine)
     statements = [
         "CREATE TABLE projetos (id INTEGER PRIMARY KEY, nome TEXT, descricao TEXT, status TEXT, data_inicio DATE, data_fim DATE, coordenador_id INTEGER, company_id INTEGER)",
         "CREATE TABLE pesquisas (id INTEGER PRIMARY KEY, titulo TEXT, tipo_pesquisa TEXT, ativo BOOLEAN, projeto_id INTEGER, cerca_eletronica BLOB, tolerancia_metros INTEGER)",
-        "CREATE TABLE perguntas (id INTEGER PRIMARY KEY, texto_pergunta TEXT, tipo_pergunta TEXT, ordem INTEGER, eh_obrigatoria BOOLEAN, eh_resposta_espontanea BOOLEAN, papel_analitico VARCHAR(50), metadados_analiticos JSON NOT NULL DEFAULT '{}', ativo BOOLEAN, pesquisa_id INTEGER)",
+        "CREATE TABLE perguntas (id INTEGER PRIMARY KEY, texto_pergunta TEXT, tipo_pergunta TEXT, ordem INTEGER, eh_obrigatoria BOOLEAN, eh_resposta_espontanea BOOLEAN, papel_analitico VARCHAR(50), metadados_analiticos JSON NOT NULL DEFAULT '{}', ativo BOOLEAN, pesquisa_id INTEGER, aplicabilidade VARCHAR(20) NOT NULL DEFAULT 'GLOBAL')",
+        # RBAC (ADR-037) le o NOME do perfil: a fixture precisa da tabela.
+        "CREATE TABLE perfis (id INTEGER PRIMARY KEY, nome TEXT, descricao TEXT)",
         "CREATE TABLE usuarios (id INTEGER PRIMARY KEY, email TEXT, nome TEXT, senha_hash TEXT, ativo BOOLEAN, perfil_id INTEGER, company_id INTEGER)",
-        "CREATE TABLE setores (id INTEGER PRIMARY KEY, nome TEXT, meta INTEGER, tolerancia INTEGER, finalidade TEXT, geometria BLOB, pesquisa_id INTEGER, agente_id INTEGER)",
+        "CREATE TABLE setores (id INTEGER PRIMARY KEY, nome TEXT, meta INTEGER, tolerancia INTEGER, finalidade TEXT, geometria BLOB, pesquisa_id INTEGER, agente_id INTEGER, municipio_territorio_id INTEGER)",
         """CREATE TABLE configuracoes_relatorio_executivo (
             id INTEGER PRIMARY KEY AUTOINCREMENT, pesquisa_id INTEGER, tipo_relatorio TEXT,
             nome TEXT, descricao TEXT, parametros_gerais JSON, ativo BOOLEAN,
@@ -64,9 +69,11 @@ def db():
             connection.execute(text(statement))
         connection.execute(text("INSERT INTO projetos VALUES (1, 'A', NULL, 'Ativo', NULL, NULL, 1, 10), (2, 'B', NULL, 'Ativo', NULL, NULL, 2, 20), (3, 'C', NULL, 'Ativo', NULL, NULL, 1, 10)"))
         connection.execute(text("INSERT INTO pesquisas VALUES (9, 'Pesquisa A', NULL, 1, 1, NULL, NULL), (10, 'Pesquisa B', NULL, 1, 2, NULL, NULL), (11, 'Pesquisa C', NULL, 1, 3, NULL, NULL)"))
+        # RBAC (ADR-037): o perfil precisa existir para o papel ser reconhecido.
+        connection.execute(text("INSERT INTO perfis (id, nome) VALUES (1, 'Gerente')"))
         connection.execute(text("INSERT INTO usuarios VALUES (1, 'a@a', 'A', 'x', 1, 1, 10), (2, 'b@b', 'B', 'x', 1, 1, 20)"))
-        connection.execute(text("INSERT INTO perguntas VALUES (42, 'Voto', 'ESCOLHA_SIMPLES', 1, 1, 0, NULL, '{}', 1, 9), (43, 'Espontanea', 'TEXTO', 2, 0, 1, NULL, '{}', 1, 9), (44, 'Perfil', 'ESCOLHA_SIMPLES', 3, 0, 0, NULL, '{}', 1, 9), (99, 'Outra', 'ESCOLHA_SIMPLES', 1, 1, 0, NULL, '{}', 1, 10)"))
-        connection.execute(text("INSERT INTO setores VALUES (7, 'Analitico', 0, 0, 'RELATORIO', NULL, 9, NULL)"))
+        connection.execute(text("INSERT INTO perguntas (id, texto_pergunta, tipo_pergunta, ordem, eh_obrigatoria, eh_resposta_espontanea, papel_analitico, metadados_analiticos, ativo, pesquisa_id) VALUES (42, 'Voto', 'ESCOLHA_SIMPLES', 1, 1, 0, NULL, '{}', 1, 9), (43, 'Espontanea', 'TEXTO', 2, 0, 1, NULL, '{}', 1, 9), (44, 'Perfil', 'ESCOLHA_SIMPLES', 3, 0, 0, NULL, '{}', 1, 9), (99, 'Outra', 'ESCOLHA_SIMPLES', 1, 1, 0, NULL, '{}', 1, 10)"))
+        connection.execute(text("INSERT INTO setores (id, nome, meta, tolerancia, finalidade, geometria, pesquisa_id, agente_id) VALUES (7, 'Analitico', 0, 0, 'RELATORIO', NULL, 9, NULL)"))
     session = Session()
     try:
         yield session

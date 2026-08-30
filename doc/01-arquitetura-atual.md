@@ -63,6 +63,9 @@ pesquisa360/
   services/
     multidimensional_cross.py
     setor_shapefile_import.py
+    auditoria.py
+    email.py
+    notificacoes.py
   crud.py
   schemas.py
 migrations/
@@ -84,6 +87,10 @@ scripts/
 | `utils/geocoding.py` | Geocoding reverso por coordenadas |
 | `services/multidimensional_cross.py` | Motor multidimensional, opções analíticas, caminhos, bases, percentuais e filtros de categorias |
 | `services/setor_shapefile_import.py` | Validacao e conversao pura de Shapefile para Polygon EPSG:4326 |
+| `services/auditoria.py` | Trilha `audit_events` (ADR-039): registro fail-soft em sessão própria, contexto HTTP, deduplicação de `PROJECT_ACCESS` |
+| `services/email.py` | Único cliente SMTP (ADR-035): envio transacional fail-soft, modo registro sem `SMTP_HOST` |
+| `services/notificacoes.py` | Notificação ao Gerente responsável por acesso ao projeto (ADR-040): destinatário, mensagem, resultado auditado |
+| `services/auditoria.resumo_seguranca` | Agregações SQL do painel de segurança (ADR-041): totais, ranking de IPs, contas mais tentadas, série temporal — nunca materializa `AuditEvent` |
 | `scripts/importar_setor_shapefile.*` | Importacao administrativa que reutiliza o CRUD de setores |
 
 ### Regras
@@ -249,3 +256,19 @@ Central de Inteligência
 A Configuração Analítica permanece na pesquisa e fornece
 `papel_analitico` e `metadados_analiticos`. A rota global `/inteligencia`
 continua sendo a Inteligência Territorial, distinta da central contextual.
+
+## Ambiente de execução (ADR-038)
+
+`APP_ENV` é a única variável de ambiente que descreve o modo de execução:
+
+```text
+APP_ENV=development   (default)  -> Swagger/ReDoc/OpenAPI disponíveis
+APP_ENV=production               -> as três rotas não são registradas (404)
+```
+
+Lida em `pesquisa360/core/ambiente.py` e aplicada no construtor do `FastAPI()`
+em `pesquisa360/main.py`. O ambiente é **configuração explícita**: não há
+inferência por hostname, domínio, porta ou presença de Docker.
+
+Chega ao container pelo `env_file: .env` do `docker-compose.yml`. O deploy de
+produção precisa defini-la — o default preserva a produtividade local.

@@ -18,6 +18,7 @@ os.environ["UPLOAD_MAX_SIZE_BYTES"] = "64"
 from pesquisa360.core import security
 from pesquisa360.core.dependencies import get_db
 from pesquisa360.main import _load_upload_settings, app
+from tests.acl_fixture import criar_tabelas_acl
 
 
 class SecureUploadTests(unittest.TestCase):
@@ -28,6 +29,7 @@ class SecureUploadTests(unittest.TestCase):
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
+        criar_tabelas_acl(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine)
         with cls.engine.begin() as connection:
             connection.execute(text("""

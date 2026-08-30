@@ -1,0 +1,131 @@
+{
+  "pesquisa_id": 1000,
+  "snapshot_em": "2026-08-30T17:26:14.630023Z",
+  "distancia_recomendada_entre_abordagens_metros": 120,
+  "distancia_configurada": true,
+  "setor_ids": [
+    501
+  ],
+  "eventos": [
+    {
+      "tipo": "COLETA",
+      "server_id": 6,
+      "setor_id": 501,
+      "lat": 0.0349,
+      "lng": -51.0694,
+      "accuracy": null,
+      "ocorrido_em": "2026-08-01T10:00:00",
+      "resultado": null
+    },
+    {
+      "tipo": "COLETA",
+      "server_id": 7,
+      "setor_id": 501,
+      "lat": 0.0349,
+      "lng": -51.0694,
+      "accuracy": null,
+      "ocorrido_em": "2026-08-01T10:00:00",
+      "resultado": null
+    },
+    {
+      "tipo": "COLETA",
+      "server_id": 8,
+      "setor_id": 501,
+      "lat": 0.0349,
+      "lng": -51.0694,
+      "accuracy": null,
+      "ocorrido_em": "2026-08-01T10:00:00",
+      "resultado": null
+    },
+    {
+      "tipo": "COLETA",
+      "server_id": 9,
+      "setor_id": 501,
+      "lat": 0.0349,
+      "lng": -51.0694,
+      "accuracy": null,
+      "ocorrido_em": "2026-08-01T10:00:00",
+      "resultado": null
+    },
+    {
+      "tipo": "COLETA",
+      "server_id": 10,
+      "setor_id": 501,
+      "lat": 0.0349,
+      "lng": -51.0694,
+      "accuracy": null,
+      "ocorrido_em": "2026-08-01T10:00:00",
+      "resultado": null
+    },
+    {
+      "tipo": "COLETA",
+      "server_id": 11,
+      "setor_id": 501,
+      "lat": 0.0349,
+      "lng": -51.0694,
+      "accuracy": null,
+      "ocorrido_em": "2026-08-01T10:00:00",
+      "resultado": null
+    },
+    {
+      "tipo": "COLETA",
+      "server_id": 12,
+      "setor_id": 501,
+      "lat": 0.0349,
+      "lng": -51.0694,
+      "accuracy": null,
+      "ocorrido_em": "2026-08-01T10:00:00",
+      "resultado": null
+    },
+    {
+      "tipo": "COLETA",
+      "server_id": 13,
+      "setor_id": 501,
+      "lat": 0.0349,
+      "lng": -51.0694,
+      "accuracy": null,
+      "ocorrido_em": "2026-08-01T10:00:00",
+      "resultado": null
+    },
+    {
+      "tipo": "COLETA",
+      "server_id": 14,
+      "setor_id": 501,
+      "lat": 0.0349,
+      "lng": -51.0694,
+      "accuracy": null,
+      "ocorrido_em": "2026-08-01T10:00:00",
+      "resultado": null
+    },
+    {
+      "tipo": "COLETA",
+      "server_id": 26,
+      "setor_id": 501,
+      "lat": 0.0349,
+      "lng": -51.0694,
+      "accuracy": null,
+      "ocorrido_em": "2026-08-27T12:00:00",
+      "resultado": null
+    },
+    {
+      "tipo": "TENTATIVA",
+      "server_id": 4,
+      "setor_id": 501,
+      "lat": 0.0354,
+      "lng": -51.0704,
+      "accuracy": 8.0,
+      "ocorrido_em": "2026-08-27T12:03:00",
+      "resultado": "DESISTENCIA"
+    },
+    {
+      "tipo": "TENTATIVA",
+      "server_id": 5,
+      "setor_id": 501,
+      "lat": 0.0355,
+      "lng": -51.0705,
+      "accuracy": 8.0,
+      "ocorrido_em": "2026-08-27T12:03:00",
+      "resultado": "INCOMPLETA"
+    }
+  ]
+}

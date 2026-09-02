@@ -661,6 +661,20 @@ class MigrationChainTests(unittest.TestCase):
             self.assertGreaterEqual(sql_text.upper().count("WHERE ATIVO IS TRUE"), 2)
             self.assertNotIn("PRAGMA", sql_text.upper())
 
+    @unittest.skipUnless(
+        os.environ.get("PESQUISA360_TEST_POSTGRES_URL"),
+        "requires a dedicated disposable PostgreSQL database",
+    )
+    def test_postgresql_full_downgrade_and_reupgrade(self):
+        """Executa a lineage real; SQLite nao valida nomes de objetos PostgreSQL."""
+        database_url = os.environ["PESQUISA360_TEST_POSTGRES_URL"]
+        self.run_alembic("upgrade", "head", database_url=database_url)
+        self.run_alembic("downgrade", "base", database_url=database_url)
+        self.run_alembic("upgrade", "head", database_url=database_url)
+
+        completed = self.run_alembic("current", database_url=database_url)
+        self.assertIn(HEAD_REVISION, self.combined_output(completed))
+
 
 if __name__ == "__main__":
     unittest.main()

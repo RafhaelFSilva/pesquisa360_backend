@@ -609,3 +609,20 @@ passaram. A suíte completa também passou: 1481 passed, 12 skipped, 81 warnings
 - [x] Capabilities refletem mutação na consulta seguinte.
 - [x] Auditoria registra ator, empresa, entitlement e before/after.
 - [x] Web: guard Superadmin, loading/error/empty, confirmações e feature disabled.
+
+## Baseline final da Sprint 0 — Prompt 05D
+
+- [x] Python 3.13.14: migration chain, subprocessos e regressão sem WinError 50.
+- [x] PostgreSQL descartável: `upgrade head` → `downgrade base` → `upgrade head`.
+- [x] Migrations históricas `28f012bafc15` e `91fbe6db1f17` removem somente os
+  objetos criados pelos respectivos upgrades.
+- [x] IDOR: entitlement de outra empresa não é alterado e retorna 404.
+- [x] Mass assignment: `company_id`, ator, módulo, escopo, `ativo` e `chave`
+  são rejeitados com 422 e não produzem alteração/auditoria indevida.
+- [x] Transacionalidade: falha controlada de commit desfaz mutação e audit event.
+- [x] Não-Superadmin não administra nem eleva a própria licença.
+- [x] Recurso/tenant não autorizado retorna 404 antes do 403 comercial.
+- [x] Logout A→B limpa capabilities; loading, erro e ausência de licença fecham
+  menu/gate/rota sem invalidar a autenticação nem o Core.
+- [x] Backend: 206 focados + 28 subtests; regressão 1529 passed, 13 skipped.
+- [x] Web: 1119/1119; build aprovado; lint no baseline preexistente de 10 erros.

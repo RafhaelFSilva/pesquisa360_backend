@@ -294,8 +294,11 @@ alertas de brute force, MFA/CAPTCHA, exportação CSV/PDF, retenção/purge, SIE
 - [x] Prompt 02 — Enforcement Backend: gates reutilizáveis e G01–G26 validados, sem ativar rotas produtivas.
 - [x] Prompt 03 — Contexto/Gates Web: infraestrutura de capabilities no Web com consulta a `GET /usuarios/me/modulos/`, estado Zustand (idle/loading/ready/error), ModuleGate/FeatureGate/ModuleRoute com fail-closed, limpeza de estado em logout/troca de usuário, menu modular, sem ativar módulos legados. Build e lint validados; QA manual documentada.
 - [x] Prompt 04 — Administração de Licenças Backend/Web, auditoria e testes.
-- [ ] Prompt 05 — QA/Hardening da Modularização.
+- [x] Prompt 05B/05C/05D — QA/Hardening e baseline final: ciclo PostgreSQL real
+  completo, migrations históricas simétricas, segurança administrativa,
+  regressões Backend/Web e fail-closed executável validados.
 
 O Prompt 01 não implementa gating nem o motor de Potencial de Crescimento.
-Upgrade/downgrade foram validados somente em SQLite descartável; nenhum banco
-DEV compartilhado ou produção foi acessado.
+O ciclo completo também foi validado em PostgreSQL real descartável; nenhum
+banco DEV compartilhado ou produção foi acessado. Sprint 0 encerrada; o MVP de
+Potencial de Crescimento permanece como próxima fase, ainda não iniciado.

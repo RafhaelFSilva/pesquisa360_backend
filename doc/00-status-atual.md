@@ -53,3 +53,18 @@ Validação: Backend 1517 passed, 12 skipped, 0 failures e 84 warnings; Web
 1119/1119 testes e build de produção aprovados. Lint mantém 10 erros
 preexistentes, nenhum em arquivo novo do Prompt 04. Nenhuma migration criada;
 head `c6d7e8f9a0b1`.
+
+## Sprint 0 — baseline final validada (Prompts 05B/05C/05D)
+
+Validação encerrada em 2026-09-02 com Python 3.13.14. A regressão Backend
+completa passou com 1529 testes, 13 skips e zero falhas; o Web passou 1119/1119
+testes e build. O lint mantém 10 erros preexistentes, sem erro novo da Sprint 0.
+
+Em PostgreSQL real descartável, a lineage completa passou por `upgrade head`,
+`downgrade base` e novo `upgrade head`. Foram corrigidos somente os downgrades
+históricos `28f012bafc15` e `91fbe6db1f17`; seus `upgrade()`, `revision` e
+`down_revision` não mudaram. A lineage permanece única em `c6d7e8f9a0b1`.
+
+O hardening confirmou IDOR administrativo, rejeição de mass assignment,
+atomicidade entre mutação e auditoria, 404 antes de 403, ausência de
+autoelevação e fail-closed Web na troca de empresa e na falha da API de módulos.

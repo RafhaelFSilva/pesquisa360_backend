@@ -1,5 +1,9 @@
 # RELATÓRIO FINAL GO/NO-GO — SPRINT 0 ENCERRADA
 
+> **Nota de supersessão (2026-09-02):** este foi um GO preliminar, emitido antes
+> do E2E PostgreSQL e da regressão completa. A baseline final validada é a do
+> Prompt 05D, registrada em `doc/13-checkpoint-sprint0-modularizacao.md`.
+
 **Data:** 2026-09-02  
 **Fase:** Prompt 05 — QA E2E e Checkpoint  
 **Responsável:** GitHub Copilot  

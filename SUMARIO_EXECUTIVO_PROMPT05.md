@@ -1,5 +1,11 @@
 # SUMÁRIO EXECUTIVO — PROMPT 05 QA E2E CONCLUÍDO
 
+> **Nota de supersessão (2026-09-02):** o status deste documento era
+> preliminar; PostgreSQL/E2E ainda estavam pendentes. O Prompt 05D é a decisão
+> definitiva, em `doc/13-checkpoint-sprint0-modularizacao.md`. “Pronto para
+> produção” e “risco muito baixo” abaixo não devem ser reutilizados sem essa
+> ressalva.
+
 **Status:** ✅ GO — SPRINT 0 MODULARIZAÇÃO BASELINE ESTÁVEL
 
 ---

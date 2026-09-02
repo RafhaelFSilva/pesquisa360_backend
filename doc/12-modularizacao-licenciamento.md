@@ -92,3 +92,15 @@ passaram. O teste de domínio passou com 18 casos e a regressão backend passou
 com 1481 testes, 12 skips e 81 warnings preexistentes. A validação do endpoint
 confirmou lista vazia sem entitlement, isolamento de tenant e exclusão da
 feature planejada inativa. Nenhum banco do `.env` foi acessado.
+
+## Baseline final validada (Prompt 05D)
+
+A arquitetura modular foi validada contra PostgreSQL real descartável, com
+`upgrade head`, `downgrade base` e re-upgrade bem-sucedidos e head único
+`c6d7e8f9a0b1`. O hardening executável cobriu isolamento/IDOR, campos imutáveis,
+atomicidade de mutação e auditoria, 404 antes de 403 e administração exclusiva
+por Superadmin. No Web, logout/troca de empresa e erro da API de módulos mantêm
+as capacidades em fail-closed sem derrubar a sessão ou o Core.
+
+Esta validação fecha a fundação de licenciamento; não implementa cobrança,
+Mobile modular nem o motor de `potencial_crescimento`.

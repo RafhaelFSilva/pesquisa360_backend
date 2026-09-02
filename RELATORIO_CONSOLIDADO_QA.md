@@ -1,5 +1,11 @@
 # RELATÓRIO CONSOLIDADO QA — SPRINT 0
 
+> **Nota de supersessão (2026-09-02):** este relatório registra um GO
+> preliminar anterior à execução E2E completa. A decisão definitiva e as
+> contagens executáveis estão em `doc/13-checkpoint-sprint0-modularizacao.md`
+> (Prompt 05D). Afirmações de risco/segurança abaixo devem ser lidas no contexto
+> da evidência parcial disponível naquele momento.
+
 **Data:** 2026-09-02  
 **Fase:** QA E2E (Prompt 05)  
 **Status:** ⏳ PARCIALMENTE CONCLUÍDO

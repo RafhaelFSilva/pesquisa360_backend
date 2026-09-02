@@ -1615,3 +1615,12 @@ cancelar a licença histórica e criar outra.
 
 **Decisão.** Cada mutação grava ator, empresa, entitlement e estados before/after
 em `audit_events`, na mesma transação da alteração.
+
+## ADR-060 — Correção restrita de downgrade histórico
+
+**Decisão.** Um downgrade histórico pode ser corrigido quando tenta remover ou
+alterar objetos que não foram criados pelo seu próprio `upgrade()`. A correção
+deve preservar `upgrade()`, `revision` e `down_revision`, limitar o rollback aos
+objetos pertencentes à migration e ser comprovada por ciclo completo em
+PostgreSQL descartável. A política não autoriza reescrever migrations já
+aplicadas nem executar rollback em ambiente compartilhado ou produção.

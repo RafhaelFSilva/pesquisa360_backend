@@ -628,6 +628,8 @@ def _admin_utc(value: datetime) -> datetime:
 
 
 class AdminEntitlementCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     modulo_id: int
     escopo: Literal["EMPRESA", "PROJETO", "PESQUISA"]
     projeto_id: Optional[int] = None
@@ -654,6 +656,8 @@ class AdminEntitlementCreate(BaseModel):
 
 
 class AdminEntitlementUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     status: Optional[Literal["ATIVO", "SUSPENSO", "CANCELADO"]] = None
     inicia_em: Optional[datetime] = None
     expira_em: Optional[datetime] = None
@@ -666,6 +670,8 @@ class AdminEntitlementUpdate(BaseModel):
 
 
 class AdminEntitlementFeaturesUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     funcionalidade_ids: List[int] = Field(default_factory=list)
 
     @field_validator("funcionalidade_ids")

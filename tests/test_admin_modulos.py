@@ -151,6 +151,46 @@ def test_a23_entitlement_de_outra_empresa_nao_edita(env):
     assert client.patch(f"/admin/empresas/10/entitlements/{item.id}", json={"status": "SUSPENSO"}).status_code == 404
 
 
+@pytest.mark.parametrize("campo", ["company_id", "created_by", "ativo", "chave"])
+def test_mass_assignment_create_rejeita_campos_proibidos(env, campo):
+    db, client, _ = env
+    assert post(client, **{campo: 20 if campo == "company_id" else "indevido"}).status_code == 422
+    assert db.query(models.ModuloEntitlement).count() == 0
+    assert db.query(models.AuditEvent).count() == 0
+
+
+@pytest.mark.parametrize(
+    "campo,valor",
+    [
+        ("company_id", 20),
+        ("created_by", 999),
+        ("modulo_id", 2),
+        ("projeto_id", 201),
+        ("pesquisa_id", 2001),
+        ("ativo", True),
+        ("chave", "outro"),
+    ],
+)
+def test_mass_assignment_patch_rejeita_campos_proibidos(env, campo, valor):
+    db, client, _ = env
+    item_id = post(client).json()["id"]
+
+    response = client.patch(
+        f"/admin/empresas/10/entitlements/{item_id}", json={campo: valor}
+    )
+
+    assert response.status_code == 422
+    db.expire_all()
+    item = db.get(models.ModuloEntitlement, item_id)
+    assert item.company_id == 10
+    assert item.modulo_id == 1
+    assert item.projeto_id is None
+    assert item.pesquisa_id is None
+    assert item.criado_por_usuario_id == 1
+    assert item.status == "ATIVO"
+    assert db.query(models.AuditEvent).count() == 1
+
+
 def test_a24_a28_efeito_imediato_na_capability(env):
     db, client, current = env
     current["user"] = db.get(models.Usuario, 2)
@@ -181,3 +221,27 @@ def test_a29_a32_auditoria_persistente(env):
     assert eventos[1].details["after"]["status"] == "SUSPENSO"
     assert eventos[2].details["before"]["funcionalidades"]
     assert eventos[2].details["after"]["funcionalidades"] == []
+
+
+def test_mutacao_e_auditoria_sao_atomicas_quando_commit_falha(env):
+    db, client, _ = env
+    item_id = post(client).json()["id"]
+    eventos_antes = db.query(models.AuditEvent).count()
+
+    def falhar_commit(_session):
+        raise RuntimeError("falha controlada no commit")
+
+    event.listen(db, "before_commit", falhar_commit)
+    try:
+        with pytest.raises(RuntimeError, match="falha controlada"):
+            client.patch(
+                f"/admin/empresas/10/entitlements/{item_id}",
+                json={"status": "SUSPENSO"},
+            )
+    finally:
+        event.remove(db, "before_commit", falhar_commit)
+        db.rollback()
+
+    db.expire_all()
+    assert db.get(models.ModuloEntitlement, item_id).status == "ATIVO"
+    assert db.query(models.AuditEvent).count() == eventos_antes

@@ -298,6 +298,144 @@ StrategicResponseFilters / StrategicReportConfig / StrategicChartType
 responde `canCreateProject`, `canManageSurvey`, `canViewReports`, `canManageUsers`
 etc. Nenhuma tela compara `perfil_nome` ou `perfil_id` por conta própria.
 
+## 13. Capabilities Comerciais e Modularização (Prompt 03)
+
+### 13.1 Estado Central (modulesStore)
+
+O Web carrega capabilities via `GET /usuarios/me/modulos/` (Backend Prompt 02)
+e mantém estado em Zustand:
+
+```typescript
+interface ModulesState {
+  modules: LicensedModule[];
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  error: string | null;
+  loadModules(): Promise<void>;
+  resetModules(): void;
+  hasModule(moduleKey: string): boolean;
+  hasFeature(moduleKey, featureKey): boolean;
+}
+```
+
+**Boot:** AppBootstrap (App.tsx) detecta token → loadModules().
+**Logout:** authStore.logout() → resetModules().
+**Troca de usuário:** novo token → loadModules().
+
+### 13.2 Gates Reutilizáveis
+
+#### ModuleGate
+
+Componente que libera `children` apenas se módulo está pronto e licenciado:
+
+```typescript
+<ModuleGate
+  module="inteligencia_eleitoral"
+  fallback={<div>Módulo indisponível</div>}
+  loadingFallback={<div>Carregando...</div>}
+>
+  {children}
+</ModuleGate>
+```
+
+**fail-closed:** loading/error bloqueiam.
+
+#### FeatureGate
+
+Validação de feature específica dentro de módulo:
+
+```typescript
+<FeatureGate
+  module="inteligencia_eleitoral"
+  feature="potencial_crescimento"
+  fallback={<div>Feature indisponível</div>}
+>
+  {children}
+</FeatureGate>
+```
+
+#### ModuleRoute / FeatureRoute
+
+Route guards que redirecionam ao `fallbackPath` se módulo/feature não disponível:
+
+```typescript
+<Route element={<ModuleRoute module="inteligencia_eleitoral" fallbackPath="/projetos" />}>
+  <Route path="/inteligencia" element={<Dashboard />} />
+</Route>
+```
+
+### 13.3 Registry de Módulos/Features
+
+`lib/modulesRegistry.ts` centraliza chaves:
+
+```typescript
+export const MODULES = {
+  ELECTORAL_INTELLIGENCE: 'inteligencia_eleitoral',
+} as const;
+
+export const FEATURES = {
+  GROWTH_POTENTIAL: 'potencial_crescimento',
+} as const;
+```
+
+Benefício: refatoração segura; evita magic strings.
+
+### 13.4 Menu Condicionado
+
+Header renderiza "Inteligência Eleitoral" apenas se:
+
+```typescript
+moduleStatus === 'ready' && hasElectoralModule
+```
+
+Sem módulo, menu não aparece. URL direta é negada com redireciona.
+
+### 13.5 Comportamento em Erro
+
+Se `GET /usuarios/me/modulos/` falha:
+
+- status = 'error'
+- modules = []
+- Usuário continua autenticado (Core funciona)
+- Menu modular não aparece
+- Rota modular redireciona
+
+**Sem cascata:** falha em capabilities não invalida JWT.
+
+### 13.6 Isolamento de Tenant
+
+Logout → resetModules() → modules=[], status='idle'
+
+Login novo → loadModules() → nova requisição ao backend.
+
+Empresa A não vaza para B: nenhuma janela visual.
+
+### 13.7 Serviço (modulesService)
+
+```typescript
+modulesService.getModules(): Promise<ModulesResponse>
+```
+
+- Usa apiClient (Axios autenticado)
+- Nunca envia company_id/tenant_id
+- Trata modulos:[] como sucesso (sem capacidades)
+
+### 13.8 Security
+
+Gates Web são UX-only. Backend é autoridade final:
+
+- Web oculta menu/nega rota
+- Backend retorna 403 (sem entitlement) ou 404 (recurso de outro tenant)
+
+Sem confiança em decisão Web; Backend decide.
+
+### 13.9 Não Implementado
+
+- Motor de Potencial de Crescimento
+- Algoritmos eleitorais
+- Dashboard de administração de licenças
+- Business logic do módulo Inteligência Eleitoral
+- Modularização do Mobile
+
 - `ProtectedRoute` continua exigindo sessão e agora manda o Agente para
   `/sem-permissao` — o painel não é o ambiente dele.
 - `PermissionRoute` condiciona uma área a capacidades; digitar a URL não abre.
@@ -400,3 +538,12 @@ modal deve usar z-index avulso para "vencer" o mapa.
 O estado vazio "Sem plano de cotas de perfil" do Controle de Campo leva a
 `/projetos/:p/pesquisas/:s?tab=analitica` (Configuração Analítica → Cotas por
 Perfil); a aba é selecionada pela query `tab`, já suportada pela página.
+
+## 14. Administração de licenças (Prompt 04)
+
+`adminModulesService` é separado de `modulesService`: o primeiro administra o
+que a plataforma licenciou; o segundo lê o que o usuário pode usar. A página
+`/admin/modulos` vive na administração existente, usa estado local de
+loading/error/empty/saving e fica sob `SuperadminRoute`. Empresa, Projeto e
+Pesquisa vêm de APIs administrativas; features inativas aparecem como "Em
+desenvolvimento" e checkbox disabled. Suspender/cancelar exige confirmação.

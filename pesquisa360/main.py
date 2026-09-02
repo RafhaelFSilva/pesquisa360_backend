@@ -18,7 +18,7 @@ from .core import ambiente
 from .services import auditoria
 from pesquisa360.core.rbac import Permissao, require_permissao
 from .db.session import engine
-from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais, empresas, apuracao_espontanea, base_eleitoral, liderancas, setor_importacao, tentativas_campo, cotas_perfil, cobertura_campo, controle_campo
+from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais, empresas, apuracao_espontanea, base_eleitoral, liderancas, setor_importacao, tentativas_campo, cotas_perfil, cobertura_campo, controle_campo, modulos_admin
 from .core.dependencies import get_current_user
 
 
@@ -233,6 +233,7 @@ app.include_router(usuarios.profiles_router)
 
 # Empresas / tenants
 app.include_router(empresas.router, prefix="/empresas", tags=["Empresas"])
+app.include_router(modulos_admin.router)
 
 # Projetos
 # CORREÇÃO AQUI: Removemos o prefixo porque as rotas dentro de projetos.py já começam com /projetos

@@ -3,7 +3,7 @@
 from enum import Enum
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator, ConfigDict
 from typing import Optional, List, Any, Union, Dict, Literal
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from enum import StrEnum
 from uuid import UUID
 import math
@@ -606,6 +606,74 @@ class RefreshTokenRequest(BaseModel):
 
 class TokenData(BaseModel):
     email: Optional[EmailStr] = None
+
+
+class FuncionalidadeComercial(BaseModel):
+    chave: str
+    nome: str
+
+
+class ModuloComercial(BaseModel):
+    chave: str
+    nome: str
+    funcionalidades: List[FuncionalidadeComercial]
+
+
+class ModulosUsuarioResponse(BaseModel):
+    modulos: List[ModuloComercial]
+
+
+def _admin_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+class AdminEntitlementCreate(BaseModel):
+    modulo_id: int
+    escopo: Literal["EMPRESA", "PROJETO", "PESQUISA"]
+    projeto_id: Optional[int] = None
+    pesquisa_id: Optional[int] = None
+    inicia_em: Optional[datetime] = None
+    expira_em: Optional[datetime] = None
+    funcionalidade_ids: List[int] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validar_escopo_e_datas(self):
+        esperado = {
+            "EMPRESA": (False, False),
+            "PROJETO": (True, False),
+            "PESQUISA": (False, True),
+        }[self.escopo]
+        atual = (self.projeto_id is not None, self.pesquisa_id is not None)
+        if atual != esperado:
+            raise ValueError("Escopo incompativel com projeto_id/pesquisa_id.")
+        if self.inicia_em and self.expira_em and _admin_utc(self.expira_em) < _admin_utc(self.inicia_em):
+            raise ValueError("expira_em deve ser maior ou igual a inicia_em.")
+        if len(self.funcionalidade_ids) != len(set(self.funcionalidade_ids)):
+            raise ValueError("funcionalidade_ids nao pode conter duplicidades.")
+        return self
+
+
+class AdminEntitlementUpdate(BaseModel):
+    status: Optional[Literal["ATIVO", "SUSPENSO", "CANCELADO"]] = None
+    inicia_em: Optional[datetime] = None
+    expira_em: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def validar_datas(self):
+        if self.inicia_em and self.expira_em and _admin_utc(self.expira_em) < _admin_utc(self.inicia_em):
+            raise ValueError("expira_em deve ser maior ou igual a inicia_em.")
+        return self
+
+
+class AdminEntitlementFeaturesUpdate(BaseModel):
+    funcionalidade_ids: List[int] = Field(default_factory=list)
+
+    @field_validator("funcionalidade_ids")
+    @classmethod
+    def sem_duplicidades(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError("funcionalidade_ids nao pode conter duplicidades.")
+        return value
 
 class ResultadoOpcao(BaseModel):
     """Representa o resultado para uma única opção de resposta."""

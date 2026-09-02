@@ -112,10 +112,43 @@ scripts/
 - Tailwind CSS
 - Axios
 - React Router
-- Zustand
+- Zustand (para auth e capabilities)
 - Recharts
 - Leaflet / React-Leaflet
 - Leaflet Geoman
+
+### Camada de Capacidades Comerciais (Prompt 03)
+
+O Web consome `GET /usuarios/me/modulos/` (Prompt 02 Backend) para carregar
+capabilities pós-autenticação. A arquitetura é:
+
+```text
+JWT token
+   ↓
+/usuarios/me/ (perfil)
+   ↓
+Auth Store (authStore)
+   ↓
+/usuarios/me/modulos/ (capabilities)
+   ↓
+Modules Store (modulesStore)
+   ↓
+ModuleGate / FeatureGate / ModuleRoute
+   ↓
+UI
+```
+
+**Características:**
+
+- **modulesService**: wrapper para `GET /usuarios/me/modulos/` via Axios autenticado
+- **modulesStore**: estado Zustand com `idle|loading|ready|error`, `hasModule()`, `hasFeature()`, `resetModules()`
+- **ModuleGate**: componente com fail-closed para `loading|error|não-ready`
+- **FeatureGate**: componente para gate de feature específica
+- **ModuleRoute**: route guard para negação de acesso
+- **Boot em App.tsx**: carrega módulos quando token existe; reseta quando não
+- **Logout**: limpa capabilities completamente
+- **Menu modular**: condicionado a `status='ready' && hasModule()`
+- **Security**: é UX-only; backend é autoridade final
 
 ### Organização esperada
 
@@ -272,3 +305,36 @@ inferência por hostname, domínio, porta ou presença de Docker.
 
 Chega ao container pelo `env_file: .env` do `docker-compose.yml`. O deploy de
 produção precisa defini-la — o default preserva a produtividade local.
+# Modularização / Licenciamento
+
+Fluxo administrativo implementado:
+
+```text
+Superadmin -> Admin Entitlements API -> services/modulos
+           -> modulo_entitlements -> capabilities -> Backend/Web gates
+```
+
+As mutações e seus estados anterior/posterior são gravados em `audit_events` na
+mesma transação. Catálogo técnico não é alterável pelo painel.
+
+O caminho reutilizável de autorização comercial é:
+
+```text
+JWT -> Multitenancy -> Resource Authorization -> Entitlement Gate -> ACL/RBAC -> Domain Service
+```
+
+Para Projeto/Pesquisa, a ACL existente resolve primeiro o recurso e seu tenant;
+o gate recebe esse contexto autorizado e nunca aceita `company_id` do cliente.
+Sem recurso, o contexto é a empresa principal autenticada e somente entitlement
+de Empresa é aplicável. ACL por usuário/feature permanece evolução futura.
+
+Direção arquitetural: monólito modular no backend atual, sem novo serviço.
+
+```text
+JWT -> usuário autenticado -> tenant -> entitlements -> features comerciais
+```
+
+São controles distintos: multitenancy responde quais dados podem participar;
+entitlement responde o que foi contratado; ACL/RBAC responde o que o usuário
+pode fazer. O licenciamento nunca amplia o tenant ou a ACL. Nesta fase a
+infraestrutura comercial é somente consultiva e não bloqueia rotas legadas.

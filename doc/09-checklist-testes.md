@@ -98,6 +98,41 @@ flutter test
 - [ ] Desenhar setor.
 - [ ] Salvar setor.
 - [ ] Setor aparece em lista.
+
+## 20. Modularização e Gates (Prompt 03)
+
+### 20.1 Sem Licença
+
+- [ ] Login tenant sem módulo (ex.: Inteligência Eleitoral).
+- [ ] Core funciona: Projetos, Pesquisas, Relatórios, Monitoramento carregam.
+- [ ] Menu "Inteligência Eleitoral" não aparece.
+- [ ] URL `/inteligencia` redireciona para `/projetos`.
+- [ ] URL `/projetos/:id/pesquisas/:id/inteligencia` redireciona para `/projetos`.
+
+### 20.2 Com Módulo
+
+- [ ] Login tenant com Inteligência Eleitoral.
+- [ ] Menu "Inteligência Eleitoral" aparece.
+- [ ] Clique em menu navega para `/inteligencia`.
+- [ ] Shell do módulo abre.
+- [ ] Feature `potencial_crescimento` (inativa) não aparece como utilizável.
+
+### 20.3 Erro na API /usuarios/me/modulos/
+
+- [ ] Simular falha (500, timeout, rede).
+- [ ] Usuário continua autenticado.
+- [ ] Core continua funcional.
+- [ ] Menu modular não aparece.
+- [ ] Rota modular nega acesso.
+
+### 20.4 Troca de Tenant
+
+- [ ] Empresa A (COM módulo) → Logout → Empresa B (SEM módulo).
+- [ ] Empresa A: `hasModule("inteligencia_eleitoral")` = true.
+- [ ] Logout: `modulesStore` = `{ modules: [], status: 'idle', error: null }`.
+- [ ] Durante loading de B: NÃO vaza capabilities de A.
+- [ ] Empresa B ready: `hasModule("inteligencia_eleitoral")` = false.
+- [ ] Menu não aparece. URL direta nega acesso.
 - [ ] Setor aparece no mapa.
 - [ ] Tolerância aparece corretamente.
 - [ ] Excluir setor.
@@ -536,3 +571,41 @@ Web — `tests/setorMunicipio.test.mjs` (5) e `tests/profileQuota.test.mjs` (+1)
 - [x] composição: cabeçalho com Município de referência e compatibilidade das unidades (sinaliza, não bloqueia)
 - [x] Controle de Campo: coluna Município vem do backend
 - [x] Cotas: etapa Municípios com setores + meta consolidada; revisão com cobertura territorial e diferença informativa; referência da matriz pré-preenchida
+# Modularização / Entitlements
+
+Cobertura automatizada em `tests/test_modulos_entitlements.py`: 18 testes
+passaram. A suíte completa também passou: 1481 passed, 12 skipped, 81 warnings.
+
+- [x] Empresa A resolve somente licenças da Empresa A.
+- [x] Empresa A não usa Projeto/Pesquisa da Empresa B (404).
+- [x] Empresa B não aparece em `GET /usuarios/me/modulos/` da Empresa A.
+- [x] Empresa sem licença recebe HTTP 200 e lista vazia.
+- [x] Escopos Empresa, Projeto e Pesquisa; herança ampla aditiva.
+- [x] Suspenso, futuro e expirado não concedem; janela válida concede.
+- [x] Features são explícitas e precisam pertencer ao módulo contratado.
+- [x] `company_id` de query não troca tenant.
+- [x] Rotas existentes permanecem sem gating.
+
+## Backend Module Gates
+
+- [x] Empresa sem licença recebe 403 em recurso autorizado.
+- [x] Licenças de Empresa, Projeto e Pesquisa respeitam seus alcances aditivos.
+- [x] Suspensa, expirada e ainda não iniciada não autorizam.
+- [x] Feature ativa exige concessão explícita; feature nova não é herdada.
+- [x] Feature ou módulo inativo não pode ser utilizado, mesmo com vínculo.
+- [x] Isolamento cross-tenant e tenant do recurso multiempresa preservados.
+- [x] Recurso retorna 404 antes de qualquer 403 de entitlement.
+- [x] `company_id` de query não altera o contexto.
+- [x] G01–G26 exercitados por rotas exclusivas da aplicação de teste.
+
+## Administração de Licenças
+
+- [x] Somente Superadmin; Gerente/Cliente e URL manipulada recebem 403.
+- [x] Empresa alvo e escopos Empresa/Projeto/Pesquisa validados.
+- [x] Projeto/Pesquisa cross-tenant rejeitados.
+- [x] Duplicidade retorna 409; datas/escopo inválidos retornam 422.
+- [x] Feature explícita, do mesmo módulo e ativa; inativa rejeitada.
+- [x] Suspensão, reativação e cancelamento sem DELETE físico.
+- [x] Capabilities refletem mutação na consulta seguinte.
+- [x] Auditoria registra ator, empresa, entitlement e before/after.
+- [x] Web: guard Superadmin, loading/error/empty, confirmações e feature disabled.

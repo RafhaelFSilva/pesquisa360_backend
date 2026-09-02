@@ -288,3 +288,14 @@ alertas de brute force, MFA/CAPTCHA, exportação CSV/PDF, retenção/purge, SIE
 - Indicadores/detecção de comportamento suspeito (ex.: N `LOGIN_FAILED` por IP).
 - Retenção/expurgo da trilha por política — hoje é append-only sem limite.
 - `AUDIT_TRUST_PROXY=true` + `--proxy-headers` quando houver reverse proxy declarado.
+# Sprint 0 — Fundação da Modularização
+
+- [x] Prompt 01 — Catálogo + Entitlements: implementação, migration, testes de domínio e regressão validados em runtime Windows temporário.
+- [x] Prompt 02 — Enforcement Backend: gates reutilizáveis e G01–G26 validados, sem ativar rotas produtivas.
+- [x] Prompt 03 — Contexto/Gates Web: infraestrutura de capabilities no Web com consulta a `GET /usuarios/me/modulos/`, estado Zustand (idle/loading/ready/error), ModuleGate/FeatureGate/ModuleRoute com fail-closed, limpeza de estado em logout/troca de usuário, menu modular, sem ativar módulos legados. Build e lint validados; QA manual documentada.
+- [x] Prompt 04 — Administração de Licenças Backend/Web, auditoria e testes.
+- [ ] Prompt 05 — QA/Hardening da Modularização.
+
+O Prompt 01 não implementa gating nem o motor de Potencial de Crescimento.
+Upgrade/downgrade foram validados somente em SQLite descartável; nenhum banco
+DEV compartilhado ou produção foi acessado.

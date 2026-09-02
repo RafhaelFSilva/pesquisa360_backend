@@ -148,6 +148,38 @@ Lista usuários do tenant do usuário autenticado.
 
 Lista usuários ativos com perfil de agente no tenant atual. Usado para seleção de responsável de setor.
 
+### GET `/usuarios/me/modulos/`
+
+Capacidades comerciais (módulos e funcionalidades) da empresa principal do usuário autenticado.
+
+**Resposta esperada:**
+
+```json
+{
+  "modulos": [
+    {
+      "chave": "inteligencia_eleitoral",
+      "nome": "Inteligência Eleitoral",
+      "funcionalidades": [
+        {
+          "chave": "potencial_crescimento",
+          "nome": "Potencial de Crescimento"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Características:**
+
+- Consulta o catálogo `modulos`, resolutor aditivo de `modulo_entitlements` por Empresa/Projeto/Pesquisa
+- Retorna somente módulos e features **ativas** (ativo=true no catálogo)
+- Retorna somente capacidades **efetivamente licenciadas** (concessão explícita valida, data dentro de janela, empresa+tenant válida)
+- Nunca aceita `company_id` do cliente; deriva do JWT
+- Falha em error não impede `/usuarios/me/` — são endpoints independentes
+- **Potencial de Crescimento** (`potencial_crescimento`) aparece apenas se **ativo=true** no catálogo. Versão inicial a traz **inativa** (`ativo=false`)
+
 ## 3.1 ACL multiempresa/multiprojeto (ADR-034)
 
 Somente **Superadmin**. Concessão cross-tenant por um Gerente seria escalação de
@@ -1300,3 +1332,43 @@ operacional que atravessa mais de um município → 422.
 setores_operacionais[{id,nome,meta}], meta_territorial}]`.
 `PlanoCotaPerfilRead.diagnostico[]` ganha `meta_territorial`, `diferenca` e
 `setores_operacionais`.
+# Capacidades comerciais do usuário atual
+
+`GET /usuarios/me/modulos/` exige autenticação e não recebe `company_id`. A
+empresa é exclusivamente `current_user.company_id` (empresa principal/default).
+O contrato não representa autorização por perfil e não ativa gating.
+
+## Gates comerciais internos (Prompt 02)
+
+Nenhuma rota pública foi criada ou alterada. Dependencies internas permitem que
+rotas futuras exijam módulo ou feature. Para recurso já autorizado sem licença,
+o contrato é HTTP 403. Recurso inexistente/não autorizado, módulo/feature
+inexistente ou inativo retornam HTTP 404 com mensagem genérica. A rota
+`GET /usuarios/me/modulos/` permanece sem gate e retorna `200 {"modulos": []}`
+quando não há entitlement.
+
+## Administração de módulos (Prompt 04)
+
+Todas as rotas exigem Superadmin: `GET /admin/modulos/` consulta catálogo;
+`GET /admin/empresas/{company_id}/recursos/` lista somente Projetos/Pesquisas da
+empresa para os seletores; `GET` e `POST /admin/empresas/{company_id}/entitlements/`
+listam/criam; `PATCH /admin/empresas/{company_id}/entitlements/{id}` altera
+somente status/validade; `PUT .../{id}/funcionalidades` substitui explicitamente
+as features. Duplicado retorna 409; payload/feature inválido retorna 422;
+empresa ou recurso incompatível retorna 404. Não há DELETE.
+
+```json
+{
+  "modulos": [
+    {
+      "chave": "inteligencia_eleitoral",
+      "nome": "Inteligencia Eleitoral",
+      "funcionalidades": []
+    }
+  ]
+}
+```
+
+Sem entitlement efetivo: HTTP 200 com `{"modulos": []}`. IDs internos,
+entitlements e dados de outros tenants não são expostos. Parâmetros extras como
+`company_id` não alteram o tenant resolvido.

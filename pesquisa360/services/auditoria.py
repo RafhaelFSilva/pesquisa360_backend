@@ -51,6 +51,9 @@ CROSS_TENANT_ACCESS_ATTEMPT = "CROSS_TENANT_ACCESS_ATTEMPT"   # 404: projeto de 
 PROJECT_ACCESS = "PROJECT_ACCESS"                # entrada logica no projeto (GET detalhe)
 ACCOUNT_ACTIVATED = "ACCOUNT_ACTIVATED"
 ACL_CHANGED = "ACL_CHANGED"
+MODULE_ENTITLEMENT_CREATED = "MODULE_ENTITLEMENT_CREATED"
+MODULE_ENTITLEMENT_UPDATED = "MODULE_ENTITLEMENT_UPDATED"
+MODULE_ENTITLEMENT_FEATURES_UPDATED = "MODULE_ENTITLEMENT_FEATURES_UPDATED"
 # ADR-040: resultado da notificacao ao Gerente responsavel, consequencia de um
 # PROJECT_ACCESS efetivamente persistido (nunca de um GET deduplicado).
 PROJECT_ACCESS_NOTIFICATION_SENT = "PROJECT_ACCESS_NOTIFICATION_SENT"
@@ -234,6 +237,33 @@ def registrar(
                 sessao.close()
         except Exception:
             pass
+
+
+def adicionar_evento(
+    db: Session,
+    event_type: str,
+    *,
+    user,
+    company_id: int,
+    details: dict,
+    severity: str = SEV_INFO,
+) -> models.AuditEvent:
+    """Inclui auditoria na mesma transacao de uma mutacao administrativa."""
+    ctx = contexto_atual()
+    evento = models.AuditEvent(
+        event_type=event_type,
+        severity=severity,
+        user_id=getattr(user, "id", None),
+        company_id=company_id,
+        ip_address=ctx.ip_address,
+        user_agent=ctx.user_agent,
+        http_method=ctx.http_method,
+        path=ctx.path,
+        request_id=ctx.request_id,
+        details=_sanear(details),
+    )
+    db.add(evento)
+    return evento
 
 
 # --- classificacao de negacao de projeto --------------------------------------

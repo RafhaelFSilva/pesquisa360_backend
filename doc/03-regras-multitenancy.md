@@ -307,9 +307,60 @@ usar dados locais do mobile para determinar tenant
 - Existe teste manual A vs B?
 - A resposta em acesso inválido é 404?
 
+## 6.1 Cleanup de Capabilities em Logout (Prompt 03)
+
+Como o Web mantém estado local de capabilities em Zustand, a camada Web deve
+**resetar completamente o módulos store** ao fazer logout ou ao detectar troca
+de usuário.
+
+Sem isso, Empresa A poderia vazar suas capabilities para Empresa B:
+
+```text
+Empresa A (COM Inteligência Eleitoral)
+  → logout
+  → modulesStore.resetModules() ✓
+  → modules=[], status='idle'
+  → Login Empresa B (SEM Inteligência Eleitoral)
+  → NÃO herda modules de A
+```
+
+**Implementação no Web:**
+
+- `authStore.logout()` chama `useModulesStore.getState().resetModules()`
+- `AppBootstrap` (em App.tsx) reseta módulos se `!token`
+- `AppBootstrap` recarrega módulos se `token` mudar
+
+Empresa B continuará sem capacidades até que `GET /usuarios/me/modulos/` execute
+e retorne `[]` (vazio) ou `[... features de B]`.
+
 ## 6.2 Setor → Município de referência (ADR-035-B)
 
 `setores.municipio_territorio_id` aponta para um MUNICIPIO da **Base principal
 do Projeto**. Manual só é aceito se pertencer a essa Base (senão 404) e não
 contradisser a geometria; Gerente principal da Empresa A com ACL no Projeto B
 resolve pela Base B. `current_user.company_id` nunca participa.
+# Entitlements e tenant
+
+- A empresa da resolução comercial vem do usuário autenticado, nunca de body ou query.
+- Projeto e Pesquisa usados como escopo são validados contra a empresa antes da resolução.
+- Recurso de outro tenant mantém inexistência observável (404).
+- Entitlement não concede acesso a dados e não substitui ACL/RBAC.
+- No endpoint sem recurso, `usuarios.company_id` é a empresa principal/default.
+# Ordem entre recurso e entitlement
+
+## Exceção administrativa controlada
+
+`company_id` é alvo explícito exclusivamente no path `/admin/empresas/{company_id}/...`
+de rotas protegidas por `require_superadmin`. A empresa existe, os recursos de
+escopo são validados contra ela e toda mutação é auditada. Isso não altera a
+regra operacional: clientes comuns nunca escolhem tenant por URL/body/header.
+
+**RESOURCE TENANCY É VALIDADO ANTES DO ENTITLEMENT.** O cliente nunca escolhe
+tenant por query, body ou header. Em contexto de Projeto/Pesquisa, o Backend
+resolve o recurso com a ACL e deriva dele a empresa comercial; somente depois
+consulta entitlement.
+
+Exemplo: usuário da Empresa A sem ACL pede Projeto da Empresa B. A resposta é
+404 de recurso, mesmo que A não possua o módulo. Nunca se responde 403 de
+licenciamento antes dessa validação. Um usuário multiempresa explicitamente
+autorizado usa o tenant do recurso, coerente com a ADR-034.

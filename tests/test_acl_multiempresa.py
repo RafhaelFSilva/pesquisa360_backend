@@ -49,7 +49,7 @@ from pesquisa360.services import acessos
 from tests.test_base_eleitoral_import import run_alembic_upgrade
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-HEAD = "b5c6d7e8f9a0"
+HEAD = "c6d7e8f9a0b1"
 ANTES = "b9c0d1e2f3a4"
 
 EMPRESA_A, EMPRESA_B = 10, 20

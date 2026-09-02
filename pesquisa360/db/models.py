@@ -283,6 +283,136 @@ class Pesquisa(Base):
         cascade="all, delete-orphan",
     )
 
+
+class Modulo(Base):
+    """Produto comercializavel do catalogo modular."""
+
+    __tablename__ = "modulos"
+    __table_args__ = (UniqueConstraint("chave", name="uq_modulos_chave"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    chave = Column(String(100), nullable=False)
+    nome = Column(String(200), nullable=False)
+    descricao = Column(Text, nullable=True)
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    funcionalidades = relationship("ModuloFuncionalidade", back_populates="modulo")
+    entitlements = relationship("ModuloEntitlement", back_populates="modulo")
+
+
+class ModuloFuncionalidade(Base):
+    """Capacidade comercial explicita de um modulo."""
+
+    __tablename__ = "modulo_funcionalidades"
+    __table_args__ = (
+        UniqueConstraint("modulo_id", "chave", name="uq_modulo_funcionalidade_chave"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    modulo_id = Column(Integer, ForeignKey("modulos.id", ondelete="CASCADE"), nullable=False, index=True)
+    chave = Column(String(100), nullable=False)
+    nome = Column(String(200), nullable=False)
+    descricao = Column(Text, nullable=True)
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    modulo = relationship("Modulo", back_populates="funcionalidades")
+
+
+class ModuloEntitlement(Base):
+    """Licenca comercial de um modulo em escopo de empresa, projeto ou pesquisa."""
+
+    __tablename__ = "modulo_entitlements"
+    __table_args__ = (
+        CheckConstraint(
+            "NOT (projeto_id IS NOT NULL AND pesquisa_id IS NOT NULL)",
+            name="ck_modulo_entitlement_um_escopo",
+        ),
+        CheckConstraint(
+            "status IN ('ATIVO', 'SUSPENSO', 'CANCELADO')",
+            name="ck_modulo_entitlement_status",
+        ),
+        Index(
+            "uq_modulo_entitlement_empresa",
+            "company_id",
+            "modulo_id",
+            unique=True,
+            postgresql_where=text("projeto_id IS NULL AND pesquisa_id IS NULL"),
+            sqlite_where=text("projeto_id IS NULL AND pesquisa_id IS NULL"),
+        ),
+        Index(
+            "uq_modulo_entitlement_projeto",
+            "company_id",
+            "modulo_id",
+            "projeto_id",
+            unique=True,
+            postgresql_where=text("projeto_id IS NOT NULL AND pesquisa_id IS NULL"),
+            sqlite_where=text("projeto_id IS NOT NULL AND pesquisa_id IS NULL"),
+        ),
+        Index(
+            "uq_modulo_entitlement_pesquisa",
+            "company_id",
+            "modulo_id",
+            "pesquisa_id",
+            unique=True,
+            postgresql_where=text("projeto_id IS NULL AND pesquisa_id IS NOT NULL"),
+            sqlite_where=text("projeto_id IS NULL AND pesquisa_id IS NOT NULL"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    modulo_id = Column(Integer, ForeignKey("modulos.id"), nullable=False, index=True)
+    projeto_id = Column(Integer, ForeignKey("projetos.id"), nullable=True, index=True)
+    pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=True, index=True)
+    status = Column(String(20), nullable=False, default="ATIVO", server_default=text("'ATIVO'"))
+    inicia_em = Column(DateTime(timezone=True), nullable=True)
+    expira_em = Column(DateTime(timezone=True), nullable=True)
+    criado_por_usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    modulo = relationship("Modulo", back_populates="entitlements")
+    funcionalidades = relationship(
+        "ModuloEntitlementFuncionalidade",
+        back_populates="entitlement",
+        cascade="all, delete-orphan",
+    )
+
+
+class ModuloEntitlementFuncionalidade(Base):
+    """Concessao explicita: novas features nunca entram em contratos antigos."""
+
+    __tablename__ = "modulo_entitlement_funcionalidades"
+    __table_args__ = (
+        UniqueConstraint(
+            "entitlement_id",
+            "funcionalidade_id",
+            name="uq_entitlement_funcionalidade",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    entitlement_id = Column(
+        Integer, ForeignKey("modulo_entitlements.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    funcionalidade_id = Column(
+        Integer, ForeignKey("modulo_funcionalidades.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    entitlement = relationship("ModuloEntitlement", back_populates="funcionalidades")
+    funcionalidade = relationship("ModuloFuncionalidade")
+
 class Pergunta(Base):
     __tablename__ = "perguntas"
     id = Column(Integer, primary_key=True, index=True)

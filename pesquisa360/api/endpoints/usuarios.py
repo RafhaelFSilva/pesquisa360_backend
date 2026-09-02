@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from pesquisa360 import crud, schemas
 from pesquisa360.db import models
 from pesquisa360.core import rbac
-from pesquisa360.services import acessos, ativacao, auditoria
+from pesquisa360.services import acessos, ativacao, auditoria, modulos
 from pesquisa360.core.dependencies import (
     get_db,
     get_current_user,
@@ -192,6 +192,19 @@ def read_users_me(
     dados.papel = rbac.papel_nome(current_user)
     dados.permissions = rbac.resumo_permissoes(current_user)
     return dados
+
+
+@router.get("/me/modulos/", response_model=schemas.ModulosUsuarioResponse)
+def read_current_user_modules(
+    db: Session = Depends(get_db),
+    current_user: models.Usuario = Depends(get_current_user),
+):
+    """Capacidades comerciais da empresa principal do usuario autenticado.
+
+    Nao e ACL nem autorizacao final por perfil, e nao recebe company_id do
+    cliente. O gating das rotas existentes permanece desativado nesta fase.
+    """
+    return {"modulos": modulos.resolver_modulos_empresa(db, current_user.company_id)}
 
 @router.get("/", response_model=List[schemas.Usuario])
 def read_users(

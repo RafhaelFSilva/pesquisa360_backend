@@ -1,0 +1,1 @@
+"""Dependencies reutilizaveis da API."""

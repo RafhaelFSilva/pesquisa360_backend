@@ -96,6 +96,19 @@ ordenadas, ligadas pela mesma `coleta_id`.
 Nenhum dos fluxos substitui o outro: combinações pareadas continuam no
 crosstab; navegação hierárquica pertence à Central de Inteligência.
 
+## ADR-052 — Web capabilities são estado UX, não segurança
+
+**Decisão.** Web carrega capabilities via `GET /usuarios/me/modulos/` em Zustand
+com estado explícito (`idle|loading|ready|error`). Gates Web fazem fail-closed
+(bloqueiam em loading/error), mas Backend é a autoridade final. Web nunca
+inventa capacidades; Backend nunca autoriza baseado em decisão Web.
+
+Consequências:
+- logout limpa `modulesStore` completamente
+- troca de usuário recarrega módulos
+- Empresa A não vaza para Empresa B
+- URL direta sem módulo retorna UX clara (redireciona ou mostra "não disponível")
+
 ## ADR-010 — Frontend usa services para API
 
 Chamadas HTTP devem ficar em `src/api`.
@@ -1511,3 +1524,94 @@ ação contra usuário ou IP.
   pela Segurança (e vê "Usuarios" apontando ao painel do tenant).
 - Evolução natural: preferências, exportação e ações (bloqueio, alertas) —
   sempre como decisão do Backend, nunca do painel.
+## ADR-042 — Monólito modular e entitlement comercial
+
+**Decisão.** O Pesquisa360 evolui no backend existente como monólito modular.
+Multitenancy, entitlement comercial e ACL/RBAC permanecem conceitos e camadas
+distintas. O entitlement só é avaliado depois de o tenant do recurso ter sido
+validado e nunca amplia acesso a dados.
+
+## ADR-043 — Entitlements aditivos e features explícitas
+
+**Decisão.** Licenças de Empresa, Projeto e Pesquisa são aditivas. Uma licença
+suspensa mais específica não nega uma licença ampla ativa; não existe DENY
+implícito. Toda feature contratada possui vínculo explícito, sem wildcard, para
+que capacidades futuras não sejam concedidas a contratos antigos por acidente.
+
+## ADR-044 — Catálogo planejado não equivale a capacidade utilizável
+
+**Decisão.** `potencial_crescimento` é pré-cadastrada com `ativo=false`, estado
+planejado/indisponível, porque o motor não existe nesta Sprint. O resolvedor só
+expõe módulos e funcionalidades ativas e efetivamente licenciadas.
+
+## ADR-045 — Fundação sem gating
+
+**Decisão.** O Prompt 01 cria dados, serviço e leitura, mas não liga enforcement
+em nenhuma rota existente. FeatureGate Web, ACL por feature, administração de
+licenças e o motor de Potencial de Crescimento ficam planejados.
+
+## ADR-046 — Backend é autoridade final de enforcement comercial
+
+**Decisão.** O cliente pode ocultar interface, mas somente o Backend decide se
+uma capacidade contratada pode executar. Frontend nunca substitui o gate.
+
+## ADR-047 — Multitenancy e recurso precedem entitlement
+
+**Decisão.** Projeto/Pesquisa são autenticados e autorizados antes da consulta
+comercial. Recurso não autorizado retorna 404, sem revelar licenciamento.
+
+## ADR-048 — Ausência de entitlement retorna 403
+
+**Decisão.** Para recurso já autorizado e capacidade ativa, módulo ou feature
+sem concessão efetiva retorna 403. Suspensão e janela temporal inválida têm a
+mesma semântica.
+
+## ADR-049 — Catálogo inativo não pode ser concedido
+
+**Decisão.** Módulo ou feature inativo é capacidade indisponível (404 genérico),
+mesmo que exista vínculo manual. `potencial_crescimento` continua inativa.
+
+## ADR-050 — Gates comerciais são reutilizáveis
+
+**Decisão.** `require_module` e `require_feature` são factories independentes
+de produto. A lógica SQL permanece em `services/modulos.py`; endpoints apenas
+compõem o contexto de recurso e a dependency.
+
+## ADR-051 — Tenant comercial vem do contexto autorizado
+
+**Decisão.** Sem recurso, usa-se a empresa principal autenticada. Com Projeto ou
+Pesquisa, usa-se a empresa do recurso previamente autorizado pela ACL, o que
+preserva usuários multiempresa. Query, body e headers não selecionam tenant.
+
+## ADR-053 — Somente administração global gerencia entitlements
+
+**Decisão.** Apenas `require_superadmin` autoriza leitura administrativa e
+mutação de licenças. Tenant não pode se autolicenciar.
+
+## ADR-054 — Empresa explícita somente em contexto administrativo
+
+**Decisão.** `company_id` no path é permitido apenas nas rotas administrativas
+Superadmin, com empresa/recursos validados e auditoria.
+
+## ADR-055 — Catálogo técnico é read-only no painel
+
+**Decisão.** Módulos/features representam capacidades do software; o painel não
+cria, renomeia, ativa ou exclui catálogo.
+
+## ADR-056 — Entitlement não é apagado fisicamente
+
+**Decisão.** O ciclo usa ATIVO/SUSPENSO/CANCELADO; não existe DELETE.
+
+## ADR-057 — Módulo e escopo são imutáveis
+
+**Decisão.** PATCH altera somente status/validade. Erro de módulo/escopo exige
+cancelar a licença histórica e criar outra.
+
+## ADR-058 — Feature inativa não pode ser concedida
+
+**Decisão.** UI desabilita, mas Backend rejeita request manipulado com 422.
+
+## ADR-059 — Administração de licenças é auditável
+
+**Decisão.** Cada mutação grava ator, empresa, entitlement e estados before/after
+em `audit_events`, na mesma transação da alteração.

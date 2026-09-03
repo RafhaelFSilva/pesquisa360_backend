@@ -1,4 +1,3 @@
-import json
 from collections import defaultdict
 from itertools import product
 
@@ -110,43 +109,12 @@ def _limit_error(kind: str, limit: int, found: int) -> HTTPException:
     )
 
 
-def _normalize_scalar(value):
-    if value is None or isinstance(value, (dict, list, bool)):
-        return None
-    normalized = str(value).strip()
-    return normalized or None
-
-
-def _response_values(raw_value, multiple: bool):
-    if not multiple:
-        value = _normalize_scalar(raw_value)
-        return ([value] if value is not None else []), False
-
-    parsed = raw_value
-    if isinstance(raw_value, str):
-        stripped = raw_value.strip()
-        if not stripped:
-            return [], False
-        try:
-            candidate = json.loads(stripped)
-            parsed = candidate if isinstance(candidate, list) else stripped
-        except (TypeError, ValueError, json.JSONDecodeError):
-            parsed = stripped
-
-    values = parsed if isinstance(parsed, list) else [parsed]
-    result = []
-    seen = set()
-    duplicate_found = False
-    for item in values:
-        value = _normalize_scalar(item)
-        if value is None:
-            continue
-        if value in seen:
-            duplicate_found = True
-            continue
-        seen.add(value)
-        result.append(value)
-    return result, duplicate_found
+# Parser compartilhado (services/response_values): extraido mecanicamente
+# daqui no Prompt 03 do Potencial de Crescimento, sem mudanca de comportamento.
+from pesquisa360.services.response_values import (
+    normalize_scalar as _normalize_scalar,
+    response_values as _response_values,
+)
 
 
 def _question_order_key(path, option_orders):

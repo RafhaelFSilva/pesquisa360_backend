@@ -18,7 +18,7 @@ from .core import ambiente
 from .services import auditoria
 from pesquisa360.core.rbac import Permissao, require_permissao
 from .db.session import engine
-from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais, empresas, apuracao_espontanea, base_eleitoral, liderancas, setor_importacao, tentativas_campo, cotas_perfil, cobertura_campo, controle_campo, modulos_admin
+from .api.endpoints import login, usuarios, projetos, coletas, relatorios, agente, locais, empresas, apuracao_espontanea, base_eleitoral, liderancas, setor_importacao, tentativas_campo, cotas_perfil, cobertura_campo, controle_campo, modulos_admin, potencial_crescimento
 from .core.dependencies import get_current_user
 
 
@@ -268,3 +268,8 @@ app.include_router(base_eleitoral.router, tags=["Base Eleitoral"])
 
 # Gestão de Lideranças
 app.include_router(liderancas.router, tags=["Liderancas"])
+
+# Inteligência Eleitoral — Potencial de Crescimento (feature comercial
+# potencial_crescimento permanece INATIVA no catálogo: rotas respondem 404
+# até a ativação formal do produto).
+app.include_router(potencial_crescimento.router)

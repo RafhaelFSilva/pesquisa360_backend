@@ -1372,3 +1372,45 @@ empresa ou recurso incompatível retorna 404. Não há DELETE.
 Sem entitlement efetivo: HTTP 200 com `{"modulos": []}`. IDs internos,
 entitlements e dados de outros tenants não são expostos. Parâmetros extras como
 `company_id` não alteram o tenant resolvido.
+
+## Inteligência Eleitoral — Potencial de Crescimento (MVP 1, Prompt 04)
+
+Prefixo real:
+`/projetos/{projeto_id}/pesquisas/{pesquisa_id}/inteligencia-eleitoral/potencial-crescimento`
+
+Rotas implementadas:
+
+```http
+GET  .../opcoes-configuracao
+POST .../validar-configuracao
+POST .../analisar
+```
+
+Autorização (ordem garantida): autenticação (401) → Pesquisa do path com ACL
+e `Pesquisa.projeto_id == projeto_id` (404, inclusive cross-tenant, ANTES de
+qualquer avaliação comercial) → `Permissao.INTELIGENCIA_VER` (403) →
+`require_feature("inteligencia_eleitoral", "potencial_crescimento")` no
+contexto da Pesquisa (404 capacidade inativa / 403 não contratada). A feature
+está INATIVA no catálogo real: as rotas respondem 404
+`CAPACIDADE_INDISPONIVEL` até a ativação formal do produto.
+
+Request de validar/analisar: `GrowthAnalysisConfiguration` canônica
+(doc/15), com `body.pesquisa_id == path.pesquisa_id` obrigatório (422
+`SURVEY_PATH_BODY_MISMATCH`). Nenhum request/response contém
+`company_id`/`tenant_id`.
+
+Responses: `GET opcoes-configuracao` → `GrowthConfigurationOptionsResponse`
+(perguntas com `compatible_as` técnico, valores canônicos, territórios da
+Pesquisa, constraints sem defaults metodológicos). `POST validar-configuracao`
+→ HTTP 200 `{valid, normalized_configuration, errors[], warnings[]}` mesmo
+para configuração semanticamente inválida (422 apenas para transporte
+impossível/mismatch). `POST analisar` → `GrowthAnalysisResponse` (snapshot,
+universos, diagnostics, findings com evidências e denominadores explícitos,
+warnings estruturados); configuração inválida → 422
+`{code: GROWTH_CONFIGURATION_INVALID, errors, warnings}`; limite de
+segmentos → 422 `{code: SEGMENT_LIMIT_EXCEEDED}`. Métricas em unidade
+canônica (rate/interval 0–1, delta em pp, lift razão) como JSON numbers —
+sem strings numéricas e sem arredondamento de apresentação;
+`weighted_base`/`lift`/intervalos indisponíveis viajam como null. Execução
+síncrona e efêmera: nada é persistido. Contrato completo em
+`doc/17-inteligencia-eleitoral-potencial-crescimento-api.md`.

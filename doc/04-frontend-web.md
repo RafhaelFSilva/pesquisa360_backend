@@ -547,3 +547,50 @@ que a plataforma licenciou; o segundo lê o que o usuário pode usar. A página
 loading/error/empty/saving e fica sob `SuperadminRoute`. Empresa, Projeto e
 Pesquisa vêm de APIs administrativas; features inativas aparecem como "Em
 desenvolvimento" e checkbox disabled. Suspender/cancelar exige confirmação.
+
+## Potencial de Crescimento (Inteligência Eleitoral, MVP 1 — Prompt 05)
+
+Rota contextual:
+`/projetos/:projectId/pesquisas/:surveyId/inteligencia-eleitoral/potencial-crescimento`,
+protegida por `ModuleRoute(inteligencia_eleitoral)` + `FeatureRoute(potencial_crescimento)`
+(fail-closed em loading/error; Backend continua a autoridade). O card na
+Central de Inteligência só aparece com `status === 'ready'` e
+`hasFeature(...)`.
+
+- Service: `src/api/growthPotentialService.ts`
+  (`getConfigurationOptions`/`validateConfiguration`/`analyze`), sem
+  `company_id`;
+- Tipos: `src/types/growthPotential.ts` (DTOs snake_case, sem `any`);
+- Lógica pura: `src/lib/growthPotential.ts` — draft, reducer com estados
+  explícitos (OPTIONS_LOADING/ERROR, CONFIGURING, VALIDATING,
+  VALIDATION_INVALID, VALIDATED, ANALYZING, ANALYSIS_READY/ERROR), dirty
+  state (edição pós-validação exige revalidar; Analisar usa somente a
+  `normalized_configuration`), guarda de corrida por (sequence, surveyKey) e
+  formatadores (`formatRate` 0–1→%, `formatDeltaPp` sem ×100, `formatLift`
+  ×, null→"—");
+- Página: `src/pages/GrowthPotentialPage.tsx` — etapas 1–7 + resultado
+  básico (funil, warnings metodológicos, diagnostics, tabela de segmentos na
+  ordem do motor, evidências com numeradores/bases/intervalos);
+- Compatibilidades vêm SEMPRE de `compatible_as` da API — nenhuma heurística
+  textual; sem score/ranking/projeção; execução efêmera (sem localStorage).
+Detalhes: `doc/18-inteligencia-eleitoral-potencial-crescimento-web.md`.
+
+### Camada de leitura analítica (Prompt 06)
+
+Componentes em `src/components/growth-potential/`: `GrowthExecutiveSummary`
+(cards estruturais + barra metodológica sempre visível),
+`GrowthSignalSelector` (sinais disponíveis + direção favorável),
+`GrowthDeltaChart` (barras horizontais de delta_pp com zero line; rejeição
+não invertida; suprimido/null listado à parte, nunca barra 0),
+`GrowthScaleScatter` (X = participação, Y = delta_pp, zero line, sem
+quadrantes), `GrowthChartTooltip` (unidades + denominadores),
+`GrowthSegmentDetail` (comparação segmento × referência com IC de Wilson +
+"Leitura do segmento" determinística) e `GrowthTerritoryView` (combinação de
+perfil obrigatória — sem agregação no Web; tabela sempre; mapa Leaflet de
+SETOR via `projectsService.getSetores` + `anelExternoParaLatLng`; mapa de
+município ADIADO por ausência de contrato de geometria). Interpretação por
+templates determinísticos na lib (`buildEvidenceInterpretation`/
+`buildSegmentReading`), sem LLM (ADR-073). Seleção única de segmento entre
+tabela/gráficos/mapa; ordenação explícita com descrição visível (default:
+ordem do motor); filtros apenas de visualização (nunca reexecutam a
+análise). Detalhes: `doc/19-...-visualizacoes.md`.

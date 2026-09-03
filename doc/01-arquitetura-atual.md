@@ -338,3 +338,17 @@ São controles distintos: multitenancy responde quais dados podem participar;
 entitlement responde o que foi contratado; ACL/RBAC responde o que o usuário
 pode fazer. O licenciamento nunca amplia o tenant ou a ACL. Nesta fase a
 infraestrutura comercial é somente consultiva e não bloqueia rotas legadas.
+
+## Inteligência Eleitoral — cadeia da API do Potencial de Crescimento
+
+```text
+HTTP (router potencial_crescimento)
+ ↓ resolução Projeto/Pesquisa + ACL/multitenancy (404)
+ ↓ Permissao.INTELIGENCIA_VER (403)
+ ↓ require_feature("inteligencia_eleitoral", "potencial_crescimento") (404/403)
+ ↓ Configuration Validator (inteligencia_eleitoral/validation)
+ ↓ Growth Engine (inteligencia_eleitoral/engine — Decimal, efêmero)
+ ↓ HTTP Mapper (inteligencia_eleitoral/http_contract — JSON numbers)
+```
+
+A feature permanece inativa no catálogo real; a arquitetura geral não muda.

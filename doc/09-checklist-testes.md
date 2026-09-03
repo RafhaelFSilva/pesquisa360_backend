@@ -626,3 +626,228 @@ passaram. A suíte completa também passou: 1481 passed, 12 skipped, 81 warnings
   menu/gate/rota sem invalidar a autenticação nem o Core.
 - [x] Backend: 206 focados + 28 subtests; regressão 1529 passed, 13 skipped.
 - [x] Web: 1119/1119; build aprovado; lint no baseline preexistente de 10 erros.
+
+## Potencial de Crescimento — Configuração (MVP 1, Prompt 02)
+
+Suíte automatizada: `tests/test_growth_analysis_configuration.py` (C01–C65).
+
+- [x] Candidatura: bindings explícitos por pergunta; valor inexistente rejeitado;
+  binding ausente para sinal candidato-específico rejeitado; binding sem uso
+  gera warning.
+- [x] Cenário: SINGLE/MULTIPLE/ORDERED_MULTIPLE; slots/orders incoerentes
+  rejeitados; MULTIPLA_ESCOLHA como intenção exige ballot MULTIPLE.
+- [x] Taxonomia: classes especiais disjuntas entre si e disjuntas da
+  candidatura; `__SEM_RESPOSTA__` inconfigurável.
+- [x] Sinais: intenção obrigatória via cenário; rejeição/segunda opção/decisão
+  opcionais com warning; pergunta TERRITORIAL, inativa, de outra pesquisa ou de
+  tipo incompatível rejeitada.
+- [x] Base mínima: sem default numérico; `warn > suppress ≥ 1` validado.
+- [x] Perfil: 1–2 dimensões; grupos categóricos disjuntos; faixas numéricas
+  inclusivas sem inversão/sobreposição.
+- [x] Território: NONE/SETOR/MUNICIPIO; setor de outra pesquisa 404-like;
+  setor OPERACAO-only rejeitado; MUNICIPIO indisponível sem resolução oficial.
+- [x] Espontânea: categoria ativa aceita; inexistente/inativa rejeitada; sinal
+  espontâneo exige `max_uncategorized_rate` explícito (0–1 exclusivos).
+- [x] Ponderação: somente NAO_PONDERADO; contrato não expõe weighted_base.
+- [x] Multitenancy: sem `company_id` no contrato; pesquisa/pergunta cross-tenant
+  indistinguíveis de inexistentes.
+- [x] Serialização: JSON determinístico, round-trip preserva semântica, sem
+  campos ORM/tenant.
+
+## Potencial de Crescimento — Motor Estatístico (MVP 1, Prompt 03)
+
+Suíte automatizada: `tests/test_growth_analysis_engine.py` (E01–E112).
+
+- [x] Universo: survey/analytical/eligible explícitos; filtros estruturais
+  congelam o universo; nenhuma entrevista contada duas vezes (1 Coleta = 1
+  observação).
+- [x] Elegibilidade: apoiador atual excluído (D01); especiais por política
+  explícita; políticas divergentes → exclusão conservadora diagnosticada;
+  sem resposta de intenção → unknown, nunca indeciso.
+- [x] Ballot modes: SINGLE, MULTIPLE (alvo em qualquer posição) e
+  ORDERED_MULTIPLE (alvo em qualquer slot).
+- [x] Denominadores: base válida por sinal = entrevistas com resposta
+  reportável; ausência ≠ zero; decisão do voto só conta valores dos grupos.
+- [x] Segmentação: apenas cruzamentos configurados; faixas numéricas
+  inclusivas; missing/unmatched diagnosticados; segment_key determinística;
+  queries não crescem com segmentos.
+- [x] Sinais: segunda opção, rejeição (múltipla conta entrevista uma vez;
+  taxa é rejeição, não 1−rejeição) e decisão do voto com oráculos de mão.
+- [x] Wilson: valores conhecidos (0/n, n/n, intermediário), z de 95%,
+  intervalo em fração 0–1, n=0 indisponível; sem p-value/significância.
+- [x] Base mínima: supressão de finding e de evidência por sinal; alerta
+  SMALL_BASE; outros sinais permanecem disponíveis.
+- [x] Espontânea: categoria ativa resolve; "Não categorizada" na base;
+  limiar excedido bloqueia o sinal (SIGNAL_UNAVAILABLE_QUALITY).
+- [x] Determinismo: hash de configuração, input_fingerprint, execução
+  repetida idêntica exceto executed_at; findings ordenados.
+- [x] Ausência de score/ranking/projeção: nenhum campo de score, rank,
+  projected/potential votes; eleitorado_apto apenas contexto.
+- [x] Multitenancy: pesquisa cross-tenant não executa; coleta de outro
+  tenant fora do universo; contrato sem company_id.
+
+## Potencial de Crescimento — API (MVP 1, Prompt 04)
+
+Suíte automatizada: `tests/test_growth_analysis_api.py` (A01–A87 + E2E).
+
+- [x] Auth: sem token → 401; perfil sem INTELIGENCIA_VER → 403.
+- [x] ACL/multitenancy: projeto/pesquisa inexistentes, pesquisa fora do
+  projeto do path e recurso cross-tenant → 404, sempre ANTES do 403
+  comercial.
+- [x] Feature/entitlement: inativa → 404 CAPACIDADE_INDISPONIVEL; ativa sem
+  entitlement → 403; escopos Empresa/Projeto/Pesquisa concedem; escopo de
+  outro projeto/pesquisa nega; aditividade preservada (suspenso específico
+  não anula amplo ativo).
+- [x] Path/body: pesquisa divergente → 422 SURVEY_PATH_BODY_MISMATCH;
+  company_id/tenant_id no body → 422.
+- [x] Options: só perguntas ativas da Pesquisa; compatibilidades por regra
+  técnica (territorial nunca é sinal; TEXTO com papel PERFIL não vira
+  perfil); valores canônicos; categorias espontâneas ativas; setores da
+  Pesquisa com elegibilidade analítica; municípios oficiais; constraints
+  sem defaults metodológicos.
+- [x] Validação: 200 valid=false com issues tipadas (code/path/context);
+  VALUE_NORMALIZED + configuração normalizada; motor não executa (spy).
+- [x] Análise: motor executa uma vez; 422 tipados
+  (GROWTH_CONFIGURATION_INVALID, SEGMENT_LIMIT_EXCEEDED); erro inesperado
+  não vira 422.
+- [x] Números: métricas como JSON numbers em unidade canônica (0–1, pp,
+  razão), nunca strings; null preservado (weighted_base, lift indefinido).
+- [x] Warnings metodológicos chegam estruturados ao HTTP.
+- [x] Determinismo via HTTP (exceto executed_at); ordem dos findings
+  preservada.
+- [x] Provas negativas: sem score/rank/potential_level/projeção/company_id.
+- [x] OpenAPI: rotas registradas, schemas nomeados, métricas como number.
+
+## Potencial de Crescimento — Web (MVP 1, Prompt 05)
+
+Suítes: `tests/growthPotential.test.mjs` (lógica pura) e
+`tests/growthPotentialPage.test.mjs` (verificação estática) no repo Web.
+
+- [x] Capabilities: rota sob ModuleRoute + FeatureRoute (fail-closed em
+  loading/error); card na Central só com feature pronta e concedida.
+- [x] Service: três endpoints reais, apiClient autenticado, sem company_id,
+  erros Axios sobem para a página.
+- [x] Options: loading/erro/vazio modelados; papel_analitico só como
+  sugestão; escolhas por compatible_as; nenhuma heurística textual.
+- [x] Configuração: bindings explícitos; SINGLE/MULTIPLE/ORDERED_MULTIPLE;
+  taxonomia e include/exclude serializados; alvo nunca vira indeciso;
+  espontânea exige threshold em % convertido para fração; 1–2 dimensões;
+  faixas inclusivas com inversão detectada; base mínima sem defaults
+  (warn > suppress ≥ 1, texto de entrevistas reais).
+- [x] Validação: 200 valid=false exibe erros com code/path por seção;
+  warnings separados; VALUE_NORMALIZED informado; valid=true guarda a
+  configuração normalizada.
+- [x] Dirty state: edição pós-validação desabilita Analisar até revalidar;
+  Analisar envia somente a configuração normalizada.
+- [x] Números: 0.187→18,7%; delta 7.7→+7,7 pp (nunca 770%); lift 1.8→1,80×
+  (nunca 180%); intervalo 0–1→percentuais; null→"—" (weighted_base nunca 0).
+- [x] Resultado: funil com contagens explícitas; warnings metodológicos
+  visíveis; diagnostics separados dos segmentos; evidências com
+  numerador/base de segmento e referência; base insuficiente nunca vira 0%.
+- [x] Troca de Pesquisa: RESET total; resposta atrasada não sobrescreve
+  (sequence + surveyKey); nada em localStorage/sessionStorage.
+- [x] Erros HTTP: 422 tipados (config inválida, SEGMENT_LIMIT_EXCEEDED),
+  403/404 fail-closed, 500 genérico.
+- [x] Provas negativas: sem score, potential_level, ranking default,
+  projected/potential votes, "chance de conversão".
+- [x] Suíte Web completa 1175/1175; build PASS; lint sem erro novo.
+
+## Potencial de Crescimento — Visualizações e Interpretação (MVP 1, Prompt 06)
+
+Suítes: `tests/growthVisualization.test.mjs` (domínio visual puro) e
+`tests/growthVisualizationPage.test.mjs` (verificação estática) no repo Web.
+
+- [x] Delta chart: delta_pp real da API, linha de referência em 0 pp,
+  rejeição não invertida (−10 pp permanece −10), null/suprimido sem barra
+  (listados à parte), sem sort automático, sem Top N (scroll interno).
+- [x] Scatter: X = participação (%), Y = delta_pp, zero line, sem limiar
+  vertical de escala, sem quadrantes semânticos, pontos de raio constante.
+- [x] Unidades: tooltips e legendas sempre com %, pp e ×; taxa e delta nunca
+  no mesmo eixo sem distinção.
+- [x] IC de Wilson exibido para segmento e referência com a nota de
+  aproximação AAS; nunca "estatisticamente significativo"/"95% de certeza".
+- [x] Templates determinísticos (oráculos: segunda opção 30%/15%/+15 pp;
+  rejeição 12%/22%/−10 pp FAVORABLE sem "88% de aceitação" e sem "−10,0%");
+  NEUTRAL, SMALL_BASE (cautela), suprimido sem direção, indisponível ≠ neutro.
+- [x] Linguagem proibida ausente em todos os templates e componentes
+  ("vai votar/converter", "chance de conversão", "votos potenciais",
+  "significância", "melhor oportunidade" etc.); sem LLM.
+- [x] Leitura do segmento em listas, sem contagem agregada de sinais e sem
+  conclusão global de oportunidade.
+- [x] Warnings visíveis (barra metodológica fixa; por segmento e por
+  evidência; código desconhecido usa fallback da API).
+- [x] Ordenação explícita com descrição "Ordenado por:"; default = ordem do
+  motor; sem métrica "potential"; nulls por último.
+- [x] Filtros de visualização puros: não chamam /analisar (uma única chamada
+  na página), não mutam o resultado.
+- [x] Seleção única de segmento entre tabela, barra, scatter e mapa.
+- [x] Território: combinação completa de perfil obrigatória; NENHUMA
+  agregação no Web (um finding por território, objeto original do motor);
+  mapa de setor via contratos existentes com cor contínua centrada em 0;
+  município adiado por geometria ausente; tabela como alternativa acessível;
+  eleitorado apto só contexto (null nunca vira 0; cor nunca mistura
+  eleitorado).
+- [x] Sem score/ranking/projeção em toda a camada visual.
+- [x] Suíte Web completa 1229/1229; build PASS; lint sem erro novo.
+
+## Potencial de Crescimento — QA metodológico/estatístico/E2E (MVP 1, Prompt 07)
+
+Artefatos de QA (promovidos a ferramenta permanente no Prompt 08):
+`scripts/qa/growth_qa_seed.py` (dataset oráculo documentado) e
+`scripts/qa/growth_qa_run.py` (112 verificações via HTTP real) —
+`P360_QA_DATABASE_URL` obrigatória, sem default, apontando SEMPRE para banco
+descartável; `tests/growthPotential.e2e.cdp.mjs` (E2E Web real, opt-in
+`npm run qa:growth-e2e`, credenciais sintéticas via env) no repo Web. Ambiente:
+PostgreSQL/PostGIS descartável (Docker), feature ativada só ali. Resultados
+completos: doc/20.
+
+- [x] Universo/elegibilidade: 20→14 conferido à mão (supporters, especiais
+  por política, sem-resposta ≠ indeciso, conflito especial conservador).
+- [x] Denominadores por sinal: rejeição múltipla conta ENTREVISTA (tripla=1,
+  duplicada=1); decisão exclui não-classificados; participação usa
+  eligible_n.
+- [x] Wilson validado por implementação independente do QA (12 intervalos,
+  tol 1e-9) + âncoras de literatura (5/10, 0/10, 10/10).
+- [x] Zero real ≠ ausência (rate 0.0 vs null/SIGNAL_UNAVAILABLE); lift com
+  referência zero → null + warning; espontânea com borda do limiar (igual
+  não excede).
+- [x] Território em PostGIS real: borda com ST_Covers=true/ST_Contains=false
+  (SQL direto); sobreposição/sem-setor/sem-coordenada diagnosticados;
+  município resolvido/não-resolvido; contexto eleitoral não altera taxas.
+- [x] Determinismo: execuções idênticas exceto executed_at; fingerprint
+  insensível a resposta não-analítica e sensível a analítica (reversível);
+  cotas extremas não alteram o cálculo.
+- [x] Gates E2E reais: inativa→404, ativa-sem-entitlement→403,
+  concedida→200, RBAC 403, 404-antes-de-403 cross-tenant, mass assignment/
+  malformado→422, SEGMENT_LIMIT→422 tipado.
+- [x] E2E Web em browser real: fluxo completo com funil e números do oráculo
+  na tela; rejeição crua; troca A→B fail-closed; viewports 1440/900; zero
+  4xx/5xx.
+- [x] Stress: 2.400 coletas / 100 segmentos ~260 ms (síncrono mantido).
+- [x] Linguagem: varredura sem ocorrência indevida em produto e docs.
+- [x] Correções de QA (Web): crash pré-existente da ProjectsPage (user
+  órfão); deep link em rotas gated (idle fail-closed que expulsava
+  licenciados); tipagem Recharts do delta chart.
+- [x] Prompt 08: build Web com typecheck real (`tsc -b`) e os 39 erros TS
+  pré-existentes (lista completa do comando canônico
+  `npx tsc -b --pretty false`) quitados sem flexibilizar tsconfig (F4;
+  ADR-074).
+
+## Potencial de Crescimento — Hardening/Checkpoint (MVP 1, Prompt 08)
+
+- [x] Typecheck canônico Web: `npm run typecheck` (`tsc -b --pretty false`)
+  → 0 erros; `npm run build` executa `tsc -b` real.
+- [x] Guardas estáticas de regressão (`tests/hardening.test.mjs`): F1
+  (ProjectsPage define `user`), F2 (ModuleRoute/FeatureRoute aguardam
+  idle/loading e negam error/ready-sem-acesso), F4 (build com `tsc -b`),
+  higiene do E2E (credenciais só via env, sem senha embutida).
+- [x] Suíte Web completa 1233/1233 (1229 baseline + 4 guardas); lint com os
+  mesmos 10 erros preexistentes (zero novo).
+- [x] Backend: `compileall` + suíte completa verde em Python 3.13
+  (fixtures_qa restauradas após a rodada — só regeneram timestamp).
+- [x] Feature `potencial_crescimento` confirmada `ativo=false` na migration
+  `c6d7e8f9a0b1` (head único); nenhum entitlement real criado;
+  `GROWTH_ENGINE_VERSION` = `1.0`.
+- [x] Varreduras: sem `company_id` literal no código novo, sem
+  score/ranking/projeção/causal fora de documentação de proibição, sem
+  TODO/console.log/print de debug no código novo, `.env` não rastreado.

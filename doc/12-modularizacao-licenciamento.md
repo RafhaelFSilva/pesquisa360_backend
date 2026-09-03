@@ -24,8 +24,12 @@ entitlement. Tenant é validado antes do escopo; recursos cross-tenant retornam
 404 e licenciamento nunca concede acesso ao dado.
 
 O catálogo inicial contém `inteligencia_eleitoral`. A feature
-`potencial_crescimento` é apenas planejada e foi semeada inativa, portanto não é
-retornada como utilizável. Nenhuma empresa recebe entitlement no seed.
+`potencial_crescimento` foi semeada inativa e assim permanece: desde o MVP 1
+(doc/21) o motor, a API e a experiência Web existem no código, mas
+**implementado ≠ ativo** — a feature continua `ativo=false` no catálogo real,
+não é retornada como utilizável e nenhuma empresa recebe entitlement no seed.
+A ativação comercial é decisão de produto e segue o procedimento controlado
+descrito em `doc/21-checkpoint-mvp1-potencial-crescimento.md`.
 
 `GET /usuarios/me/modulos/` deriva a empresa principal do usuário autenticado,
 retorna somente chaves/nomes comerciais e responde lista vazia com HTTP 200.

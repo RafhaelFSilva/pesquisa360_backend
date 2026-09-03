@@ -1624,3 +1624,162 @@ deve preservar `upgrade()`, `revision` e `down_revision`, limitar o rollback aos
 objetos pertencentes à migration e ser comprovada por ciclo completo em
 PostgreSQL descartável. A política não autoriza reescrever migrations já
 aplicadas nem executar rollback em ambiente compartilhado ou produção.
+
+## ADR-061 — Configuração de análise é contrato tipado separado da persistência
+
+A configuração do Potencial de Crescimento (`GrowthAnalysisConfiguration`,
+`pesquisa360/inteligencia_eleitoral/`) é um contrato Pydantic serializável e
+determinístico, independente de HTTP, ORM, Web e banco. O contrato é provado
+por validator e testes ANTES de qualquer decisão de persistência; nenhuma
+tabela ou migration foi criada no Prompt 02. A separação
+CONTRACT → PERSISTENCE → ENGINE → API → WEB evita congelar estrutura de banco
+antes de o contrato estar estável.
+
+## ADR-062 — Candidatura é binding explícito de valores, não inferência
+
+Não existe entidade Candidato. A candidatura-alvo é declarada por
+`TargetCandidacy.bindings`: um `QuestionValueBinding {question_id, values}`
+por pergunta candidato-específica, com valores reportáveis/canônicos
+(`Opcao.texto` ou categoria espontânea ativa). Nenhuma semântica é inferida
+por texto de pergunta/opção; sinais candidato-específicos exigem o binding
+correspondente e os valores da candidatura têm fonte única em
+`target.bindings` (sinais não carregam `target_values` próprios). A evolução
+futura para candidato canônico deriva os bindings sem quebrar o contrato.
+
+## ADR-063 — Nenhuma seleção de tenant no contrato analítico
+
+`GrowthAnalysisConfiguration` não contém `company_id`/`tenant_id`
+(`extra="forbid"` rejeita o campo). O tenant é resolvido exclusivamente pela
+cadeia usuário → pesquisa → projeto → autorização (→ entitlement futuro),
+reutilizando `crud._validar_pesquisa_relatorio` e os filtros de ACL
+existentes. Pesquisa, pergunta e setor cross-tenant permanecem
+indistinguíveis de inexistentes na validação (padrão ADR-001/ADR-047).
+
+## ADR-064 — Configuração não é persistida no Prompt 02
+
+A persistência da configuração do Potencial de Crescimento foi
+deliberadamente adiada: primeiro o contrato tipado é provado por validação e
+testes; a decisão de persistência (tabela, lifecycle, versionamento, hash)
+será tomada junto com a API (Prompt 04). O modo não ponderado do contrato
+não fabrica `weighted_base`: o resultado futuro reporta `n_bruto` real e
+`weighted_base` indisponível (null) até existir ponderação real declarada.
+
+## ADR-065 — O motor consome exclusivamente a configuração canônica validada
+
+`analyze_growth_potential` recebe `GrowthAnalysisConfiguration`, revalida na
+entrada e trabalha somente com a forma normalizada. Configuração inválida
+levanta `GrowthAnalysisConfigurationError` (erro de domínio tipado, sem
+HTTPException — a API futura decide o mapeamento). Não existe segundo
+contrato paralelo nem argumento analítico de tenant.
+
+## ADR-066 — Execução do motor não persiste resultado
+
+O `GrowthAnalysis` é produzido em memória e devolvido ao chamador. Nenhuma
+tabela de resultado foi criada; a decisão de persistência pertence ao ciclo
+da API (Prompt 04), quando lifecycle e versionamento estiverem claros. O
+parser de múltipla escolha foi extraído para
+`services/response_values.py` sem mudança de comportamento, para que motor
+multidimensional e Potencial de Crescimento compartilhem uma única
+semântica.
+
+## ADR-067 — Snapshot com configuration_hash e input_fingerprint
+
+Toda execução carrega `engine_version` (versão semântica explícita, não
+commit hash), `configuration_hash` (SHA-256 do JSON canônico da configuração
+normalizada) e `input_fingerprint` (SHA-256 determinístico de coleta_ids,
+valores reportáveis analíticos e classificação territorial usada, sem
+executed_at). Mesma configuração + mesmos dados + mesma engine_version →
+mesmo conteúdo analítico; é a fundação da reprodutibilidade e do futuro
+tracking entre ondas.
+
+## ADR-068 — Referência inclusiva não é tratada como amostra independente
+
+A referência do MVP é o universo elegível total, que contém o próprio
+segmento. Por decisão metodológica explícita, o motor não calcula p-value,
+teste de duas proporções independentes nem IC de diferença; entrega taxas,
+intervalos de Wilson (aproximação AAS declarada), delta pp e lift, com os
+warnings permanentes `REFERENCE_INCLUDES_SEGMENT` e `SRS_ASSUMPTION`. A
+interpretação pertence às fases de visualização/QA (Prompts 06/07).
+
+## ADR-069 — Decimal permanece no domínio; a API expõe JSON number
+
+O motor calcula e devolve Decimal (`results.py`); a camada HTTP
+(`inteligencia_eleitoral/http_contract.py`) converte apenas o valor FINAL
+para float na borda, sem recalcular métricas e sem arredondamento de
+apresentação. Métricas nunca viajam como string; unidades permanecem
+canônicas (rate/intervalo 0–1, delta em pontos percentuais, lift razão) e a
+formatação é responsabilidade da UI. `null` representa indisponibilidade
+(weighted_base, lift com referência zero, intervalo sem base) e nunca é
+substituído por 0.
+
+## ADR-070 — Análise de Potencial de Crescimento é síncrona no MVP
+
+`POST /analisar` executa o motor no ciclo request→response, sem fila, job
+id, worker ou persistência: cada execução é efêmera e identificada pelo
+snapshot (`configuration_hash` + `input_fingerprint`). Arquitetura
+assíncrona só será considerada diante de medição real de duração
+incompatível com HTTP — não por antecipação.
+
+## ADR-071 — pesquisa do path e do body devem coincidir
+
+O path é a autoridade do recurso (`projeto_id`/`pesquisa_id`, com
+`Pesquisa.projeto_id == projeto_id` validado sob ACL). O contrato canônico
+mantém `pesquisa_id` no body para não criar um segundo contrato sem o
+campo; a API exige igualdade e responde 422 `SURVEY_PATH_BODY_MISMATCH` em
+divergência, sem executar o motor. O body jamais escolhe projeto ou tenant.
+
+## ADR-072 — Estado do Potencial de Crescimento é local e efêmero no Web
+
+A configuração (draft), a validação, a configuração normalizada e o
+resultado da análise vivem em estado LOCAL da página
+(`useReducer` + `lib/growthPotential.ts`), nunca no `modulesStore` (que
+permanece exclusivo de capabilities), em store global ou em
+localStorage/sessionStorage. Troca de Pesquisa ou desmontagem reseta tudo, e
+respostas atrasadas são descartadas pela identidade (sequence, surveyKey) —
+nenhum vazamento entre Pesquisas ou usuários. A execução é efêmera por
+contrato (ADR-066/070); qualquer persistência futura será decisão explícita
+de produto, não efeito colateral do frontend.
+
+## ADR-073 — Interpretação do MVP é determinística e sem LLM
+
+A interpretação textual do Potencial de Crescimento é gerada por templates
+determinísticos no Web (`lib/growthPotential.ts`:
+`buildEvidenceInterpretation`/`buildSegmentReading`), alimentados
+exclusivamente pelas evidências estruturadas do motor (taxas, referências,
+delta pp, lift, direção observada, warnings). Nenhuma chamada a
+LLM/IA generativa participa do fluxo: mesmos dados produzem a mesma
+interpretação, rastreável às evidências e auditável pelo QA. A copy
+(labels de sinal, explicações de direção, warnings e templates) é
+centralizada na mesma lib. Interpretação assistida por IA, se algum dia
+existir, será decisão de produto explícita e separada — nunca substituição
+silenciosa destes templates.
+
+## ADR-074 — O build Web executa typecheck real (tsc -b) e o hardening não flexibiliza tsconfig
+
+Contexto: o `tsconfig.json` raiz do Web é solution-style (`"files": []` +
+`references`), então o `tsc` a seco do script `build` compilava ZERO arquivos
+e o typecheck de produção era ilusório — defeitos como o F1 do QA
+(`ReferenceError: user is not defined` em `ProjectsPage`) chegavam a runtime
+sem qualquer erro de build. Ao ligar o comando real (`tsc -b`), afloraram 39
+erros pré-existentes de baseline (nenhum no código novo do MVP 1).
+
+Decisão (Prompt 08):
+- `build` = `tsc -b && vite build && ...` e script dedicado
+  `typecheck` = `tsc -b --pretty false`; este é o comando canônico de aceite.
+- Os 39 erros foram corrigidos mecanicamente, sem mudança de comportamento
+  (guards de null/undefined, tipagem correta do kit ui — `TdHTMLAttributes`/
+  `ThHTMLAttributes`/`HTMLAttributes` em `TableCell`/`CardTitle` —, literais
+  `as const` em GeoJSON, assinaturas compatíveis com Recharts v3/Leaflet,
+  remoção de dois arquivos mortos de editor `* copy.tsx` não referenciados)
+  e com dois efeitos funcionais assumidos e documentados: `NewProjectPage`
+  passa a enviar `coordenador_id` (obrigatório no contrato; antes o POST
+  gerava 422 em runtime) e `ProjectDetailPage` deixa de enviar campos que o
+  contrato `SurveyCreate` não possui.
+- `tsconfig.node.json` apontava `vite.config.ts` (inexistente; o arquivo real
+  é `vite.config.js`) e não checava nada: corrigido para incluir o arquivo
+  real com `allowJs` — um aperto, não um afrouxamento.
+- É PROIBIDO como estratégia de correção: `any` em massa, `@ts-ignore`,
+  `@ts-nocheck`, exclusão de diretórios, desligar `strict`, rebaixar regras
+  do tsconfig, tirar testes do typecheck, `skipLibCheck` para esconder erro
+  próprio ou trocar `tsc -b` por comando mais fraco. O teste estático
+  `tests/hardening.test.mjs` trava o script de build no comando real.

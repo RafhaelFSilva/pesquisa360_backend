@@ -300,5 +300,71 @@ alertas de brute force, MFA/CAPTCHA, exportação CSV/PDF, retenção/purge, SIE
 
 O Prompt 01 não implementa gating nem o motor de Potencial de Crescimento.
 O ciclo completo também foi validado em PostgreSQL real descartável; nenhum
-banco DEV compartilhado ou produção foi acessado. Sprint 0 encerrada; o MVP de
-Potencial de Crescimento permanece como próxima fase, ainda não iniciado.
+banco DEV compartilhado ou produção foi acessado. Sprint 0 encerrada.
+
+# Inteligência Eleitoral — MVP 1: Potencial de Crescimento
+
+Sequência aprovada:
+
+- [x] Prompt 01 — Modelagem metodológica + contrato de domínio: **APROVADO**
+  como baseline metodológica do MVP 1 (decisões D01–D15 registradas em
+  `doc/14-inteligencia-eleitoral-potencial-crescimento-modelagem.md`).
+- [x] Prompt 02 — Modelo de configuração da análise: contrato
+  `GrowthAnalysisConfiguration` + validator em duas camadas em
+  `pesquisa360/inteligencia_eleitoral/`, com testes C01–C65 e documentação em
+  `doc/15-inteligencia-eleitoral-potencial-crescimento-configuracao.md`.
+  Sem migration, sem API, sem persistência, sem motor; feature
+  `potencial_crescimento` segue inativa.
+- [x] Prompt 03 — Motor estatístico / cálculo: `analyze_growth_potential`
+  em `pesquisa360/inteligencia_eleitoral/` (results/statistics/engine),
+  consumindo o contrato validado; universos explícitos, elegibilidade por
+  ballot mode, segmentação configurada, território pela regra oficial,
+  sinais com denominadores explícitos, Wilson AAS aproximado, snapshot com
+  `configuration_hash`/`input_fingerprint`/`engine_version`. Sem API, sem
+  persistência, sem score/projeção; feature `potencial_crescimento` segue
+  inativa. Documentação:
+  `doc/16-inteligencia-eleitoral-potencial-crescimento-motor.md`.
+- [x] Prompt 04 — API do produto: três rotas sob
+  `/projetos/{id}/pesquisas/{id}/inteligencia-eleitoral/potencial-crescimento`
+  (opções, validação-formulário, análise síncrona), gates de segurança na
+  ordem 404→403 RBAC→comercial, DTOs HTTP com JSON numbers (Decimal
+  permanece no domínio) e 422 tipados. Feature `potencial_crescimento`
+  segue INATIVA (API implementada ≠ produto liberado). Documentação:
+  `doc/17-inteligencia-eleitoral-potencial-crescimento-api.md`.
+- [x] Prompt 05 — Experiência Web: rota protegida por Module+FeatureRoute,
+  card gated na Central de Inteligência, configurador em 7 etapas orientado
+  por `compatible_as` (sem heurística), validação como formulário com dirty
+  state, execução da configuração normalizada e resultado básico (funil,
+  warnings, diagnostics, segmentos e evidências com denominadores). Web:
+  1175/1175 testes, build PASS, lint sem erro novo. Documentação:
+  `doc/18-inteligencia-eleitoral-potencial-crescimento-web.md`.
+- [x] Prompt 06 — Visualizações e interpretação: visão executiva + barra
+  metodológica, leitura por sinal, delta chart e scatter escala×diferença
+  (delta cru, zero line, sem quadrantes), comparação com IC de Wilson,
+  interpretação determinística sem LLM (ADR-073), ordenação explícita,
+  filtros só de visualização, leitura territorial antiagregação com mapa de
+  SETOR (município adiado por contrato de geometria). Web 1229/1229, build
+  PASS, lint sem erro novo. Documentação:
+  `doc/19-inteligencia-eleitoral-potencial-crescimento-visualizacoes.md`.
+- [x] Prompt 07 — QA metodológico, estatístico e E2E real: oráculos manuais
+  independentes (112/112 via HTTP real), Wilson próprio do QA, PostgreSQL/
+  PostGIS descartável (borda ST_Covers provada), E2E Web em browser real
+  (PASS), gates/entitlement/404-antes-de-403 reais, stress (2.400 coletas /
+  100 segmentos ~260 ms), determinismo/fingerprint. Correções Q1/Q2
+  pré-existentes no Web (crash da ProjectsPage; deep link em rotas gated) +
+  tipagem Recharts; achado F4 (build sem typecheck; 38 erros TS latentes)
+  endereçado ao Prompt 08. GO — doc/20.
+- [x] Prompt 08 — Hardening e checkpoint final: typecheck real do Web
+  religado (`tsc -b` no build, ADR-074) com os 39 erros TS de baseline
+  quitados mecanicamente sem flexibilizar tsconfig; fixes F1/F2/F3 sob
+  guarda estática (`tests/hardening.test.mjs`); QA promovido a ferramenta
+  permanente (`scripts/qa/growth_qa_{seed,run}.py`, dados sintéticos, env
+  obrigatória) e E2E opt-in com credenciais via env; varreduras de
+  segurança/linguagem limpas; regressão definitiva (Backend verde em 3.13;
+  Web typecheck 0 erros, 1233/1233, build, lint sem erro novo); commits
+  auditáveis e checkpoint em
+  `doc/21-checkpoint-mvp1-potencial-crescimento.md`.
+  **Status: MVP TECNICAMENTE VALIDADO / FEATURE INATIVA.** Evoluções
+  futuras (ponderação, comparação temporal, mapa de município, persistência
+  de execuções, ativação comercial) permanecem NÃO iniciadas e dependem de
+  decisão de produto.

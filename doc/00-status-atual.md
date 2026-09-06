@@ -288,3 +288,26 @@ Higiene: `.env` do backend NÃO é rastreado pelo git (confirmado por
 `git ls-files --error-unmatch`); nenhum segredo/dado pessoal nos commits.
 Checkpoint completo, commits e HEADs:
 `doc/21-checkpoint-mvp1-potencial-crescimento.md`.
+
+## Hardening do ambiente QA local + correção do seed (Prompt 15 — Backend)
+
+Executado em 2026-09-06. Defeito **QA-BE-001** reproduzido e corrigido:
+`scripts/seed_qa_dataset.py` gravava CNPJ com máscara (18 caracteres) em
+`companies.cnpj`, `VARCHAR(14)` desde a migration `e7f9a2b3c4d5`, falhando com
+`StringDataRightTruncation`. Causa raiz: seed desatualizado (schema e
+validador corretos; nada foi alargado). O seed passou a usar CNPJs sintéticos
+válidos sem máscara, validados pelo mesmo `schemas.normalize_cnpj` da API e
+checados contra o limite lido do modelo; a senha embutida foi removida
+(`QA_DEFAULT_PASSWORD` obrigatória); perfis `Gerente`/`Agente` são criados se
+faltarem; setores ganharam vínculo N:N em `setor_agentes` e três abordagens de
+campo determinísticas. Regressão em `tests/test_seed_qa_dataset.py`
+(SQLite com `CHECK` real + seed completo duas vezes em PostGIS descartável,
+opt-in por `P360_QA_DATABASE_URL`).
+
+Ambiente QA local reproduzível documentado em `doc/22-qa-local.md`
+(compose `db`+`api`, API na porta host 8000, migrations, seed, `adb reverse`,
+`API_BASE_URL` por ambiente). O banco local do compose estava em
+`b5c6d7e8f9a0` e foi levado ao head `c6d7e8f9a0b1`. Smoke após o seed:
+`/login/token`, `/usuarios/me/`, `/projetos/`, `/controle-campo` e `/setores`
+com 200 para o Gerente QA (com `CAMPO_MONITORAR`) e 403 para o Agente QA.
+Nenhuma regra de produção, contrato de API, schema ou migration alterados.

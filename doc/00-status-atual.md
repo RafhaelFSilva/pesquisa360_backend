@@ -311,3 +311,21 @@ Ambiente QA local reproduzível documentado em `doc/22-qa-local.md`
 `/login/token`, `/usuarios/me/`, `/projetos/`, `/controle-campo` e `/setores`
 com 200 para o Gerente QA (com `CAMPO_MONITORAR`) e 403 para o Agente QA.
 Nenhuma regra de produção, contrato de API, schema ou migration alterados.
+
+## Staging por `git push` — infraestrutura versionada (Prompt 17 — Backend)
+
+Executado em 2026-09-06. Sem servidor nem hostname de staging aprovados
+(decisão do time nesta rodada) e sem acesso SSH não interativo ao VPS de
+produção, nada foi provisionado remotamente: **STAGING HOST = BLOQUEADO**.
+O que foi entregue, versionado: `docker-compose.staging.yml` (projeto
+`pesquisa360_staging` isolado, API só em `127.0.0.1:8010`, Postgres sem porta
+publicada), `.env.staging.example`, `deploy/staging/deploy.sh` (up → healthy
+→ `alembic upgrade head` → seed QA por env → smoke), vhost nginx modelo e o
+workflow `.github/workflows/deploy-staging.yml` (deploy por push na branch
+`staging`, gated por secrets). Ensaio local completo em `doc/23-staging.md`:
+migrations do zero ao head, seed idempotente, RBAC e isolamento de tenant.
+Defeito **INFRA-001** encontrado e corrigido: a imagem Docker não era
+autocontida (`static/`, `migrations/`, `alembic.ini` e `scripts/` faltavam;
+só funcionava com o bind mount do compose de DEV) — regressão em
+`tests/test_dockerfile_packaging.py`. RC-BLK-02/03/04 permanecem bloqueados
+para staging; o QA local (doc/22) continua válido.

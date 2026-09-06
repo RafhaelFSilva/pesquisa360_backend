@@ -1,0 +1,60 @@
+# Pesquisa360 - STAGING (QA remoto). Isolado da producao e do compose de DEV:
+#   - projeto compose proprio:   -p pesquisa360_staging
+#   - containers proprios:       pesquisa360_staging_db / pesquisa360_staging_api
+#   - volumes proprios:          staging_pgdata / staging_uploads
+#   - Postgres SEM porta publicada (so a rede interna do projeto)
+#   - API publicada SOMENTE em 127.0.0.1:8010 (o nginx do host faz o HTTPS)
+#   - codigo copiado na imagem (sem bind mount de hot-reload)
+#
+# Uso (ver doc/23-staging.md):
+#   docker compose -p pesquisa360_staging -f docker-compose.staging.yml --env-file .env.staging up -d --build
+#
+# `.env.staging` NUNCA e versionado (.gitignore); o modelo e `.env.staging.example`.
+services:
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: pesquisa360_staging_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+    # Sem `ports:` de proposito: o banco de staging nao e alcancavel de fora.
+    volumes:
+      - staging_pgdata:/var/lib/postgresql/data/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    image: pesquisa360_staging_api:latest
+    container_name: pesquisa360_staging_api
+    restart: unless-stopped
+    env_file:
+      - .env.staging
+    environment:
+      # `staging` NAO e producao: o seed QA continua permitido e /docs segue
+      # registrado (ADR-038 so desliga a documentacao com APP_ENV=production).
+      APP_ENV: ${APP_ENV:-staging}
+    ports:
+      - "${STAGING_API_BIND:-127.0.0.1}:${STAGING_API_PORT:-8010}:8000"
+    volumes:
+      # Sem bind mount de codigo: a imagem e autocontida (pacote, static,
+      # migrations, alembic.ini e scripts entram no build - ver Dockerfile).
+      - staging_uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  staging_pgdata:
+  staging_uploads:

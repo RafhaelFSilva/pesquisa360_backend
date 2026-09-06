@@ -112,3 +112,6 @@ static/uploads/
 /data/imports/setores/*
 !/data/imports/setores/.gitkeep
 !/data/imports/setores/README.md
+
+# Modelo do ambiente de staging (sem segredos) permanece rastreavel
+!.env.staging.example

@@ -1,0 +1,64 @@
+# Deploy de STAGING por `git push` (branch `staging`) ou manual.
+#
+# Pre-requisitos (secrets do repositorio; NENHUM valor fica no Git):
+#   STAGING_SSH_HOST   hostname/IP do servidor de staging aprovado
+#   STAGING_SSH_USER   usuario de deploy (sem root)
+#   STAGING_SSH_KEY    chave privada dedicada ao deploy (par gerado para isto)
+#   STAGING_SSH_PORT   opcional (default 22)
+#   STAGING_APP_DIR    checkout do backend no servidor (ex.: /opt/pesquisa360-staging)
+#   QA_DEFAULT_PASSWORD  opcional: se presente, o seed QA roda apos as migrations
+#
+# O servidor precisa ter: docker + compose v2, o repositorio clonado em
+# STAGING_APP_DIR, `.env.staging` preenchido a partir de `.env.staging.example`
+# e o nginx/certbot do vhost (deploy/staging/nginx.api-staging.conf.example).
+#
+# Enquanto os secrets nao existirem o job falha no primeiro passo, de
+# proposito: nada e inferido.
+name: Deploy staging
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Conferir secrets obrigatorios
+        env:
+          HOST: ${{ secrets.STAGING_SSH_HOST }}
+          USER: ${{ secrets.STAGING_SSH_USER }}
+          KEY: ${{ secrets.STAGING_SSH_KEY }}
+          APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+        run: |
+          for v in HOST USER KEY APP_DIR; do
+            if [ -z "${!v}" ]; then echo "::error::secret STAGING_SSH_${v} (ou STAGING_APP_DIR) ausente"; missing=1; fi
+          done
+          [ -z "${missing:-}" ] || exit 1
+
+      - name: Deploy via SSH (git pull + compose + migrate + seed + smoke)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.STAGING_SSH_HOST }}
+          username: ${{ secrets.STAGING_SSH_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          port: ${{ secrets.STAGING_SSH_PORT || 22 }}
+          envs: CONFIRM_QA_SEED,QA_DEFAULT_PASSWORD,APP_DIR,TARGET_SHA
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd "$APP_DIR"
+            git fetch --prune origin
+            git checkout --quiet --detach "$TARGET_SHA"
+            bash deploy/staging/deploy.sh
+        env:
+          APP_DIR: ${{ secrets.STAGING_APP_DIR }}
+          TARGET_SHA: ${{ github.sha }}
+          CONFIRM_QA_SEED: ${{ secrets.QA_DEFAULT_PASSWORD != '' && 'SEED_QA_DATASET' || '' }}
+          QA_DEFAULT_PASSWORD: ${{ secrets.QA_DEFAULT_PASSWORD }}

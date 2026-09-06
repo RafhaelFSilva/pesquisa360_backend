@@ -1,0 +1,27 @@
+# Pesquisa360 - vhost nginx do STAGING (modelo). Instalar em
+# /etc/nginx/sites-available/<HOST_STAGING> e habilitar com um symlink em
+# sites-enabled. Substituir <HOST_STAGING> pelo hostname APROVADO (nenhum
+# nome deve ser inventado). O bloco 443 e gerado/gerenciado pelo certbot:
+#
+#   sudo certbot --nginx -d <HOST_STAGING>
+#
+# Depois do certbot, o proprio nginx redireciona 80 -> 443. Nao copiar
+# certificados de producao; cada hostname tem o seu (Let's Encrypt).
+server {
+    listen 80;
+    listen [::]:80;
+    server_name <HOST_STAGING>;
+
+    # Limite compativel com UPLOAD_MAX_SIZE_BYTES (10 MiB) + folga.
+    client_max_body_size 12m;
+
+    location / {
+        proxy_pass         http://127.0.0.1:8010;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+    }
+}

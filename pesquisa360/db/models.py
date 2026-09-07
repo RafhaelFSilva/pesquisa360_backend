@@ -1,5 +1,5 @@
 # pesquisa360/db/models.py
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_, Float, Index, UniqueConstraint, CheckConstraint, ForeignKeyConstraint, Numeric, text, JSON
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Date, Text, DateTime, and_, Float, Index, UniqueConstraint, CheckConstraint, ForeignKeyConstraint, Numeric, Uuid, text, JSON
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.dialects.postgresql import JSONB
 from geoalchemy2 import Geometry
@@ -75,7 +75,9 @@ class Usuario(Base):
     perfil_id = Column(Integer, ForeignKey("perfis.id"), nullable=False)
     perfil = relationship("Perfil")
     projetos = relationship("Projeto", back_populates="coordenador")
-    coletas = relationship("Coleta", back_populates="agente")
+    coletas = relationship(
+        "Coleta", back_populates="agente", foreign_keys="Coleta.agente_id"
+    )
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False) # Note: nullable=False
     company = relationship("Company", back_populates="users")
     atribuicoes_setores = relationship(
@@ -378,6 +380,20 @@ class Coleta(Base):
     __table_args__ = (
         UniqueConstraint("company_id", "client_uuid", name="uq_coletas_company_client_uuid"),
         Index("ix_coletas_setor_id", "setor_id"),
+        Index(
+            "ix_coletas_company_seed_run_id",
+            "company_id",
+            "seed_run_id",
+            postgresql_where=text("seed_run_id IS NOT NULL"),
+            sqlite_where=text("seed_run_id IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "(is_synthetic IS TRUE AND seed_run_id IS NOT NULL "
+            "AND synthetic_source IS NOT NULL AND synthetic_operator_id IS NOT NULL) OR "
+            "(is_synthetic IS FALSE AND seed_run_id IS NULL "
+            "AND synthetic_source IS NULL AND synthetic_operator_id IS NULL)",
+            name="ck_coletas_synthetic_metadata",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -386,6 +402,12 @@ class Coleta(Base):
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     client_uuid = Column(String(36), nullable=False)
     setor_id = Column(Integer, ForeignKey("setores.id"), nullable=True)
+
+    # Dados demonstrativos nunca podem ser indistinguiveis de atividade real.
+    is_synthetic = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    seed_run_id = Column(Uuid(as_uuid=True), nullable=True)
+    synthetic_source = Column(String(100), nullable=True)
+    synthetic_operator_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
 
     # --- NOVOS CAMPOS DE AUDITORIA ---
     foi_offline = Column(Boolean, default=False)  # Indica se o app estava offline
@@ -402,7 +424,8 @@ class Coleta(Base):
     inconformidade_localizacao = Column(Boolean, default=False, nullable=False)
 
     pesquisa = relationship("Pesquisa", back_populates="coletas")
-    agente = relationship("Usuario", back_populates="coletas")
+    agente = relationship("Usuario", back_populates="coletas", foreign_keys=[agente_id])
+    synthetic_operator = relationship("Usuario", foreign_keys=[synthetic_operator_id])
     setor = relationship("Setor", back_populates="coletas")
     respostas = relationship("Resposta", back_populates="coleta", cascade="all, delete-orphan")
 

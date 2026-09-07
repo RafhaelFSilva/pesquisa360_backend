@@ -137,7 +137,9 @@ class ImportQaApuracaoEspontaneaTests(unittest.TestCase):
                     data_fim_coleta DATETIME,
                     localizacao_inicio BLOB,
                     localizacao_fim BLOB,
-                    inconformidade_localizacao BOOLEAN NOT NULL DEFAULT 0
+                    inconformidade_localizacao BOOLEAN NOT NULL DEFAULT 0,
+                    is_synthetic BOOLEAN NOT NULL DEFAULT 0, seed_run_id CHAR(32),
+                    synthetic_source VARCHAR(100), synthetic_operator_id INTEGER
                 )
             """))
             connection.execute(text("""

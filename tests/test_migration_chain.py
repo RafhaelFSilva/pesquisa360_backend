@@ -17,7 +17,7 @@ from alembic.script import ScriptDirectory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "b5c6d7e8f9a0"
+HEAD_REVISION = "c6d7e8f9a0b1"
 EXPECTED_LINEAGE = [
     "91fbe6db1f17",
     "3e4de16d893c",
@@ -48,6 +48,7 @@ EXPECTED_LINEAGE = [
     "f3a4b5c6d7e8",
     "a4b5c6d7e8f9",
     "b5c6d7e8f9a0",
+    "c6d7e8f9a0b1",
 ]
 
 
@@ -140,13 +141,22 @@ class MigrationChainTests(unittest.TestCase):
                 """INSERT INTO pesquisas (id, titulo, ativo, projeto_id)
                    VALUES (902, 'Pesquisa legada', 1, 901)"""
             )
+            coleta_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(coletas)")
+            }
             for index in range(collection_count):
+                columns = ["id", "pesquisa_id", "agente_id", "data_inicio_coleta",
+                           "foi_offline", "status_sincronizacao",
+                           "inconformidade_localizacao"]
+                values = [910 + index, 902, 900, "2026-01-01 10:00:00", 0,
+                          "sincronizado", 0]
+                if "company_id" in coleta_columns:
+                    columns.extend(["company_id", "client_uuid"])
+                    values.extend([company_id, f"00000000-0000-0000-0000-{index:012d}"])
+                placeholders = ",".join("?" for _ in columns)
                 connection.execute(
-                    """INSERT INTO coletas
-                       (id, pesquisa_id, agente_id, data_inicio_coleta, foi_offline,
-                        status_sincronizacao, inconformidade_localizacao)
-                       VALUES (?, 902, 900, '2026-01-01 10:00:00', 0, 'sincronizado', 0)""",
-                    (910 + index,),
+                    f"INSERT INTO coletas ({','.join(columns)}) VALUES ({placeholders})",
+                    values,
                 )
             connection.commit()
             return company_id
@@ -164,6 +174,38 @@ class MigrationChainTests(unittest.TestCase):
             ScriptDirectory.from_config(Config("alembic.ini")).get_heads(),
             [HEAD_REVISION],
         )
+
+    def test_synthetic_marker_upgrade_downgrade_and_existing_rows(self):
+        with self.temporary_database("b5c6d7e8f9a0") as (db_path, database_url):
+            self.seed_valid_legacy_data(db_path)
+            self.run_alembic("upgrade", "head", database_url=database_url)
+
+            connection = sqlite3.connect(db_path)
+            try:
+                row = connection.execute(
+                    """SELECT is_synthetic, seed_run_id, synthetic_source,
+                              synthetic_operator_id
+                         FROM coletas WHERE id = 910"""
+                ).fetchone()
+                self.assertEqual(row, (0, None, None, None))
+                columns = {
+                    item[1] for item in connection.execute("PRAGMA table_info(coletas)")
+                }
+                self.assertIn("seed_run_id", columns)
+            finally:
+                connection.close()
+
+            self.run_alembic("downgrade", "b5c6d7e8f9a0", database_url=database_url)
+            connection = sqlite3.connect(db_path)
+            try:
+                columns = {
+                    item[1] for item in connection.execute("PRAGMA table_info(coletas)")
+                }
+                self.assertNotIn("seed_run_id", columns)
+            finally:
+                connection.close()
+            self.run_alembic("upgrade", "head", database_url=database_url)
+            self.assert_current_output_contains(db_path, HEAD_REVISION)
 
     def test_expected_revisions_are_in_single_lineage_to_head(self):
         script = ScriptDirectory.from_config(Config("alembic.ini"))

@@ -126,6 +126,7 @@ class TentativaCampoTests(unittest.TestCase):
                     status_sincronizacao TEXT, data_inicio_coleta DATETIME NOT NULL,
                     data_fim_coleta DATETIME, localizacao_inicio BLOB,
                     localizacao_fim BLOB, inconformidade_localizacao BOOLEAN NOT NULL DEFAULT 0,
+                    is_synthetic BOOLEAN NOT NULL DEFAULT 0, seed_run_id CHAR(32), synthetic_source VARCHAR(100), synthetic_operator_id INTEGER,
                     CONSTRAINT uq_coletas_company_client_uuid UNIQUE (company_id, client_uuid)
                 )
             """))

@@ -509,8 +509,21 @@ Cria setor.
 
 Remove setor.
 
-**Status atual:** delete físico.  
-**Recomendação futura:** avaliar soft delete para preservar histórico operacional.
+**Status atual:** delete físico, protegido por histórico. Cadeia de tenant
+primeiro (404 para projeto/pesquisa/setor invisível — nunca 409 para outro
+tenant); depois `assegurar_setor_excluivel`:
+
+- **409** `{"detail": "Este setor possui coletas vinculadas e não pode ser excluído."}`
+  quando existe coleta com `setor_id` explícito (FK `fk_coletas_setor_id_setores`, NO ACTION);
+- **409** `{"detail": "Este setor não pode ser excluído porque possui histórico em um ou mais cenários da Gestão de Lideranças. ..."}`
+  quando existe linha em `lideranca_cenario_setores` — em cenário RASCUNHO,
+  ATIVO **ou ARQUIVADO** (Hardening P0, ADR-075; FK
+  `fk_lideranca_cenario_setores_setor_id_setores`, ON DELETE RESTRICT).
+
+A pré-checagem dá a mensagem; a FK do banco garante a integridade mesmo na
+corrida entre o EXISTS e o commit (a violação é traduzida em 409, nunca 500).
+Setor sem coleta e sem cenário é excluído fisicamente como antes.
+**Recomendação futura:** soft delete de Setor.
 
 ### PATCH `/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores/{setor_id}`
 
@@ -1414,3 +1427,107 @@ sem strings numéricas e sem arredondamento de apresentação;
 `weighted_base`/`lift`/intervalos indisponíveis viajam como null. Execução
 síncrona e efêmera: nada é persistido. Contrato completo em
 `doc/17-inteligencia-eleitoral-potencial-crescimento-api.md`.
+
+## Gestão de Lideranças — Cenários de Base Eleitoral Operacional (ADR-075)
+
+Camada exclusiva da Gestão de Lideranças. Mesmo router e mesma política de
+permissão: `LIDERANCA_VER` lê, `LIDERANCA_GERENCIAR` escreve (a escrita ainda
+passa pela política de perfil do serviço de lideranças). Nenhuma rota aceita
+`company_id`; cenário, pesquisa ou setor de outro tenant respondem **404**
+(nunca 403). Todas as rotas vivem sob `/projetos/{projeto_id}/liderancas/cenarios`
+e o `pesquisa_id` é sempre validado contra o projeto do path.
+
+| Método | Rota | Efeito |
+|---|---|---|
+| GET | `/cenarios?pesquisa_id=` | lista `LiderancaCenarioResumo[]` (todas as ondas se omitido) |
+| GET | `/cenarios/ativo?pesquisa_id=` | `{base_calculo, cenario}` — `cenario: null` no modo PADRAO |
+| POST | `/cenarios` | cria RASCUNHO → 201 `LiderancaCenarioDetalhe` |
+| GET | `/cenarios/{id}` | detalhe com uma linha por setor da onda |
+| PATCH | `/cenarios/{id}` | metadados (`nome`, `metodologia`, `data_referencia`); só RASCUNHO (409) |
+| PUT | `/cenarios/{id}/setores` | lote transacional; substitui todos os valores; só RASCUNHO (409) |
+| POST | `/cenarios/{id}/duplicar` | 201 novo RASCUNHO "Cópia de <nome>" |
+| POST | `/cenarios/{id}/ativar` | valida e ativa; ATIVO anterior da onda vira ARQUIVADO na mesma transação |
+| POST | `/cenarios/{id}/arquivar` | RASCUNHO/ATIVO → ARQUIVADO; arquivar o ATIVO devolve o modo PADRAO |
+
+Payloads (todos `extra="forbid"`):
+
+```json
+POST /cenarios
+{ "pesquisa_id": 10, "nome": "Campo Setembro 2026",
+  "metodologia": "Universo operacional das áreas de influência", "data_referencia": "2026-09-16" }
+
+PUT /cenarios/{id}/setores
+{ "setores": [
+  { "setor_id": 10, "eleitorado_operacional": 2211, "observacao": "Área de influência" },
+  { "setor_id": 11, "eleitorado_operacional": 1817, "observacao": null } ] }
+```
+
+`eleitorado_operacional` é `StrictInt >= 0`: `"2211"`, `2211.5`, `true`,
+`null` e NaN respondem 422; `setor_id` repetido no lote → 422; setor de outra
+onda/tenant → 404 e o lote inteiro é rejeitado (nada meio salvo). O backend
+não bloqueia operacional maior que o oficial (a UI apenas destaca).
+
+Resposta `LiderancaCenarioDetalhe`: resumo (`id`, `pesquisa_id`, `nome`,
+`metodologia`, `data_referencia`, `status` ∈ RASCUNHO/ATIVO/ARQUIVADO,
+`quantidade_setores_configurados`, `total_eleitorado_operacional`,
+`total_eleitorado_oficial_referencia` — `null` se algum setor configurado não
+tinha referência —, `criado_em`, `atualizado_em`, `ativado_em`,
+`arquivado_em`) + `setores[]` com, para **todo** setor da onda: `setor_id`,
+`setor_nome`, `configurado`, `status_oficial` (mesmos códigos de
+`StatusUniversoEleitoralSetor`), `eleitorado_oficial_atual` (Base de hoje,
+somente leitura), `eleitorado_oficial_referencia` (snapshot),
+`eleitorado_operacional`, `peso_operacional` (operacional / total × 100, duas
+casas; `null` com total zero) e `observacao`. O oficial de todos os setores é
+lido em lote (uma query de composição), nunca uma por linha.
+
+Ativação (`POST /ativar`) valida no backend: nome presente, ao menos um setor,
+soma operacional > 0, nenhum valor inválido, sem setor duplicado e **todo
+setor com liderança ativa vinculada na onda configurado**. Falha → 422
+`{"detail": {"mensagem": "Cenario nao pode ser ativado.", "problemas": [...]}}`;
+já ATIVO ou ARQUIVADO → 409; ativação concorrente perdida para o índice
+parcial → 409.
+
+### `POST /projetos/{projeto_id}/liderancas/analise` — resposta alvo explícita
+
+`liderancas[].resultado_principal` (campo já existente, agora contrato
+declarado para a UI):
+
+```json
+"resultado_principal": {
+  "escopo_amostral": "SETOR",
+  "total_entrevistas": 44,
+  "base_valida": 44,
+  "respostas_alvo": 3,
+  "taxa_alvo": 0.0681818,
+  "votos_projetados_alvo": 611,
+  "gap_plus": 588
+}
+```
+
+- `respostas_alvo` (int ≥ 0): **número de entrevistas/coletas distintas
+  dentro da amostra efetivamente considerada que apresentaram a
+  resposta-alvo**. Unidade = entrevista (nunca voto). Contado por coleta em
+  `_medir` — várias linhas de resposta da mesma coleta contam uma vez.
+- `base_valida`: denominador da taxa — entrevistas da amostra com resposta
+  reportável para a pergunta alvo (`total_entrevistas` inclui as sem resposta
+  válida). Invariante: `0 ≤ respostas_alvo ≤ base_valida ≤ total_entrevistas`
+  e `taxa_alvo = respostas_alvo / base_valida` quando `base_valida > 0`.
+- Sem amostra válida: `base_valida = 0`, `respostas_alvo = 0`,
+  `taxa_alvo = null`, `indisponibilidade = SEM_RESPOSTAS_VALIDAS` — a UI
+  mostra "Não disponível", nunca "0 de 0". Zero com amostra (`0 de 38`,
+  `taxa_alvo = 0.0`) é medição, não ausência.
+- `recorte_filtrado` traz o mesmo trio para o recorte diagnóstico.
+- O Web nunca reconstrói o numerador pelo percentual. Nada é persistido.
+
+### `POST /projetos/{projeto_id}/liderancas/analise` (aditivo)
+
+- `base_calculo: {modo: "PADRAO" | "CENARIO_OPERACIONAL", cenario_id,
+  cenario_nome, data_referencia, total_eleitorado_operacional}` — declara a
+  base que alimentou os números.
+- `liderancas[].universo_eleitoral.origem: "BASE_OFICIAL" |
+  "CENARIO_OPERACIONAL" | null`.
+- novo motivo em `indisponibilidade`: `CENARIO_SETOR_NAO_CONFIGURADO`
+  (cenário ATIVO sem valor para o setor da liderança; universo `null`, sem
+  fallback para o oficial).
+
+Sem cenário ATIVO o contrato e os números são idênticos aos anteriores.

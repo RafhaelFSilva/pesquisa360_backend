@@ -1,7 +1,7 @@
 # pesquisa360/schemas.py (versão final simplificada)
 
 from enum import Enum
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, StrictInt, field_validator, model_validator, ConfigDict
 from typing import Optional, List, Any, Union, Dict, Literal
 from datetime import date, datetime, timezone
 from enum import StrEnum
@@ -2242,6 +2242,9 @@ class MotivoIndisponibilidadeLideranca(StrEnum):
     PARAMETROS_ELEITORAIS_AUSENTES = "PARAMETROS_ELEITORAIS_AUSENTES"
     SEM_RESPOSTAS_VALIDAS = "SEM_RESPOSTAS_VALIDAS"
     PERGUNTA_ALVO_INVALIDA = "PERGUNTA_ALVO_INVALIDA"
+    # ADR-075: cenario ATIVO sem configuracao para o setor da lideranca. Erro
+    # explicito de configuracao -- nunca fallback silencioso para o oficial.
+    CENARIO_SETOR_NAO_CONFIGURADO = "CENARIO_SETOR_NAO_CONFIGURADO"
 
 
 class EscopoAmostralLideranca(StrEnum):
@@ -2417,9 +2420,18 @@ class LiderancaAnaliseRequest(BaseModel):
         return self
 
 
+class OrigemUniversoEleitoralLideranca(StrEnum):
+    """De onde veio o eleitorado que alimentou a projecao (ADR-075)."""
+
+    BASE_OFICIAL = "BASE_OFICIAL"
+    CENARIO_OPERACIONAL = "CENARIO_OPERACIONAL"
+
+
 class LiderancaUniversoEleitoral(BaseModel):
     eleitorado_apto: Optional[int] = None
     votos_validos_projetados: Optional[int] = None
+    # Aditivo (ADR-075): None quando nao ha universo.
+    origem: Optional[OrigemUniversoEleitoralLideranca] = None
 
 
 class LiderancaResultadoPrincipal(BaseModel):
@@ -2510,12 +2522,163 @@ class LiderancaAnaliseItem(BaseModel):
     indisponibilidade: Optional[MotivoIndisponibilidadeLideranca] = None
 
 
+class ModoBaseCalculoLiderancas(StrEnum):
+    """PADRAO = comportamento legado (Base Eleitoral oficial);
+    CENARIO_OPERACIONAL = cenario ATIVO alimenta o universo por setor."""
+
+    PADRAO = "PADRAO"
+    CENARIO_OPERACIONAL = "CENARIO_OPERACIONAL"
+
+
+class BaseCalculoLiderancas(BaseModel):
+    """Qual base alimenta os calculos territoriais da Gestao de Liderancas.
+
+    A UI nunca deve obrigar o usuario a descobrir implicitamente qual base
+    esta em uso: o contrato declara.
+    """
+
+    modo: ModoBaseCalculoLiderancas
+    cenario_id: Optional[int] = None
+    cenario_nome: Optional[str] = None
+    data_referencia: Optional[date] = None
+    total_eleitorado_operacional: Optional[int] = None
+
+
 class LiderancaAnaliseResponse(BaseModel):
     projeto_id: int
     pesquisa_id: int
     alvo: LiderancaAnaliseAlvo
     filtros_respostas: List[CruzamentoFiltroResposta] = Field(default_factory=list)
+    # Aditivo (ADR-075): consumidores antigos continuam lendo o resto.
+    base_calculo: Optional[BaseCalculoLiderancas] = None
     liderancas: List[LiderancaAnaliseItem] = Field(default_factory=list)
+
+
+# --- Cenarios de Base Eleitoral Operacional (ADR-075) -----------------------
+# Nenhum request aceita company_id: o tenant vem do JWT -> projeto -> pesquisa.
+
+
+class StatusCenarioLiderancas(StrEnum):
+    RASCUNHO = "RASCUNHO"
+    ATIVO = "ATIVO"
+    ARQUIVADO = "ARQUIVADO"
+
+
+def _nome_cenario_limpo(value: str) -> str:
+    texto = value.strip()
+    if not texto:
+        raise ValueError("nome e obrigatorio")
+    return texto
+
+
+class LiderancaCenarioCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pesquisa_id: int
+    nome: str = Field(min_length=1, max_length=200)
+    metodologia: Optional[str] = Field(default=None, max_length=4000)
+    data_referencia: Optional[date] = None
+
+    @field_validator("nome")
+    @classmethod
+    def exigir_nome(cls, value: str) -> str:
+        return _nome_cenario_limpo(value)
+
+
+class LiderancaCenarioUpdate(BaseModel):
+    """Somente metadados e somente em RASCUNHO; valores por setor tem rota propria."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nome: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    metodologia: Optional[str] = Field(default=None, max_length=4000)
+    data_referencia: Optional[date] = None
+
+    @field_validator("nome")
+    @classmethod
+    def exigir_nome(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else _nome_cenario_limpo(value)
+
+
+class LiderancaCenarioSetorInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    setor_id: int
+    # StrictInt: "2211", 2211.0 e NaN sao 422. O valor persistido e a fonte
+    # da configuracao metodologica, nunca uma string formatada.
+    eleitorado_operacional: StrictInt = Field(ge=0)
+    observacao: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("observacao")
+    @classmethod
+    def limpar_observacao(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        texto = value.strip()
+        return texto or None
+
+
+class LiderancaCenarioSetoresRequest(BaseModel):
+    """Lote: substitui integralmente a configuracao territorial do cenario."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    setores: List[LiderancaCenarioSetorInput] = Field(default_factory=list)
+
+    @field_validator("setores")
+    @classmethod
+    def sem_setor_duplicado(cls, value: List[LiderancaCenarioSetorInput]):
+        ids = [item.setor_id for item in value]
+        if len(ids) != len(set(ids)):
+            raise ValueError("setores nao pode repetir setor_id")
+        return value
+
+
+class LiderancaCenarioSetorItem(BaseModel):
+    """Uma linha da tabela do cenario: todo setor da onda aparece, configurado ou nao.
+
+    `eleitorado_oficial_atual` e a Base Eleitoral de HOJE (somente leitura);
+    `eleitorado_oficial_referencia` e o snapshot gravado no cenario. Os dois
+    coexistem de proposito: a UI mostra o oficial e o operacional lado a lado.
+    """
+
+    setor_id: int
+    setor_nome: str
+    configurado: bool
+    status_oficial: StatusUniversoEleitoralSetor
+    eleitorado_oficial_atual: Optional[int] = None
+    eleitorado_oficial_referencia: Optional[int] = None
+    eleitorado_operacional: Optional[int] = None
+    # Derivado no backend: operacional / total operacional x 100 (2 casas).
+    peso_operacional: Optional[float] = None
+    observacao: Optional[str] = None
+
+
+class LiderancaCenarioResumo(BaseModel):
+    id: int
+    pesquisa_id: int
+    nome: str
+    metodologia: Optional[str] = None
+    data_referencia: Optional[date] = None
+    status: StatusCenarioLiderancas
+    quantidade_setores_configurados: int = 0
+    total_eleitorado_operacional: int = 0
+    total_eleitorado_oficial_referencia: Optional[int] = None
+    criado_em: datetime
+    atualizado_em: datetime
+    ativado_em: Optional[datetime] = None
+    arquivado_em: Optional[datetime] = None
+
+
+class LiderancaCenarioDetalhe(LiderancaCenarioResumo):
+    setores: List[LiderancaCenarioSetorItem] = Field(default_factory=list)
+
+
+class LiderancaCenarioAtivoResponse(BaseModel):
+    """Base de calculo vigente da onda; `cenario` e None no modo PADRAO."""
+
+    base_calculo: BaseCalculoLiderancas
+    cenario: Optional[LiderancaCenarioResumo] = None
 
 
 # --- Atualização de referências ---

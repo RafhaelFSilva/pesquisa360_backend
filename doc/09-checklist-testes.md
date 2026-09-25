@@ -851,3 +851,90 @@ completos: doc/20.
 - [x] Varreduras: sem `company_id` literal no código novo, sem
   score/ranking/projeção/causal fora de documentação de proibição, sem
   TODO/console.log/print de debug no código novo, `.env` não rastreado.
+
+## Gestão de Lideranças — Cenários de Base Eleitoral Operacional (ADR-075)
+
+Automatizado: `tests/test_lideranca_cenarios.py` (modelagem, ciclo de vida,
+setores em lote, ativação/concorrência, histórico/snapshot, integração com os
+cálculos, multitenancy, API) e Web `tests/liderancaCenarios.test.mjs`.
+
+QA manual (Gerente da Empresa QA A, projeto com Base Eleitoral validada,
+setores com composição e ao menos uma liderança com setor):
+
+- [ ] Abrir Gestão de Lideranças; dados existentes continuam carregando.
+- [ ] Indicador "Base de cálculo: Base padrão (Base Eleitoral oficial)" nas
+  views Lista e Mapa sem cenário ativo.
+- [ ] Aba "Base operacional": cabeçalho com "Nenhum" cenário ativo e texto
+  "Não altera a Base Eleitoral oficial".
+- [ ] Criar cenário "Campo Setembro" com metodologia e data de referência.
+- [ ] Conferir o eleitorado oficial exibido por setor (igual ao universo do
+  setor na tela de Setores).
+- [ ] Informar eleitorado operacional manual (ex.: 2.211 / 1.817); "2.211",
+  "2211" e "2 211" são aceitos; "-1", "2,5" e "abc" mostram erro na linha.
+- [ ] Salvar; recarregar a página (F5); valores, total operacional e pesos
+  persistidos; pesos somam 100,00%.
+- [ ] Ativar; badge ATIVO; indicador passa a "Cenário "Campo Setembro"" com
+  total operacional e data de referência nas views Lista e Mapa.
+- [ ] Detalhe da liderança com setor: "Origem do eleitorado: Cenário
+  operacional" e universo = valor operacional do setor; Projeção/Gap
+  recalculados; liderança sem setor mantém universo pelos bairros (origem
+  Base Eleitoral oficial).
+- [ ] Tela de Setores / Base Eleitoral: eleitorado oficial NÃO mudou.
+- [ ] Tentar editar o ATIVO: inputs desabilitados e aviso "valores somente
+  leitura"; via API `PUT /setores` → 409.
+- [ ] Duplicar; a cópia abre em RASCUNHO como "Cópia de Campo Setembro";
+  editar a cópia; o original permanece intacto.
+- [ ] Ativar a cópia após confirmar: o original aparece ARQUIVADO, a cópia
+  ATIVA, indicador troca imediatamente (sem F5).
+- [ ] Vincular uma liderança a um setor sem valor no cenário ativo: detalhe
+  mostra "O cenário ativo não possui eleitorado operacional para o setor…",
+  sem projeção (nunca o oficial por baixo).
+- [ ] Ativar um RASCUNHO sem esse setor configurado → mensagem 422 com os
+  setores faltantes.
+- [ ] Setor com múltiplas lideranças: todas usam o mesmo operacional.
+- [ ] Desativar o ATIVO (confirmação): indicador volta a "Base padrão" e os
+  números voltam aos anteriores.
+- [ ] Tenant B (gerente.qa.b): não vê cenários de A; qualquer URL de cenário
+  de A responde 404.
+- [ ] Erros de API aparecem como texto (nunca "AxiosError"); valores digitados
+  não se perdem após erro.
+- [ ] Layout em 400px (tabela com rolagem horizontal), console do navegador
+  sem erros.
+
+### Hardening P0 — Setor × Cenário (integridade histórica)
+
+Automatizado: `tests/test_setor_cenario_integridade.py` (19) +
+`tests/test_setor_delete_integridade.py` (fixture espelha a FK RESTRICT).
+
+- [ ] Abrir projeto/pesquisa de QA e criar Setor A (com composição eleitoral).
+- [ ] Criar cenário RASCUNHO; configurar Setor A (oficial 11.053 exibido,
+  operacional 2.211); salvar.
+- [ ] Gestão de Setores: tentar excluir Setor A → mensagem "possui histórico
+  em um ou mais cenários da Gestão de Lideranças"; DevTools: HTTP 409.
+- [ ] Voltar ao cenário: Setor A continua listado, referência 11.053,
+  operacional 2.211.
+- [ ] Ativar o cenário; repetir a exclusão → bloqueio.
+- [ ] Duplicar e ativar a cópia (original vira ARQUIVADO); tentar excluir
+  Setor A → bloqueio (ARQUIVADO protege).
+- [ ] Criar Setor B sem cenário; excluir → sucesso normal.
+- [ ] Recarregar páginas; console sem erros; Gestão de Lideranças e Base
+  Eleitoral oficial inalteradas.
+
+### Resposta alvo explícita (Lista + card do Mapa)
+
+Automatizado: `tests/test_lideranca_resposta_alvo.py` (14) e Web
+`tests/liderancaRespostaAlvo.test.mjs` (11). Manual, com os dados reais da
+captura (projeção e Gap/Plus NÃO podem mudar):
+
+- [ ] Universidade: "Resposta alvo 0 de 38 entrevistas · 0,0%"; Projeção 0;
+  Gap -22 iguais ao baseline.
+- [ ] Congós: "3 de 44 entrevistas · 6,8%"; Daniele e Jesse com o mesmo
+  contador (comportamento atual do escopo Setor); projeção 611 e Daniele
+  +588 inalterados; Jesse mantém seu PLUS.
+- [ ] Zerão: "12 de 30 entrevistas · 40,0%"; projeção e PLUS idênticos.
+- [ ] Lista: coluna "Resposta alvo" entre Meta/Cota e Projeção, formato
+  `3 / 44 · 6,8%`, tooltip com a frase completa; liderança sem projeção
+  mostra "—" (nunca "0 / 0").
+- [ ] Mapa: card sem linha "Taxa alvo" duplicada; "Amostra" continua.
+- [ ] Larguras desktop/intermediária/estreita: tabela sem quebra da célula.
+- [ ] Recorte filtrado continua mostrando só a taxa do recorte.

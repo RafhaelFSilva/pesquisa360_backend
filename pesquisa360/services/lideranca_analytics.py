@@ -28,6 +28,7 @@ from pesquisa360.db import models
 from pesquisa360.services import acessos
 from pesquisa360.services.filtros_universo import aplicar_filtros_respostas
 from pesquisa360.services import base_eleitoral as base_service
+from pesquisa360.services import lideranca_cenario as cenario_service
 from pesquisa360.services.setor_territorio import (
     STATUS_UNIVERSO_DISPONIVEL,
     obter_universo_eleitoral_setor,
@@ -42,6 +43,13 @@ BASE_ELEITORAL_NAO_VALIDADA = "BASE_ELEITORAL_NAO_VALIDADA"
 PARAMETROS_ELEITORAIS_AUSENTES = "PARAMETROS_ELEITORAIS_AUSENTES"
 SEM_RESPOSTAS_VALIDAS = "SEM_RESPOSTAS_VALIDAS"
 PERGUNTA_ALVO_INVALIDA = "PERGUNTA_ALVO_INVALIDA"
+# ADR-075: cenario ATIVO sem valor para o setor da lideranca. Erro explicito
+# de configuracao; nunca fallback silencioso para a Base oficial.
+CENARIO_SETOR_NAO_CONFIGURADO = "CENARIO_SETOR_NAO_CONFIGURADO"
+
+# Origem do universo eleitoral que alimentou a projecao (ADR-075).
+ORIGEM_BASE_OFICIAL = "BASE_OFICIAL"
+ORIGEM_CENARIO_OPERACIONAL = "CENARIO_OPERACIONAL"
 
 ESCOPO_SETOR = "SETOR"
 ESCOPO_PESQUISA = "PESQUISA"
@@ -522,11 +530,18 @@ def analisar_liderancas(
         for setor_id in setores_de_referencia
     }
 
+    # --- base de calculo da onda (ADR-075) ------------------------------------
+    # Resolvida UMA vez por request. Com cenario ATIVO, o universo eleitoral da
+    # lideranca COM setor passa a ser o operacional daquele setor; sem cenario
+    # (modo PADRAO) tudo abaixo segue exatamente o comportamento legado.
+    base_calculo = cenario_service.resolver_base_calculo(db, pesquisa.id)
+
     alvo_set = set(alvo_valores)
     resultado_liderancas = []
     for lideranca in liderancas:
         config = configs.get(lideranca.id)
         territorios = territorios_por_lideranca.get(lideranca.id, [])
+        setor_referencia = config.setor_id if config is not None else None
 
         if config is not None and config.setor_id:
             escopo = ESCOPO_SETOR
@@ -549,19 +564,43 @@ def analisar_liderancas(
         territorios_desatualizados = (
             territorios_fora_da_base(territorios, base.id) if base is not None else []
         )
-        aptos = None if territorios_desatualizados else _aptos_da_lideranca(territorios)
         votos_validos = None
         indisponibilidade = None
-        if base_indisponivel and territorios:
-            indisponibilidade = base_indisponivel
-        elif territorios_desatualizados:
-            indisponibilidade = TERRITORIO_LIDERANCA_BASE_DESATUALIZADA
-        elif base is not None:
-            votos_validos, indisponibilidade = _votos_validos_projetados(aptos, base)
+        origem_universo = None
+        if base_calculo.usa_cenario and setor_referencia is not None:
+            # Cenario ATIVO: o universo e o eleitorado OPERACIONAL do setor de
+            # referencia. Os parametros de projecao (comparecimento x validos)
+            # continuam vindo da Base, como no modo padrao. Setor sem valor no
+            # cenario e indisponibilidade declarada, nao volta ao oficial.
+            aptos = base_calculo.eleitorado_operacional(setor_referencia)
+            if aptos is None:
+                indisponibilidade = CENARIO_SETOR_NAO_CONFIGURADO
+            elif base is None:
+                indisponibilidade = PARAMETROS_ELEITORAIS_AUSENTES
+            elif base.status != base_service.STATUS_VALIDADA:
+                indisponibilidade = BASE_ELEITORAL_NAO_VALIDADA
+            else:
+                origem_universo = ORIGEM_CENARIO_OPERACIONAL
+                votos_validos, indisponibilidade = _votos_validos_projetados(aptos, base)
         else:
-            indisponibilidade = SEM_TERRITORIO_ELEITORAL
+            # Modo PADRAO (ou lideranca sem setor dentro do cenario): universo
+            # legado = soma dos bairros da propria lideranca.
+            aptos = None if territorios_desatualizados else _aptos_da_lideranca(territorios)
+            if aptos is not None:
+                origem_universo = ORIGEM_BASE_OFICIAL
+            if base_indisponivel and territorios:
+                indisponibilidade = base_indisponivel
+            elif territorios_desatualizados:
+                indisponibilidade = TERRITORIO_LIDERANCA_BASE_DESATUALIZADA
+            elif base is not None:
+                votos_validos, indisponibilidade = _votos_validos_projetados(aptos, base)
+            else:
+                indisponibilidade = SEM_TERRITORIO_ELEITORAL
 
-        setor_referencia = config.setor_id if config is not None else None
+        # Cobertura territorial permanece na Base oficial: e a intersecao de
+        # BAIRROS (ADR-033), e o operacional do cenario e um numero unico por
+        # setor, sem decomposicao em bairros -- misturar os dois produziria uma
+        # razao em unidades diferentes.
         cobertura = _calcular_cobertura_territorial(
             setor_id=setor_referencia,
             territorios_lideranca=territorios,
@@ -617,6 +656,7 @@ def analisar_liderancas(
                 "universo_eleitoral": {
                     "eleitorado_apto": aptos,
                     "votos_validos_projetados": _arredondar_votos(votos_validos),
+                    "origem": origem_universo,
                 },
                 "resultado_principal": {
                     "escopo_amostral": escopo,
@@ -657,5 +697,7 @@ def analisar_liderancas(
             {"pergunta_id": pergunta_id, "valores": sorted(valores_filtro)}
             for pergunta_id, valores_filtro in filtros_normalizados
         ],
+        # Aditivo (ADR-075): a UI declara qual base alimentou os numeros.
+        "base_calculo": base_calculo.contrato(),
         "liderancas": resultado_liderancas,
     }

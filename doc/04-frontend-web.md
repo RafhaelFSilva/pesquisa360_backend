@@ -594,3 +594,34 @@ templates determinísticos na lib (`buildEvidenceInterpretation`/
 tabela/gráficos/mapa; ordenação explícita com descrição visível (default:
 ordem do motor); filtros apenas de visualização (nunca reexecutam a
 análise). Detalhes: `doc/19-...-visualizacoes.md`.
+
+## 15. Gestão de Lideranças — Base Eleitoral Operacional (ADR-075)
+
+Sem aplicação paralela: a view **Base operacional** é a terceira aba de
+`LeadershipManagementPage` (`?view=base`, ao lado de Lista e Mapa), com o
+mesmo estado analítico (pesquisa, pergunta, resposta, filtros).
+
+- `components/lideranca/CenariosOperacionaisPanel.tsx`: cabeçalho da
+  configuração (cenário ativo, status, data de referência, eleitorado
+  operacional total, texto "Base metodológica utilizada exclusivamente pela
+  Gestão de Lideranças. Não altera a Base Eleitoral oficial."), formulário de
+  novo cenário, listagem (nome, status, data, total, setores, criação, ações
+  por status) e editor tabular `Setor | Eleitorado oficial | Eleitorado
+  operacional | Participação operacional | Peso operacional | Observação`
+  com rodapé de totais. Inputs aceitam apenas inteiros ≥ 0 (formatação de
+  milhar visual, backend recebe número), erro por linha, valores preservados
+  em erro de API, salvamento em **um** `PUT` de lote (nunca PATCH por tecla).
+  ATIVO/ARQUIVADO abrem em somente leitura; ativar/arquivar pedem confirmação
+  e avisam a troca de base.
+- `lib/liderancaCenarios.ts`: rotas, rótulos, `parseInteiroOperacional`,
+  `montarLoteSetores`, prévia local de total/peso (`calcularTotaisCenario`),
+  `rotuloBaseCalculo`, `descreverErroApi` (inclusive `{mensagem, problemas}`
+  da ativação).
+- Indicador **"Base de cálculo: Cenário "X" / Base padrão"** visível nas views
+  Lista, Mapa e Base (`data-base-calculo`), alimentado por
+  `GET /liderancas/cenarios/ativo` e pelo `base_calculo` da própria análise;
+  o detalhe da liderança mostra "Origem do eleitorado". Ativar/arquivar
+  incrementa `versaoBase`, que refaz base e análise.
+- Permissão de escrita = `canManageLeadership` (LIDERANCA_GERENCIAR); o
+  Backend continua a autoridade. Nenhum request carrega `company_id`.
+- Testes: `tests/liderancaCenarios.test.mjs` (26).

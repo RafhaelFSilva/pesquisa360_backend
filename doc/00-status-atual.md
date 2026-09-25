@@ -1,5 +1,40 @@
 # Status atual
 
+## Hardening P0 — Integridade histórica Setor × Cenário (ADR-075)
+
+Corrigido em 2026-09-16: a FK `lideranca_cenario_setores.setor_id` deixou de
+ser `ON DELETE CASCADE` (migration corretiva `e8f9a0b1c2d3`, filha de
+`d7e8f9a0b1c2`, head único) e passou a `ON DELETE RESTRICT`; a exclusão
+física de Setor passa por `assegurar_setor_excluivel` (coletas OU histórico
+em cenário — RASCUNHO, ATIVO ou ARQUIVADO — respondem 409 com mensagem de
+negócio; setor nunca usado segue excluível). Upgrade, downgrade e re-upgrade
+validados em SQLite descartável e no Postgres local do compose. Web não
+exigiu alteração (`mensagemErroExcluirSetor` já exibe o `detail` do 409).
+Soft delete de Setor permanece evolução futura.
+
+## Gestão de Lideranças — Cenários de Base Eleitoral Operacional (ADR-075)
+
+Implementado em 2026-09-16: `lideranca_cenarios` + `lideranca_cenario_setores`
+(migration `d7e8f9a0b1c2`, filha de `c6d7e8f9a0b1`, head único), serviço
+`lideranca_cenario.py` com ciclo RASCUNHO → ATIVO → ARQUIVADO, duplicação,
+ativação transacional com índice parcial único de um ATIVO por onda, snapshot
+da referência oficial e o resolvedor único `resolver_base_calculo`, consumido
+pela análise de lideranças (`base_calculo.modo` = PADRAO sem cenário;
+CENARIO_OPERACIONAL com cenário ativo; `CENARIO_SETOR_NAO_CONFIGURADO` sem
+fallback). Rotas em `api/endpoints/lideranca_cenarios.py` sob
+`/projetos/{id}/liderancas/cenarios`. Web: aba "Base operacional" na Gestão
+de Lideranças com editor em lote, indicador "Base de cálculo" em todas as
+views e origem do eleitorado no detalhe. Base Eleitoral oficial, Setor global
+e Mobile intocados; nenhum cenário criado para dados existentes.
+
+Validação (Python 3.13.14): suíte backend completa 1755 passed, 14 skipped,
+0 falhas (após alinhar as constantes de head em `test_migration_chain`,
+`test_fluxo_campo_integrado` e `test_acl_multiempresa`);
+`test_lideranca_cenarios.py` 66 testes. Upgrade aplicado no Postgres local do
+compose (`alembic current` = `d7e8f9a0b1c2`). Web: `tsc -b` limpo,
+`npm run build` OK, 1261/1261 testes (1235 baseline + 26 novos), lint com os
+mesmos 10 erros preexistentes.
+
 ## Sprint 0 — Fundação da Modularização (Prompt 01)
 
 Implementado em 2026-09-01: catálogo `modulos`, catálogo

@@ -722,6 +722,17 @@ SETOR_COM_COLETAS_DETALHE = (
     "Este setor possui coletas vinculadas e não pode ser excluído."
 )
 
+# Hardening P0 (ADR-075): FK RESTRICT de `lideranca_cenario_setores.setor_id`
+# (migration e8f9a0b1c2d3). Cenario e historico: RASCUNHO, ATIVO e ARQUIVADO
+# protegem o setor igualmente.
+FK_CENARIO_SETOR = "fk_lideranca_cenario_setores_setor_id_setores"
+
+SETOR_COM_CENARIO_DETALHE = (
+    "Este setor não pode ser excluído porque possui histórico em um ou mais "
+    "cenários da Gestão de Lideranças. Cenários históricos não podem perder "
+    "sua referência territorial; preserve o setor."
+)
+
 
 def _constraint_violada(exc: IntegrityError) -> str | None:
     """Nome da constraint, quando o driver o expoe (`diag` do psycopg)."""
@@ -731,14 +742,66 @@ def _constraint_violada(exc: IntegrityError) -> str | None:
         return nome
     # SQLite, por exemplo, diz apenas "FOREIGN KEY constraint failed": sem nome,
     # nao ha o que afirmar a partir do texto.
-    if FK_COLETAS_SETOR in str(orig or exc):
-        return FK_COLETAS_SETOR
+    texto = str(orig or exc)
+    for conhecida in (FK_COLETAS_SETOR, FK_CENARIO_SETOR):
+        if conhecida in texto:
+            return conhecida
     return None
 
 
 def _conflito_coletas_do_setor(exc: IntegrityError) -> bool:
     """Reconhece SOMENTE a FK das coletas."""
     return _constraint_violada(exc) == FK_COLETAS_SETOR
+
+
+def _conflito_cenario_do_setor(exc: IntegrityError) -> bool:
+    """Reconhece SOMENTE a FK dos cenarios de liderancas."""
+    return _constraint_violada(exc) == FK_CENARIO_SETOR
+
+
+def assegurar_setor_excluivel(db: Session, setor_id: int) -> None:
+    """Regra unica de exclusao fisica de Setor: sem coleta e sem cenario.
+
+    Pre-checagem para uma mensagem de negocio clara. Nao substitui as FKs
+    (NO ACTION nas coletas, RESTRICT nos cenarios): a corrida entre o EXISTS e
+    o commit e resolvida pelo banco e traduzida em `_traduzir_integridade`.
+    """
+    if crud.setor_possui_coletas(db, setor_id=setor_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=SETOR_COM_COLETAS_DETALHE,
+        )
+    if crud.setor_possui_historico_cenario(db, setor_id=setor_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=SETOR_COM_CENARIO_DETALHE,
+        )
+
+
+def _traduzir_integridade(
+    db: Session, exc: IntegrityError, setor_id: int
+) -> HTTPException | None:
+    """IntegrityError do DELETE -> 409 de negocio, ou None se for outra coisa.
+
+    Com o nome da constraint (psycopg) a decisao e direta. Sem nome (SQLite),
+    em vez de deduzir da mensagem, PERGUNTA ao banco: se ha coleta ou cenario
+    apontando para o setor agora, o conflito esta provado pelos dados.
+    """
+    constraint = _constraint_violada(exc)
+    if constraint is None:
+        if crud.setor_possui_coletas(db, setor_id=setor_id):
+            constraint = FK_COLETAS_SETOR
+        elif crud.setor_possui_historico_cenario(db, setor_id=setor_id):
+            constraint = FK_CENARIO_SETOR
+    if constraint == FK_COLETAS_SETOR:
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=SETOR_COM_COLETAS_DETALHE
+        )
+    if constraint == FK_CENARIO_SETOR:
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=SETOR_COM_CENARIO_DETALHE
+        )
+    return None
 
 
 @router.delete("/projetos/{projeto_id}/pesquisas/{pesquisa_id}/setores/{setor_id}", dependencies=[Depends(require_permissao(Permissao.PESQUISA_GERENCIAR))])
@@ -770,37 +833,22 @@ def delete_setor_by_projeto_pesquisa(
 
     # A checagem de historico vem DEPOIS da cadeia de tenant acima: para a
     # Empresa A, um setor da Empresa B nao existe, e responder 409 aqui
-    # revelaria que ele existe -- e ainda que ele tem coletas.
-    if crud.setor_possui_coletas(db, setor_id=db_setor.id):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=SETOR_COM_COLETAS_DETALHE,
-        )
+    # revelaria que ele existe -- e ainda que ele tem coletas ou cenarios.
+    assegurar_setor_excluivel(db, db_setor.id)
 
     try:
         db.delete(db_setor)
         db.commit()
     except IntegrityError as exc:
-        # Janela de corrida: uma coleta pode ter sido vinculada entre o EXISTS
-        # e o commit. A FK barra o DELETE e o historico fica intacto.
+        # Janela de corrida: uma coleta ou uma referencia de cenario pode ter
+        # surgido entre o EXISTS e o commit. A FK barra o DELETE e o historico
+        # fica intacto; o rollback devolve a sessao a um estado utilizavel.
         db.rollback()
-
-        constraint = _constraint_violada(exc)
-        if constraint is None:
-            # Driver que nao nomeia a constraint. Em vez de deduzir da mensagem,
-            # PERGUNTAR ao banco: se ha coleta apontando para este setor agora,
-            # o conflito esta provado pelos dados.
-            conflito_de_coletas = crud.setor_possui_coletas(db, setor_id=setor_id)
-        else:
-            conflito_de_coletas = constraint == FK_COLETAS_SETOR
-
-        if conflito_de_coletas:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=SETOR_COM_COLETAS_DETALHE,
-            ) from exc
-        # Qualquer outra constraint sobe como e: traduzi-la para "possui
-        # coletas" seria inventar um diagnostico que nao foi observado.
+        conflito = _traduzir_integridade(db, exc, setor_id)
+        if conflito is not None:
+            raise conflito from exc
+        # Qualquer outra constraint sobe como e: traduzi-la para uma mensagem
+        # de negocio seria inventar um diagnostico que nao foi observado.
         raise
     return {"message": "Setor excluído com sucesso"}
 

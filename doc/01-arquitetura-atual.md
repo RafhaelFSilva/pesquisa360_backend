@@ -237,6 +237,7 @@ O mobile é **offline-first**. Toda coleta deve poder ocorrer sem internet e ser
 | Relatórios clássicos | Resumo das Respostas e Crosstab 2D |
 | Inteligência | Configuração Analítica e Cruzamentos Estratégicos nos modos Explorar e Relatório |
 | Monitoramento | Visualização de coletas em mapa |
+| Gestão de Lideranças | Lideranças do Projeto, config por onda (setor + cota), bairros da Base Eleitoral e Cenários de Base Eleitoral Operacional (ADR-075) |
 
 ## 6. Riscos conhecidos
 
@@ -289,6 +290,36 @@ Central de Inteligência
 A Configuração Analítica permanece na pesquisa e fornece
 `papel_analitico` e `metadados_analiticos`. A rota global `/inteligencia`
 continua sendo a Inteligência Territorial, distinta da central contextual.
+
+## 9. Gestão de Lideranças — Base Eleitoral Operacional (ADR-075)
+
+```text
+Projeto
+  └── LiderancaPolitica                    (raiz do módulo)
+       ├── LiderancaPesquisaConfig         por onda: setor_id + cota_votos_validos
+       └── LiderancaTerritorioEleitoral    bairros da Base Eleitoral (N:N)
+Pesquisa (onda)
+  └── LiderancaCenario                     nome, metodologia, data_referencia, status
+       └── LiderancaCenarioSetor           setor_id, eleitorado_oficial_referencia (snapshot),
+                                           eleitorado_operacional (manual), observacao
+```
+
+- `services/lideranca_cenario.py`: CRUD, duplicação, ativação transacional
+  (FOR UPDATE na pesquisa + índice parcial único de ATIVO por onda),
+  arquivamento e o **resolvedor único** `resolver_base_calculo(pesquisa_id)`
+  → `BaseCalculoLiderancas(modo, cenario, operacional_por_setor)`.
+- `services/lideranca_analytics.py` resolve a base UMA vez por request; com
+  cenário ATIVO, liderança com setor usa o operacional do setor como universo
+  (parâmetros de projeção continuam da Base); setor sem valor →
+  `CENARIO_SETOR_NAO_CONFIGURADO`. Cobertura (ADR-033) segue na Base oficial.
+- `services/setor_territorio.py`: `_avaliar_universo` (precedência pura) é
+  compartilhada pela leitura unitária e pela leitura em lote
+  `obter_universos_eleitorais_setores` (uma query para todos os setores).
+- `api/endpoints/lideranca_cenarios.py` é incluído por `liderancas.py` ANTES
+  do CRUD para que o segmento literal `cenarios` não seja lido como
+  `{lideranca_id}`.
+- Base Eleitoral oficial, Setor global, relatórios, Mobile e cotas não
+  conhecem o cenário.
 
 ## Ambiente de execução (ADR-038)
 

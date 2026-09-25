@@ -1783,3 +1783,133 @@ Decisão (Prompt 08):
   do tsconfig, tirar testes do typecheck, `skipLibCheck` para esconder erro
   próprio ou trocar `tsc -b` por comando mais fraco. O teste estático
   `tests/hardening.test.mjs` trava o script de build no comando real.
+
+## ADR-075 — Base Eleitoral Operacional por Cenários na Gestão de Lideranças
+
+Contexto: a Base Eleitoral de referência (ADR-032/033) informa o eleitorado
+oficial de cada bairro e, por composição, de cada Setor. Determinadas
+metodologias de Gestão de Lideranças não trabalham com todo o universo
+oficial de um setor: o coordenador define manualmente quantos eleitores
+daquele setor entram no universo **operacional** (ex.: Universidade oficial
+11.053 → operacional 2.211). Esse universo muda entre rodadas/metodologias e
+precisa coexistir historicamente. Um campo `setores.eleitores_manual` seria
+uma única verdade global, sem versão nem histórico — e contaminaria a Base
+Eleitoral, os relatórios gerais e o Mobile.
+
+Decisão (implementada em 2026-09-16, migration `d7e8f9a0b1c2`):
+
+1. **A Base Eleitoral oficial permanece fonte independente e somente
+   leitura.** Nenhuma rota de cenário escreve em `base_eleitoral`,
+   `territorio_eleitoral` ou `setor_territorio_eleitoral`. O oficial aparece
+   ao lado do operacional como referência; teste automatizado confere que o
+   oficial não muda antes/depois de ativar um cenário.
+2. **O cenário operacional existe somente na Gestão de Lideranças.** Modelo
+   próprio, `lideranca_cenarios` (cenário metodológico) e
+   `lideranca_cenario_setores` (valor por setor, `UNIQUE(cenario_id,
+   setor_id)`, `eleitorado_operacional >= 0`). Mesmo contexto de
+   `lideranca_pesquisa_config` (ADR-024): a raiz do módulo é o Projeto, mas
+   setor e universo operacional são da **onda** (`pesquisa_id`). Rotas sob
+   `/projetos/{projeto_id}/liderancas/cenarios`; tenant deriva de
+   pesquisa → projeto → company_id, e o cliente nunca envia `company_id`.
+3. **Cenários são versionáveis.** Vários coexistem por onda (Setembro,
+   Outubro, Revisão Territorial), cada um com seus valores por setor.
+4. **Cenário ATIVO é imutável nos valores territoriais e nos metadados.**
+   `PATCH` e `PUT /setores` respondem 409 fora de RASCUNHO.
+5. **Alterações metodológicas são feitas por duplicação:** DUPLICAR (novo
+   RASCUNHO "Cópia de <nome>", com valores e snapshots copiados, status nunca
+   copiado) → editar → ATIVAR. Isso preserva auditabilidade.
+6. **Apenas um cenário ATIVO por contexto (onda).** Garantido pela aplicação
+   (`SELECT ... FOR UPDATE` na pesquisa serializa ativações; o ATIVO anterior
+   vira ARQUIVADO na mesma transação) e pelo banco (índice parcial único
+   `uq_lideranca_cenarios_ativo_por_pesquisa ON (pesquisa_id) WHERE
+   status='ATIVO'`). Violação de concorrência responde 409, nunca meio salvo.
+7. **Sem cenário ativo = comportamento legado.** A migration cria estrutura,
+   não inventa cenário. `resolver_base_calculo(pesquisa_id)` devolve
+   `modo=PADRAO` e todos os cálculos seguem exatamente como antes; a API
+   declara `base_calculo.modo` em `POST /liderancas/analise` e em
+   `GET /liderancas/cenarios/ativo`.
+8. **Cenário ativo não faz fallback silencioso por setor.** Liderança com
+   setor de referência sem valor no cenário recebe
+   `indisponibilidade = CENARIO_SETOR_NAO_CONFIGURADO` (universo `null`), nunca
+   o oficial por baixo dos panos. A ativação já valida que todo setor com
+   liderança ativa vinculada esteja configurado (422 com lista de
+   `problemas`); liderança sem setor não bloqueia nem ganha setor inventado —
+   mantém o comportamento atual (universo pelos próprios bairros) e suas
+   métricas de setor seguem N/A.
+9. **Mobile não consome esse domínio.** Nada em Flutter/Drift/sincronização
+   foi alterado; a coleta continua vendo Setor, meta e cotas como sempre.
+10. **Valores operacionais são manuais, não derivados de fator fixo.** Não
+    existe `/5` nem `20%` como regra; o valor persistido é a fonte. O peso
+    operacional (`operacional / soma operacional × 100`) é derivado em
+    leitura no backend, nunca persistido; total zero devolve `null`.
+
+### Snapshot da referência oficial
+
+`eleitorado_oficial_referencia` é capturado no `PUT /setores` (RASCUNHO) a
+partir de `obter_universos_eleitorais_setores` — a soma oficial disponível
+naquele momento, ou `NULL` quando o universo do setor está indisponível
+(jamais valor fabricado). Se a Base mudar depois, o cenário continua
+informando a referência que usou; a tela mostra oficial ATUAL e referência
+lado a lado quando divergem. Duplicar copia o snapshot sem recapturar;
+regravar o RASCUNHO recaptura.
+
+### O que o cenário alimenta — e o que não alimenta
+
+Fonte única: `services/lideranca_cenario.resolver_base_calculo`, resolvido
+UMA vez por request de análise. Com cenário ATIVO, para liderança **com**
+setor de referência, o universo eleitoral (`universo_eleitoral.eleitorado_apto`)
+passa a ser o operacional do setor, e a cadeia existente segue intacta:
+`operacional × comparecimento × votos válidos` (parâmetros da Base, como no
+modo padrão) `× taxa alvo` → votos projetados → Gap/Plus contra a cota.
+`universo_eleitoral.origem` declara `BASE_OFICIAL` ou `CENARIO_OPERACIONAL`.
+
+A **cobertura eleitoral** (ADR-033) permanece na Base oficial em qualquer
+modo: é a interseção de **bairros** da liderança com a composição do setor, e
+o operacional do cenário é um número único por setor, sem decomposição em
+bairros — dividir bairros oficiais por um denominador operacional produziria
+uma razão em unidades diferentes. Fora de escopo desta rodada e inalterados:
+significado de indicação, cota individual, vínculo liderança-setor, mapas,
+filtros, Base Eleitoral geral e projeções fora da Gestão de Lideranças.
+
+### Hardening P0 (2026-09-16) — Referências de Cenário impedem exclusão física do Setor
+
+A migration `d7e8f9a0b1c2` criou `lideranca_cenario_setores.setor_id` com
+`ON DELETE CASCADE`: apagar um Setor apagaria em silêncio a linha histórica
+(snapshot oficial, operacional, observação) de todos os cenários — contrariando
+o item 3 desta ADR (cenários são históricos). Decisão corretiva, migration
+`e8f9a0b1c2d3` (filha de `d7e8f9a0b1c2`, a original não foi reescrita):
+
+- **Cenário é histórico**: RASCUNHO, ATIVO **e ARQUIVADO** protegem o Setor
+  igualmente. ARQUIVADO não significa descartável; nunca "arquivado libera
+  exclusão do setor".
+- **Banco**: FK `fk_lideranca_cenario_setores_setor_id_setores` com
+  `ON DELETE RESTRICT` (PostgreSQL: drop/add constraint; SQLite: batch mode).
+  A FK de `cenario_id` permanece CASCADE (remoção controlada do próprio
+  cenário). Downgrade restaura exatamente o CASCADE, sem tocar em dados.
+- **Aplicação**: `assegurar_setor_excluivel` (endpoints/projetos.py) é a regra
+  única de exclusão física de Setor — coletas vinculadas OU histórico em
+  cenário (`crud.setor_possui_historico_cenario`, EXISTS) → **409** com
+  mensagem de negócio. A corrida entre o EXISTS e o commit é resolvida pela FK
+  e traduzida em 409 (`_traduzir_integridade`); IntegrityError não relacionado
+  continua subindo. Ordem preservada: cadeia de tenant (404) antes de qualquer
+  409, sem vazar existência para outro tenant.
+- Setor nunca referenciado por cenário continua excluível fisicamente.
+- Futura adoção de soft delete de Setor poderá revisar esta política; até lá,
+  Setor físico + histórico de cenário = DELETE proibido. Snapshot de
+  nome/geometria do Setor no cenário permanece fora de escopo (a linha
+  referencia o Setor vivo).
+
+### Resposta alvo explícita na UI (2026-09-16)
+
+A taxa alvo sempre nasceu de um numerador exato — `resultado_principal.respostas_alvo`,
+contado por coleta distinta em `_medir` sobre a mesma amostra (`base_valida`) que
+divide a taxa. A Gestão de Lideranças passa a exibi-lo: Lista com a coluna
+"Resposta alvo" (`3 / 44 · 6,8%`) e card do Mapa com "Resposta alvo: 3 de 44
+entrevistas · 6,8%" no lugar da linha "Taxa alvo" (o percentual segue na mesma
+linha; o campo `taxa_alvo` continua no contrato). Regras: o contador é de
+entrevistas, não de votos; o denominador exibido é `base_valida` (a amostra
+efetivamente usada), não `total_entrevistas`; o Web nunca reconstrói o numerador
+pelo percentual (`apresentarRespostaAlvo`, teste estático); sem amostra válida a
+UI mostra "Não disponível", nunca "0 de 0". Nenhuma fórmula, cenário, Base
+Eleitoral, migration ou coluna foi alterada; duas lideranças no mesmo setor
+seguem compartilhando a amostra (individualização é assunto futuro).

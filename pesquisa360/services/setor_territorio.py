@@ -342,6 +342,66 @@ def _universo(
     }
 
 
+def _avaliar_universo(setor_id: int, base, territorios) -> dict:
+    """Precedencia dos estados, do contexto para o detalhe:
+
+      1. sem base principal      -> BASE_ELEITORAL_NAO_CONFIGURADA
+      2. base nao VALIDADA       -> BASE_ELEITORAL_NAO_VALIDADA
+      3. nenhum vinculo          -> SEM_COMPOSICAO_ELEITORAL
+      4. algum vinculo de outra base -> COMPOSICAO_BASE_DESATUALIZADA
+      5. algum eleitorado ausente    -> ELEITORADO_TERRITORIO_INDISPONIVEL
+      6. caso contrario          -> DISPONIVEL
+
+    A base vem primeiro porque e a precondicao de tudo: sem ela nem da para
+    julgar se a composicao esta desatualizada. Funcao pura: a leitura por
+    setor e a leitura em lote (cenarios de liderancas) passam pela MESMA
+    avaliacao, nunca por duas copias da regra.
+    """
+    quantidade = len(territorios)
+
+    if base is None:
+        # Nunca escolher base implicitamente para nao devolver um numero certo
+        # sobre o universo errado.
+        return _universo(setor_id, STATUS_UNIVERSO_BASE_NAO_CONFIGURADA, quantidade=quantidade)
+
+    if base.status != base_service.STATUS_VALIDADA:
+        # Mesma exigencia do restante do motor eleitoral: sem validacao humana
+        # a base nao alimenta calculo.
+        return _universo(
+            setor_id, STATUS_UNIVERSO_BASE_NAO_VALIDADA, base=base, quantidade=quantidade
+        )
+
+    if not territorios:
+        # Ausencia de configuracao nao e universo de zero eleitores.
+        return _universo(setor_id, STATUS_UNIVERSO_SEM_COMPOSICAO, base=base, quantidade=0)
+
+    if territorios_fora_da_base(territorios, base.id):
+        # Basta UMA unidade da base anterior. Somar so as atuais entregaria um
+        # universo parcial com cara de completo -- pior que nao responder.
+        # Os vinculos antigos ficam no banco: apagar destruiria a auditoria e a
+        # chance de o usuario ver o que precisa reconfigurar.
+        return _universo(
+            setor_id, STATUS_UNIVERSO_BASE_DESATUALIZADA, base=base, quantidade=quantidade
+        )
+
+    if any(territorio.eleitorado_apto is None for territorio in territorios):
+        # NULL nao e zero. Somar ignorando entregaria universo menor que o real.
+        return _universo(
+            setor_id,
+            STATUS_UNIVERSO_ELEITORADO_INDISPONIVEL,
+            base=base,
+            quantidade=quantidade,
+        )
+
+    return _universo(
+        setor_id,
+        STATUS_UNIVERSO_DISPONIVEL,
+        base=base,
+        quantidade=quantidade,
+        eleitorado_apto=sum(territorio.eleitorado_apto for territorio in territorios),
+    )
+
+
 def obter_universo_eleitoral_setor(
     db: Session,
     projeto_id: int,
@@ -357,19 +417,7 @@ def obter_universo_eleitoral_setor(
 
     Calculado em leitura: o valor depende da composicao atual, do eleitorado
     atual e da base principal atual, e persistir a soma criaria um numero que
-    envelhece sem aviso.
-
-    Precedencia dos estados, do contexto para o detalhe:
-
-      1. sem base principal      -> BASE_ELEITORAL_NAO_CONFIGURADA
-      2. base nao VALIDADA       -> BASE_ELEITORAL_NAO_VALIDADA
-      3. nenhum vinculo          -> SEM_COMPOSICAO_ELEITORAL
-      4. algum vinculo de outra base -> COMPOSICAO_BASE_DESATUALIZADA
-      5. algum eleitorado ausente    -> ELEITORADO_TERRITORIO_INDISPONIVEL
-      6. caso contrario          -> DISPONIVEL
-
-    A base vem primeiro porque e a precondicao de tudo: sem ela nem da para
-    julgar se a composicao esta desatualizada.
+    envelhece sem aviso. A precedencia dos estados vive em `_avaliar_universo`.
     """
     setor = obter_setor(db, projeto_id, pesquisa_id, setor_id, current_user)
 
@@ -377,56 +425,60 @@ def obter_universo_eleitoral_setor(
         db, projeto_id, current_user
     )
     territorios = _territorios_da_composicao(db, setor.id)
-    quantidade = len(territorios)
+    return _avaliar_universo(setor.id, base, territorios)
 
-    if base is None:
-        # Nunca escolher base implicitamente para nao devolver um numero certo
-        # sobre o universo errado.
-        return _universo(
-            setor.id, STATUS_UNIVERSO_BASE_NAO_CONFIGURADA, quantidade=quantidade
+
+def obter_universos_eleitorais_setores(
+    db: Session,
+    projeto_id: int,
+    pesquisa_id: int,
+    setor_ids: Sequence[int],
+    current_user: models.Usuario,
+) -> dict[int, dict]:
+    """Leitura em LOTE do universo oficial de varios setores da mesma onda.
+
+    Mesma semantica de `obter_universo_eleitoral_setor`, com uma query para a
+    composicao de todos os setores e uma leitura da base principal -- montar a
+    tela de um cenario com dezenas de setores nao pode custar tres queries por
+    linha. Setor fora da pesquisa/tenant simplesmente nao aparece no resultado:
+    quem chama ja obteve a lista pelo caminho autorizado.
+    """
+    ids = sorted({int(setor_id) for setor_id in setor_ids})
+    if not ids:
+        return {}
+    setores_validos = {
+        row[0]
+        for row in db.query(models.Setor.id)
+        .join(models.Pesquisa, models.Pesquisa.id == models.Setor.pesquisa_id)
+        .join(models.Projeto, models.Projeto.id == models.Pesquisa.projeto_id)
+        .filter(
+            models.Setor.id.in_(ids),
+            models.Setor.pesquisa_id == pesquisa_id,
+            models.Pesquisa.projeto_id == projeto_id,
+            acessos.filtro_projeto_acessivel(current_user),
         )
-
-    if base.status != base_service.STATUS_VALIDADA:
-        # Mesma exigencia do restante do motor eleitoral: sem validacao humana
-        # a base nao alimenta calculo.
-        return _universo(
-            setor.id,
-            STATUS_UNIVERSO_BASE_NAO_VALIDADA,
-            base=base,
-            quantidade=quantidade,
+        .all()
+    }
+    if not setores_validos:
+        return {}
+    base = base_service.obter_base_principal_projeto_opcional(db, projeto_id, current_user)
+    territorios_por_setor: dict[int, dict[int, models.TerritorioEleitoral]] = {
+        setor_id: {} for setor_id in setores_validos
+    }
+    linhas = (
+        db.query(models.SetorTerritorioEleitoral.setor_id, models.TerritorioEleitoral)
+        .join(
+            models.TerritorioEleitoral,
+            models.TerritorioEleitoral.id
+            == models.SetorTerritorioEleitoral.territorio_eleitoral_id,
         )
-
-    if not territorios:
-        # Ausencia de configuracao nao e universo de zero eleitores.
-        return _universo(
-            setor.id, STATUS_UNIVERSO_SEM_COMPOSICAO, base=base, quantidade=0
-        )
-
-    if territorios_fora_da_base(territorios, base.id):
-        # Basta UMA unidade da base anterior. Somar so as atuais entregaria um
-        # universo parcial com cara de completo -- pior que nao responder.
-        # Os vinculos antigos ficam no banco: apagar destruiria a auditoria e a
-        # chance de o usuario ver o que precisa reconfigurar.
-        return _universo(
-            setor.id,
-            STATUS_UNIVERSO_BASE_DESATUALIZADA,
-            base=base,
-            quantidade=quantidade,
-        )
-
-    if any(territorio.eleitorado_apto is None for territorio in territorios):
-        # NULL nao e zero. Somar ignorando entregaria universo menor que o real.
-        return _universo(
-            setor.id,
-            STATUS_UNIVERSO_ELEITORADO_INDISPONIVEL,
-            base=base,
-            quantidade=quantidade,
-        )
-
-    return _universo(
-        setor.id,
-        STATUS_UNIVERSO_DISPONIVEL,
-        base=base,
-        quantidade=quantidade,
-        eleitorado_apto=sum(territorio.eleitorado_apto for territorio in territorios),
+        .filter(models.SetorTerritorioEleitoral.setor_id.in_(sorted(setores_validos)))
+        .all()
     )
+    for setor_id, territorio in linhas:
+        # Dict por id: a soma nunca conta o mesmo bairro duas vezes.
+        territorios_por_setor[setor_id][territorio.id] = territorio
+    return {
+        setor_id: _avaliar_universo(setor_id, base, list(territorios.values()))
+        for setor_id, territorios in territorios_por_setor.items()
+    }

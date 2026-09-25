@@ -1494,6 +1494,21 @@ def setor_possui_coletas(db: Session, setor_id: int) -> bool:
     ).scalar() is True
 
 
+def setor_possui_historico_cenario(db: Session, setor_id: int) -> bool:
+    """Existe linha de cenario de liderancas apontando para este setor?
+
+    Hardening P0 (ADR-075). Vale para QUALQUER status do cenario: ARQUIVADO e
+    historico, nao lixo. EXISTS: basta uma referencia para proteger o setor;
+    contar todas nao muda a decisao. Sem company_id: quem chama ja resolveu o
+    setor pela cadeia de tenant.
+    """
+    return db.query(
+        db.query(models.LiderancaCenarioSetor.id)
+        .filter(models.LiderancaCenarioSetor.setor_id == setor_id)
+        .exists()
+    ).scalar() is True
+
+
 def create_setor(db: Session, setor_in: schemas.SetorCreate, pesquisa_id: int, current_user: models.Usuario):
     # Valida acesso à pesquisa através do projeto
     # (Juntando tabelas para validar empresa numa query só)

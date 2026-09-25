@@ -149,6 +149,24 @@ Classificacao espacial futura:
   analitico;
 - resolver sobreposicao/conflito sem duplicar entrevistas.
 
+### Gestao de Liderancas — evolucoes sobre a base operacional (ADR-075)
+
+Entregue em 2026-09-16: cenarios versionaveis de eleitorado operacional por
+setor, um ATIVO por onda, snapshot da referencia oficial e consumo pelo
+calculo de projecao/Gap-Plus. Fora de escopo e ainda NAO decididos:
+
+- piso minimo / teto maximo de entrevistas por setor a partir do operacional;
+- redistribuicao automatica de sobras e calculo automatico de amostra (ex.
+  600 entrevistas), margem de erro e desenho amostral;
+- fator de referencia (ex. `/5`) como campo informativo — hoje o valor
+  operacional e sempre manual;
+- raio automatico de influencia da lideranca;
+- uso do cenario pela coleta Mobile (decisao arquitetural separada);
+- soft delete de Setor (`ativo`/`excluido_em`): hoje Setor referenciado por
+  cenario e simplesmente nao excluivel (Hardening P0, FK RESTRICT + 409);
+- colisao de rotas `/liderancas/cenarios` x `/liderancas/{lideranca_id}`,
+  resolvida por ordem de routers (debito P1: redesenho de URL).
+
 ### Exportação PDF
 
 - relatório com capa;

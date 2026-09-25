@@ -16,8 +16,12 @@ from pesquisa360.db import models
 from pesquisa360.services import lideranca as service
 from pesquisa360.services import lideranca_analytics as analytics
 from pesquisa360.core.rbac import Permissao, require_permissao
+from pesquisa360.api.endpoints.lideranca_cenarios import router as cenarios_router
 
 router = APIRouter()
+# Cenarios entram ANTES do CRUD: `/liderancas/cenarios` e literal e precisa
+# vencer `/liderancas/{lideranca_id}`, que e resolvido por ordem de declaracao.
+router.include_router(cenarios_router)
 
 
 def _territorio_item(territorio: models.TerritorioEleitoral) -> dict:

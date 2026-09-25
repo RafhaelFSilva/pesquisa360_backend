@@ -108,6 +108,16 @@ class SetorDeleteIntegridadeTests(unittest.TestCase):
                 "CREATE TABLE coletas (id INTEGER PRIMARY KEY, pesquisa_id INTEGER,"
                 " agente_id INTEGER, setor_id INTEGER"
                 f" CONSTRAINT {FK_COLETAS_SETOR} REFERENCES setores(id))",
+                # ...e RESTRICT no cenario de liderancas (Hardening P0, ADR-075):
+                # a pre-checagem de exclusao consulta esta tabela.
+                "CREATE TABLE lideranca_cenarios (id INTEGER PRIMARY KEY, pesquisa_id INTEGER,"
+                " nome TEXT, status TEXT)",
+                "CREATE TABLE lideranca_cenario_setores (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " cenario_id INTEGER NOT NULL REFERENCES lideranca_cenarios(id) ON DELETE CASCADE,"
+                " setor_id INTEGER NOT NULL CONSTRAINT fk_lideranca_cenario_setores_setor_id_setores"
+                " REFERENCES setores(id) ON DELETE RESTRICT,"
+                " eleitorado_oficial_referencia INTEGER, eleitorado_operacional INTEGER NOT NULL,"
+                " observacao TEXT)",
             ):
                 connection.execute(text(statement))
 

@@ -1265,6 +1265,135 @@ class LiderancaTerritorioEleitoral(Base):
     )
 
 
+# ------------------------------------------------------------------------------
+# CENARIO METODOLOGICO DE BASE ELEITORAL OPERACIONAL (ADR-075)
+#
+# A Base Eleitoral oficial e somente leitura para a Gestao de Liderancas. O
+# cenario guarda, POR SETOR DA ONDA, quantos eleitores a metodologia considera
+# no universo operacional. E versionavel (varios cenarios coexistem), so um
+# fica ATIVO por pesquisa, e um ATIVO nunca tem os valores territoriais
+# alterados: mudanca metodologica = duplicar -> editar RASCUNHO -> ativar.
+#
+# Nao existe `setores.eleitorado_operacional`: o mesmo setor tem valores
+# diferentes em cenarios diferentes, e o historico precisa coexistir.
+# ------------------------------------------------------------------------------
+STATUS_CENARIO_LIDERANCAS = ("RASCUNHO", "ATIVO", "ARQUIVADO")
+STATUS_CENARIO_RASCUNHO = "RASCUNHO"
+STATUS_CENARIO_ATIVO = "ATIVO"
+STATUS_CENARIO_ARQUIVADO = "ARQUIVADO"
+
+
+class LiderancaCenario(Base):
+    """Cenario metodologico da Gestao de Liderancas em UMA onda.
+
+    Mesmo contexto de `lideranca_pesquisa_config` (ADR-024): a raiz do modulo
+    e o Projeto, mas setor e universo operacional sao da onda. O tenant deriva
+    de pesquisa -> projeto -> company_id; o cliente nunca envia company_id.
+    """
+
+    __tablename__ = "lideranca_cenarios"
+    __table_args__ = (
+        CheckConstraint(
+            _sql_in("status", STATUS_CENARIO_LIDERANCAS),
+            name="ck_lideranca_cenarios_status",
+        ),
+        # Garantia no banco de um unico ATIVO por onda. NULL nao entra em
+        # UNIQUE, por isso indice parcial (mesma tecnica de base_eleitoral).
+        Index(
+            "uq_lideranca_cenarios_ativo_por_pesquisa",
+            "pesquisa_id",
+            unique=True,
+            postgresql_where=text("status = 'ATIVO'"),
+            sqlite_where=text("status = 'ATIVO'"),
+        ),
+        Index("ix_lideranca_cenarios_pesquisa", "pesquisa_id"),
+        Index("ix_lideranca_cenarios_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    pesquisa_id = Column(Integer, ForeignKey("pesquisas.id"), nullable=False)
+    nome = Column(String, nullable=False)
+    metodologia = Column(Text, nullable=True)
+    data_referencia = Column(Date, nullable=True)
+    status = Column(
+        String,
+        nullable=False,
+        default=STATUS_CENARIO_RASCUNHO,
+        server_default=STATUS_CENARIO_RASCUNHO,
+    )
+    criado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
+    ativado_em = Column(DateTime(timezone=True), nullable=True)
+    ativado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
+    arquivado_em = Column(DateTime(timezone=True), nullable=True)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    pesquisa = relationship("Pesquisa", foreign_keys=[pesquisa_id])
+    criado_por = relationship("Usuario", foreign_keys=[criado_por_id])
+    ativado_por = relationship("Usuario", foreign_keys=[ativado_por_id])
+    setores = relationship(
+        "LiderancaCenarioSetor",
+        back_populates="cenario",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="LiderancaCenarioSetor.setor_id",
+    )
+
+
+class LiderancaCenarioSetor(Base):
+    """Universo operacional de UM setor dentro de UM cenario.
+
+    `eleitorado_oficial_referencia` e snapshot: a soma oficial disponivel no
+    momento da configuracao. Se a Base Eleitoral mudar depois, o cenario
+    continua contando a referencia que usou -- nunca e recalculado em silencio,
+    e nunca vira fonte para a Base Eleitoral.
+    """
+
+    __tablename__ = "lideranca_cenario_setores"
+    __table_args__ = (
+        UniqueConstraint("cenario_id", "setor_id", name="uq_lideranca_cenario_setor"),
+        CheckConstraint(
+            "eleitorado_operacional >= 0", name="ck_lideranca_cenario_setor_operacional"
+        ),
+        CheckConstraint(
+            "eleitorado_oficial_referencia IS NULL OR eleitorado_oficial_referencia >= 0",
+            name="ck_lideranca_cenario_setor_oficial",
+        ),
+        Index("ix_lideranca_cenario_setores_cenario", "cenario_id"),
+        Index("ix_lideranca_cenario_setores_setor", "setor_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    cenario_id = Column(
+        Integer, ForeignKey("lideranca_cenarios.id", ondelete="CASCADE"), nullable=False
+    )
+    # Hardening P0 (ADR-075): a linha E historico metodologico (snapshot,
+    # operacional, observacao). Setor referenciado por QUALQUER cenario --
+    # RASCUNHO, ATIVO ou ARQUIVADO -- nao pode ser excluido fisicamente:
+    # RESTRICT no banco, 409 na aplicacao. Nunca CASCADE aqui.
+    setor_id = Column(
+        Integer,
+        ForeignKey(
+            "setores.id",
+            ondelete="RESTRICT",
+            name="fk_lideranca_cenario_setores_setor_id_setores",
+        ),
+        nullable=False,
+    )
+    eleitorado_oficial_referencia = Column(Integer, nullable=True)
+    eleitorado_operacional = Column(Integer, nullable=False)
+    observacao = Column(Text, nullable=True)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    cenario = relationship("LiderancaCenario", back_populates="setores")
+    setor = relationship("Setor", foreign_keys=[setor_id])
+
+
 # ==============================================================================
 # TENTATIVA DE CAMPO (PROMPT 03)
 #

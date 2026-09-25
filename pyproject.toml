@@ -9,7 +9,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi[all] (>=0.116.1,<0.117.0)",
-    "sqlalchemy (>=2.0.42,<3.0.0)",
+    "sqlalchemy (==2.0.52)",
     "psycopg2-binary (>=2.9.10,<3.0.0)",
     "alembic (>=1.16.4,<2.0.0)",
     "passlib[bcrypt] (<1.8)",

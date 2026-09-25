@@ -31,7 +31,7 @@ Justificativa: o domínio novo fica encapsulado num package próprio, fora do
 `schemas.py`/`crud.py`/`models.py` monolíticos, seguindo o princípio de
 separar CONFIGURATION CONTRACT ↔ PERSISTENCE ↔ ENGINE ↔ API ↔ WEB. Nesta
 rodada existem apenas CONTRACT + VALIDATOR. Nada foi persistido; nenhuma
-migration; `models.py` intacto; head Alembic `c6d7e8f9a0b1`.
+migration; `models.py` intacto; head Alembic `98d2bd125070` naquele checkpoint.
 
 Testes: `tests/test_growth_analysis_configuration.py` (casos C01–C65, 63
 testes), no mesmo harness SQLite dos testes de cruzamentos.

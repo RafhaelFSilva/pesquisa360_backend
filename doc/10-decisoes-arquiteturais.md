@@ -1796,7 +1796,7 @@ precisa coexistir historicamente. Um campo `setores.eleitores_manual` seria
 uma única verdade global, sem versão nem histórico — e contaminaria a Base
 Eleitoral, os relatórios gerais e o Mobile.
 
-Decisão (implementada em 2026-09-16, migration `d7e8f9a0b1c2`):
+Decisão (implementada em 2026-09-16, migration `0d497634c513`):
 
 1. **A Base Eleitoral oficial permanece fonte independente e somente
    leitura.** Nenhuma rota de cenário escreve em `base_eleitoral`,
@@ -1873,11 +1873,11 @@ filtros, Base Eleitoral geral e projeções fora da Gestão de Lideranças.
 
 ### Hardening P0 (2026-09-16) — Referências de Cenário impedem exclusão física do Setor
 
-A migration `d7e8f9a0b1c2` criou `lideranca_cenario_setores.setor_id` com
+A migration `0d497634c513` criou `lideranca_cenario_setores.setor_id` com
 `ON DELETE CASCADE`: apagar um Setor apagaria em silêncio a linha histórica
 (snapshot oficial, operacional, observação) de todos os cenários — contrariando
 o item 3 desta ADR (cenários são históricos). Decisão corretiva, migration
-`e8f9a0b1c2d3` (filha de `d7e8f9a0b1c2`, a original não foi reescrita):
+`be8036a45b28` (filha de `0d497634c513`, a original não foi reescrita):
 
 - **Cenário é histórico**: RASCUNHO, ATIVO **e ARQUIVADO** protegem o Setor
   igualmente. ARQUIVADO não significa descartável; nunca "arquivado libera

@@ -155,7 +155,7 @@
 
 Seção 6 (Alembic) + Seção 9 (Git Checkpoint):
 
-1. Tentar validar Alembic head via Python (c6d7e8f9a0b1)
+1. Tentar validar Alembic head via Python (98d2bd125070)
 2. Executar `git status` final (pre-commit)
 3. Criar commits Backend e Web com mensagens convencionais
 4. Documentar baseline para referência

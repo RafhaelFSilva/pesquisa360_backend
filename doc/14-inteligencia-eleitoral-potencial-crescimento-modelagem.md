@@ -7,7 +7,7 @@
 **Escopo:** especificação conceitual. Nenhum código funcional foi alterado
 nesta rodada de modelagem.
 **Feature comercial:** `inteligencia_eleitoral.potencial_crescimento` — permanece
-PLANEJADA/INATIVA no catálogo (semeada com `ativo=false` em `c6d7e8f9a0b1`).
+PLANEJADA/INATIVA no catálogo (semeada com `ativo=false` em `98d2bd125070`).
 
 ## 0. Baseline auditada
 
@@ -17,7 +17,7 @@ PLANEJADA/INATIVA no catálogo (semeada com `ativo=false` em `c6d7e8f9a0b1`).
 | Web | `feature/mapa-liderancas` | `e96d10d1a6a6f89b2b7932ffe9ffa2314e4c3789` | limpo |
 | Mobile | `feature/mobile-multitenancy-integration` | `cf6687af67fab8ff16f91fe2dba456e0da19e415` | limpo |
 
-Alembic: head único `c6d7e8f9a0b1` (`modulos_entitlements`). Nenhuma divergência
+Alembic: head único `98d2bd125070` (`modulos_entitlements`). Nenhuma divergência
 com o checkpoint `doc/13-checkpoint-sprint0-modularizacao.md`.
 
 ## 0-bis. Decisões metodológicas APROVADAS (baseline congelada do MVP)
@@ -73,7 +73,7 @@ A auditoria inspecionou (somente leitura): `pesquisa360/db/models.py`,
 `pesquisa360/api/endpoints/` (`relatorios`, `apuracao_espontanea`, `liderancas`,
 `coletas`, `agente`), `pesquisa360/api/dependencies/modulos.py`,
 `pesquisa360/core/rbac.py`, migrations relevantes (`c4d5e6f7a8b9`,
-`c6d7e8f9a0b1`, `b1c2d3e4f5a6`, `8c2097e0a3de`, `a8b9c0d1e2f3`, `d5e6f7a8b9c0`,
+`98d2bd125070`, `b1c2d3e4f5a6`, `8c2097e0a3de`, `a8b9c0d1e2f3`, `d5e6f7a8b9c0`,
 `e6f7a8b9c0d1`, `f7a8b9c0d1e2`) e docs `00`–`13`.
 
 ---

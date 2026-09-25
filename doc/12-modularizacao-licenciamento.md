@@ -89,8 +89,8 @@ Potencial de Crescimento.
 ## Validação executável (Prompt 01B)
 
 Runtime temporário: Python Windows 3.13 com as faixas de dependência do projeto.
-`alembic heads` retornou uma única head `c6d7e8f9a0b1`; `history` confirmou a
-relação com `b5c6d7e8f9a0`. Upgrade em SQLite descartável criou as quatro tabelas
+`alembic heads` retornou uma única head `98d2bd125070`; `history` confirmou a
+relação com `c6d7e8f9a0b1`. Upgrade em SQLite descartável criou as quatro tabelas
 e os três índices únicos parciais; downgrade para `b5c6d7e8f9a0` e re-upgrade
 passaram. O teste de domínio passou com 18 casos e a regressão backend passou
 com 1481 testes, 12 skips e 81 warnings preexistentes. A validação do endpoint
@@ -101,7 +101,7 @@ feature planejada inativa. Nenhum banco do `.env` foi acessado.
 
 A arquitetura modular foi validada contra PostgreSQL real descartável, com
 `upgrade head`, `downgrade base` e re-upgrade bem-sucedidos e head único
-`c6d7e8f9a0b1`. O hardening executável cobriu isolamento/IDOR, campos imutáveis,
+`98d2bd125070`. O hardening executável cobriu isolamento/IDOR, campos imutáveis,
 atomicidade de mutação e auditoria, 404 antes de 403 e administração exclusiva
 por Superadmin. No Web, logout/troca de empresa e erro da API de módulos mantêm
 as capacidades em fail-closed sem derrubar a sessão ou o Core.

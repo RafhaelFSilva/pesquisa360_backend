@@ -1,7 +1,7 @@
 """catalogo modular e entitlements comerciais
 
-Revision ID: c6d7e8f9a0b1
-Revises: b5c6d7e8f9a0
+Revision ID: 98d2bd125070
+Revises: c6d7e8f9a0b1
 Create Date: 2026-09-01 00:00:00.000000
 
 Fundacao aditiva: nao altera rotas existentes e nao concede licenca a tenant.
@@ -12,8 +12,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "c6d7e8f9a0b1"
-down_revision = "b5c6d7e8f9a0"
+revision = "98d2bd125070"
+down_revision = "c6d7e8f9a0b1"
 branch_labels = None
 depends_on = None
 

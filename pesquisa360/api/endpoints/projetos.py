@@ -723,7 +723,7 @@ SETOR_COM_COLETAS_DETALHE = (
 )
 
 # Hardening P0 (ADR-075): FK RESTRICT de `lideranca_cenario_setores.setor_id`
-# (migration e8f9a0b1c2d3). Cenario e historico: RASCUNHO, ATIVO e ARQUIVADO
+# (migration be8036a45b28). Cenario e historico: RASCUNHO, ATIVO e ARQUIVADO
 # protegem o setor igualmente.
 FK_CENARIO_SETOR = "fk_lideranca_cenario_setores_setor_id_setores"
 

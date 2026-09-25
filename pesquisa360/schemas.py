@@ -69,6 +69,9 @@ class Coleta(BaseModel):
     data_inicio_coleta: datetime
     data_fim_coleta: Optional[datetime] = None
     endereco_estimado: Optional[str] = None
+    is_synthetic: bool = False
+    seed_run_id: Optional[UUID] = None
+    synthetic_source: Optional[str] = None
     agente_nome: Optional[str] = None
     respostas: List[Resposta] = []
 
@@ -88,6 +91,9 @@ class ColetaMonitoramento(BaseModel):
     endereco_estimado: Optional[str] = None
     foi_offline: bool = False
     status_sincronizacao: Optional[str] = None
+    is_synthetic: bool = False
+    seed_run_id: Optional[UUID] = None
+    synthetic_source: Optional[str] = None
 
     class Config:
         from_attributes = True

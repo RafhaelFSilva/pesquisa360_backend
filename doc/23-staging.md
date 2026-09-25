@@ -123,7 +123,7 @@ Mesmos arquivos, nesta máquina, sem tocar no compose de DEV nem em produção:
 | `docker compose -p pesquisa360_staging -f docker-compose.staging.yml --env-file .env.staging config` | válido; `api` em `127.0.0.1:8010`, `db` sem porta |
 | 1ª execução de `deploy.sh` | **FALHOU**: `RuntimeError: Directory 'static' does not exist` — a imagem não era autocontida (INFRA-001) |
 | Correção | `Dockerfile` copia `migrations/`, `alembic.ini`, `scripts/` e cria `static/` e `uploads/`; regressão em `tests/test_dockerfile_packaging.py` |
-| 2ª execução | `db`/`api` healthy; migrations: vazio → `c6d7e8f9a0b1 (head)`; seed QA executado; `GET / → 200` |
+| 2ª execução | `db`/`api` healthy; migrations: vazio → `98d2bd125070 (head naquele checkpoint)`; seed QA executado; `GET / → 200` |
 | Seed 2ª vez | contagens idênticas (companies 3, usuarios 5, perfis 6, projetos 1, pesquisas 1, perguntas 9, opcoes 15, setores 2, setor_agentes 2, tentativas 3); CNPJs com 14 dígitos; perfis Gerente/Agente criados pelo seed |
 | Smoke | Gerente A: login/`/me`/`/projetos/`/`controle-campo`/`setores` 200, `CAMPO_MONITORAR`; Agente: `/me` 200, dados 403; Gerente B: `/projetos/` vazio e 404 nos recursos da A; sem token 401 |
 | Portas | `pesquisa360_staging_api 127.0.0.1:8010->8000`, `pesquisa360_staging_db 5432/tcp` (interna) |

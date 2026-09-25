@@ -51,9 +51,18 @@ from tests.test_base_eleitoral_import import run_alembic_upgrade
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_QA = Path(__file__).resolve().parent / "fixtures_qa"
 
-HEAD = "e8f9a0b1c2d3"
+HEAD = "be8036a45b28"
 ANTES_DAS_NOVAS = "e6f7a8b9c0d1"   # estado imediatamente anterior a f7a8b9c0d1e2
-NOVAS = ["f7a8b9c0d1e2", "a8b9c0d1e2f3", "b9c0d1e2f3a4", "c0d1e2f3a4b5", "c6d7e8f9a0b1", "d7e8f9a0b1c2", HEAD]
+NOVAS = [
+    "f7a8b9c0d1e2",
+    "a8b9c0d1e2f3",
+    "b9c0d1e2f3a4",
+    "c0d1e2f3a4b5",
+    "c6d7e8f9a0b1",
+    "98d2bd125070",
+    "0d497634c513",
+    HEAD,
+]
 TABELAS_NOVAS = ["tentativas_campo", "planos_cota_perfil", "cotas_perfil", "configuracoes_campo_pesquisa"]
 
 COMPANY, COMPANY_B = 10, 20

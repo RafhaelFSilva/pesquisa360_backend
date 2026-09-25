@@ -846,7 +846,7 @@ completos: doc/20.
 - [x] Backend: `compileall` + suíte completa verde em Python 3.13
   (fixtures_qa restauradas após a rodada — só regeneram timestamp).
 - [x] Feature `potencial_crescimento` confirmada `ativo=false` na migration
-  `c6d7e8f9a0b1` (head único); nenhum entitlement real criado;
+  `98d2bd125070` (head único naquele checkpoint); nenhum entitlement real criado;
   `GROWTH_ENGINE_VERSION` = `1.0`.
 - [x] Varreduras: sem `company_id` literal no código novo, sem
   score/ranking/projeção/causal fora de documentação de proibição, sem

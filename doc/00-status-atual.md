@@ -3,8 +3,8 @@
 ## Hardening P0 — Integridade histórica Setor × Cenário (ADR-075)
 
 Corrigido em 2026-09-16: a FK `lideranca_cenario_setores.setor_id` deixou de
-ser `ON DELETE CASCADE` (migration corretiva `e8f9a0b1c2d3`, filha de
-`d7e8f9a0b1c2`, head único) e passou a `ON DELETE RESTRICT`; a exclusão
+ser `ON DELETE CASCADE` (migration corretiva `be8036a45b28`, filha de
+`0d497634c513`, head único) e passou a `ON DELETE RESTRICT`; a exclusão
 física de Setor passa por `assegurar_setor_excluivel` (coletas OU histórico
 em cenário — RASCUNHO, ATIVO ou ARQUIVADO — respondem 409 com mensagem de
 negócio; setor nunca usado segue excluível). Upgrade, downgrade e re-upgrade
@@ -15,7 +15,7 @@ Soft delete de Setor permanece evolução futura.
 ## Gestão de Lideranças — Cenários de Base Eleitoral Operacional (ADR-075)
 
 Implementado em 2026-09-16: `lideranca_cenarios` + `lideranca_cenario_setores`
-(migration `d7e8f9a0b1c2`, filha de `c6d7e8f9a0b1`, head único), serviço
+(migration `0d497634c513`, filha de `98d2bd125070`, head único), serviço
 `lideranca_cenario.py` com ciclo RASCUNHO → ATIVO → ARQUIVADO, duplicação,
 ativação transacional com índice parcial único de um ATIVO por onda, snapshot
 da referência oficial e o resolvedor único `resolver_base_calculo`, consumido
@@ -31,7 +31,7 @@ Validação (Python 3.13.14): suíte backend completa 1755 passed, 14 skipped,
 0 falhas (após alinhar as constantes de head em `test_migration_chain`,
 `test_fluxo_campo_integrado` e `test_acl_multiempresa`);
 `test_lideranca_cenarios.py` 66 testes. Upgrade aplicado no Postgres local do
-compose (`alembic current` = `d7e8f9a0b1c2`). Web: `tsc -b` limpo,
+compose (`alembic current` = `0d497634c513`). Web: `tsc -b` limpo,
 `npm run build` OK, 1261/1261 testes (1235 baseline + 26 novos), lint com os
 mesmos 10 erros preexistentes.
 
@@ -42,7 +42,7 @@ Implementado em 2026-09-01: catálogo `modulos`, catálogo
 `modulo_entitlement_funcionalidades`, resolução temporal/aditiva por Empresa,
 Projeto e Pesquisa e `GET /usuarios/me/modulos/`.
 
-Migration: `c6d7e8f9a0b1`, filha de `b5c6d7e8f9a0`, novo head validado.
+Migration: `98d2bd125070`, filha de `c6d7e8f9a0b1`, novo head validado.
 Validação executável em Python Windows 3.13: upgrade, downgrade e re-upgrade em
 SQLite descartável passaram; `test_modulos_entitlements.py` passou (18) e a
 suíte backend passou (1481 passed, 12 skipped, 81 warnings). O banco do `.env`
@@ -87,7 +87,7 @@ Catálogo permanece read-only; `potencial_crescimento` permanece inativa.
 Validação: Backend 1517 passed, 12 skipped, 0 failures e 84 warnings; Web
 1119/1119 testes e build de produção aprovados. Lint mantém 10 erros
 preexistentes, nenhum em arquivo novo do Prompt 04. Nenhuma migration criada;
-head `c6d7e8f9a0b1`.
+head `98d2bd125070`.
 
 ## Sprint 0 — baseline final validada (Prompts 05B/05C/05D)
 
@@ -98,7 +98,7 @@ testes e build. O lint mantém 10 erros preexistentes, sem erro novo da Sprint 0
 Em PostgreSQL real descartável, a lineage completa passou por `upgrade head`,
 `downgrade base` e novo `upgrade head`. Foram corrigidos somente os downgrades
 históricos `28f012bafc15` e `91fbe6db1f17`; seus `upgrade()`, `revision` e
-`down_revision` não mudaram. A lineage permanece única em `c6d7e8f9a0b1`.
+`down_revision` não mudaram. A lineage permanece única em `98d2bd125070`.
 
 O hardening confirmou IDOR administrativo, rejeição de mass assignment,
 atomicidade entre mutação e auditoria, 404 antes de 403, ausência de
@@ -114,7 +114,7 @@ de domínio em
 
 Resultado: **GO para revisão metodológica humana** (questões Q01–Q15 e matriz
 de decisão no documento). Nenhum código funcional foi alterado; nenhuma
-migration criada; head permanece `c6d7e8f9a0b1`. A feature
+migration criada; head permanece `98d2bd125070`. A feature
 `inteligencia_eleitoral.potencial_crescimento` permanece planejada e inativa;
 nenhum tenant recebeu entitlement.
 
@@ -139,7 +139,7 @@ Validação em duas camadas (estrutural Pydantic + domínio contra dados reais,
 com erros/warnings tipados e normalização canônica de valores).
 Documentação: `doc/15-inteligencia-eleitoral-potencial-crescimento-configuracao.md`.
 
-Sem migration (head `c6d7e8f9a0b1`), sem tabela, sem endpoint, sem
+Sem migration (head `98d2bd125070`), sem tabela, sem endpoint, sem
 persistência da configuração, sem motor estatístico, sem alteração em
 `models.py`, Web e Mobile intocados. A feature `potencial_crescimento` segue
 inativa e sem entitlement. Testes: `tests/test_growth_analysis_configuration.py`
@@ -167,7 +167,7 @@ ranking agregado, sem projeção de votos (`eleitorado_apto` apenas contexto),
 `services/response_values.py` (o motor multidimensional consome via alias,
 sem mudança de comportamento).
 
-Sem endpoint, sem persistência, sem migration (head `c6d7e8f9a0b1`),
+Sem endpoint, sem persistência, sem migration (head `98d2bd125070`),
 `models.py` intacto, Web e Mobile intocados; feature `potencial_crescimento`
 segue inativa. Testes: `tests/test_growth_analysis_engine.py` (46 casos,
 E01–E112, incl. caso oráculo manual) passando em Python 3.13.14; regressão
@@ -195,7 +195,7 @@ e efêmera com 422 tipados (`GROWTH_CONFIGURATION_INVALID`,
 **API implementada ≠ produto liberado**: a feature `potencial_crescimento`
 permanece INATIVA no catálogo real (rotas respondem 404 até ativação
 formal); nenhum entitlement real, nenhum seed/migration alterado (head
-`c6d7e8f9a0b1`), `models.py` intacto, Web e Mobile intocados, nenhuma
+`98d2bd125070`), `models.py` intacto, Web e Mobile intocados, nenhuma
 persistência. Testes: `tests/test_growth_analysis_api.py` (36 casos,
 A01–A87 + E2E) passando em Python 3.13.14; regressão focada e completa sem
 falhas novas. Documentação:
@@ -262,7 +262,7 @@ doc/04 e doc/18 atualizados.
 ## Inteligência Eleitoral — MVP 1 (Potencial de Crescimento) — Prompt 07
 
 Executado em 2026-09-02: QA independente completo. Ambiente PostgreSQL/
-PostGIS DESCARTÁVEL (Docker, migrations `upgrade head` = `c6d7e8f9a0b1`),
+PostGIS DESCARTÁVEL (Docker, migrations `upgrade head` = `98d2bd125070`),
 feature ativada e entitlement concedido SOMENTE nesse banco (catálogo real
 intacto), dataset oráculo de 20 entrevistas somado à mão + cenários ballot/
 stress. **112/112 verificações via HTTP real**: universos/elegibilidade/
@@ -313,7 +313,7 @@ Consolidação: fixes F1/F2/F3 do QA cobertos por guarda estática
 sintéticos, `P360_QA_DATABASE_URL` obrigatória sem default); E2E formalizado
 como opt-in `npm run qa:growth-e2e` com credenciais SOMENTE via env.
 Varreduras de segurança/linguagem limpas; feature `potencial_crescimento`
-confirmada semeada `ativo=false` (migration `c6d7e8f9a0b1`, head único);
+confirmada semeada `ativo=false` (migration `98d2bd125070`, head único);
 nenhum entitlement real criado; `GROWTH_ENGINE_VERSION` permanece `1.0`.
 
 Regressão definitiva: Backend suíte completa verde em Python 3.13; Web
@@ -342,7 +342,7 @@ opt-in por `P360_QA_DATABASE_URL`).
 Ambiente QA local reproduzível documentado em `doc/22-qa-local.md`
 (compose `db`+`api`, API na porta host 8000, migrations, seed, `adb reverse`,
 `API_BASE_URL` por ambiente). O banco local do compose estava em
-`b5c6d7e8f9a0` e foi levado ao head `c6d7e8f9a0b1`. Smoke após o seed:
+`b5c6d7e8f9a0` e foi levado ao head `98d2bd125070`. Smoke após o seed:
 `/login/token`, `/usuarios/me/`, `/projetos/`, `/controle-campo` e `/setores`
 com 200 para o Gerente QA (com `CAMPO_MONITORAR`) e 403 para o Agente QA.
 Nenhuma regra de produção, contrato de API, schema ou migration alterados.

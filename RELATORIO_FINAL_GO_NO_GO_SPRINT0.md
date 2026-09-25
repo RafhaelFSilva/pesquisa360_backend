@@ -52,7 +52,7 @@ Sprint 0 ("Fundação da Modularização") foi concluída com sucesso. Baseline 
 **Mudanças:** 31 arquivos, 4097 inserções
 
 #### Novos Componentes
-- ✅ Migration c6d7e8f9a0b1_modulos_entitlements.py (catálogo + entitlements)
+- ✅ Migration 98d2bd125070_modulos_entitlements.py (catálogo + entitlements)
 - ✅ pesquisa360/api/dependencies/modulos.py (require_module/require_feature)
 - ✅ pesquisa360/services/modulos.py (resolvedor aditivo)
 - ✅ pesquisa360/api/endpoints/modulos_admin.py (admin CRUD)

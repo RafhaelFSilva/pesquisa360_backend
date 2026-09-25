@@ -140,7 +140,7 @@ banco real.
 
 ## 18. Feature status
 
-`potencial_crescimento` semeada `ativo=false` na migration `c6d7e8f9a0b1`
+`potencial_crescimento` semeada `ativo=false` na migration `98d2bd125070`
 (confirmado estaticamente no Prompt 08) e assim permanece no catálogo real.
 Implementado ≠ ativo (doc/12).
 
@@ -233,7 +233,7 @@ populacional é prometida.
   entitlement + concessão de feature (três atos deliberados).
 - Descrição do catálogo desatualizada ("Planejada: motor ainda nao
   implementado.") — corrigir na migration de ativação futura (nunca
-  reescrever `c6d7e8f9a0b1`).
+  reescrever `98d2bd125070`).
 - Dívida cosmética: 10 erros de lint pré-existentes; chunk JS > 500 kB
   (aviso do Vite, pré-existente).
 - `.env` local do backend contém segredos de desenvolvimento; NÃO é
@@ -270,13 +270,13 @@ revisão de `git diff --cached` antes de cada commit.
 
 ## 33. Alembic head
 
-`c6d7e8f9a0b1` (head ÚNICO, inalterado em todo o MVP 1 — nenhuma migration
+`98d2bd125070` (head ÚNICO naquele checkpoint, inalterado em todo o MVP 1 — nenhuma migration
 nova foi necessária: o MVP não persiste nada).
 
 ## 34. Procedimento futuro de ativação (decisão de produto; NADA disto foi executado)
 
 1. Decisão comercial formal registrada (quem, para qual empresa, quando).
-2. Migration NOVA (nunca editar `c6d7e8f9a0b1`) marcando
+2. Migration NOVA (nunca editar `98d2bd125070`) marcando
    `modulo_funcionalidades.ativo = true` para `potencial_crescimento` e
    atualizando a descrição do catálogo.
 3. Entitlement do módulo `inteligencia_eleitoral` para a(s) empresa(s)

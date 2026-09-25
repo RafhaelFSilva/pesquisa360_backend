@@ -51,7 +51,7 @@
 
 | Arquivo | Prompt | Status |
 |---|---|---|
-| migrations/versions/c6d7e8f9a0b1_modulos_entitlements.py | P01 | ✅ Head |
+| migrations/versions/98d2bd125070_modulos_entitlements.py | P01 | ✅ Head |
 
 **Resumo Backend:**
 - 15 modificados + 8 novos = 23 arquivos funcionales
@@ -138,7 +138,7 @@
 
 ### Prompt 01 — Catálogo + Entitlements
 - ✅ Modelos: `modulos`, `modulo_funcionalidades`, `modulo_entitlements`, histórico
-- ✅ Migration: c6d7e8f9a0b1
+- ✅ Migration: 98d2bd125070
 - ✅ Testes: test_modulos_entitlements.py
 - ✅ Documentação: doc/00-status-atual.md, doc/12-modularizacao-licenciamento.md
 
@@ -183,7 +183,7 @@
 2. **Sem artefatos:** Nenhum arquivo temporário, relatório ou fixture descartável
 3. **Documentação completa:** 10 arquivos doc incluídos
 4. **Testes incluídos:** 6 testes novos no Backend, 1 novo no Web
-5. **Migrations íntegras:** c6d7e8f9a0b1 é o head único
+5. **Migrations íntegras:** 98d2bd125070 era o head único neste checkpoint
 6. **Sem estranheza:** Nenhum bypass, hardcoding ou anti-pattern óbvio
 
 ### ⚠️ Observações

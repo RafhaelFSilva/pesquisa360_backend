@@ -40,7 +40,7 @@ Invoke-RestMethod http://127.0.0.1:8000/     # {"message":"API Pesquisa360 no ar
 docker compose up -d
 docker compose ps                     # db "healthy", api "Up"
 
-# 2. Migrations (head único: c6d7e8f9a0b1)
+# 2. Migrations (head único naquele checkpoint: 98d2bd125070)
 docker compose exec api alembic upgrade head
 docker compose exec api alembic current
 

@@ -15,7 +15,7 @@ Baselines auditadas e preservadas (Backend `3e632ab…` + trabalho P01–P04;
 Web `e96d10d…` + P05–P06; Mobile limpo). Runtime: Python 3.13.14 (venv de
 validação), Node do projeto. **PostgreSQL/PostGIS descartável** via Docker
 (`postgis/postgis:16-3.4`, porta 55432, banco `p360qa`): `alembic upgrade
-head` aplicado com head único `c6d7e8f9a0b1`. Backend real via uvicorn
+head` aplicado com head único `98d2bd125070`. Backend real via uvicorn
 (porta 8055; segunda instância 8056 com `P360_GROWTH_MAX_SEGMENTS=50` para o
 teste de limite). Web real via `vite dev` apontando `VITE_API_URL` ao
 backend QA; browser Chrome headless com CDP (harness E2E do projeto).

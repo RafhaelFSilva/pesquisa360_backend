@@ -1,10 +1,10 @@
 """setor referenciado por cenario de liderancas nao e excluivel (RESTRICT)
 
-Revision ID: e8f9a0b1c2d3
-Revises: d7e8f9a0b1c2
+Revision ID: be8036a45b28
+Revises: 0d497634c513
 Create Date: 2026-09-16 18:00:00.000000
 
-Hardening P0 (ADR-075). A migration d7e8f9a0b1c2 criou
+Hardening P0 (ADR-075). A migration 0d497634c513 criou
 `lideranca_cenario_setores.setor_id -> setores.id` com ON DELETE CASCADE:
 apagar um Setor apagaria em silencio a linha historica (snapshot oficial,
 operacional, observacao) de TODOS os cenarios -- RASCUNHO, ATIVO e ARQUIVADO.
@@ -18,13 +18,13 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision: str = "e8f9a0b1c2d3"
-down_revision: Union[str, Sequence[str], None] = "d7e8f9a0b1c2"
+revision: str = "be8036a45b28"
+down_revision: Union[str, Sequence[str], None] = "0d497634c513"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 TABELA = "lideranca_cenario_setores"
-# Nome dado pelo PostgreSQL a FK anonima criada em d7e8f9a0b1c2.
+# Nome dado pelo PostgreSQL a FK anonima criada em 0d497634c513.
 FK_ANTIGA_PG = "lideranca_cenario_setores_setor_id_fkey"
 FK_NOVA = "fk_lideranca_cenario_setores_setor_id_setores"
 

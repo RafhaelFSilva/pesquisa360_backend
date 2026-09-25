@@ -1,7 +1,7 @@
 """cenarios de base eleitoral operacional na gestao de liderancas
 
-Revision ID: d7e8f9a0b1c2
-Revises: c6d7e8f9a0b1
+Revision ID: 0d497634c513
+Revises: 98d2bd125070
 Create Date: 2026-09-16 12:00:00.000000
 
 Aditiva (ADR-075). Cria `lideranca_cenarios` (cenario metodologico por onda)
@@ -18,8 +18,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "d7e8f9a0b1c2"
-down_revision: Union[str, Sequence[str], None] = "c6d7e8f9a0b1"
+revision: str = "0d497634c513"
+down_revision: Union[str, Sequence[str], None] = "98d2bd125070"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

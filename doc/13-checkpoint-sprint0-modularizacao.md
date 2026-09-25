@@ -9,7 +9,7 @@
   commit documental deste checkpoint)
 - Web: `e96d10d1a6a6f89b2b7932ffe9ffa2314e4c3789`
 - Mobile: `cf6687af67fab8ff16f91fe2dba456e0da19e415`
-- Alembic: head único `c6d7e8f9a0b1`
+- Alembic: head único `98d2bd125070` naquele checkpoint
 - Branches: Backend/Web `feature/mapa-liderancas`; Mobile
   `feature/mobile-multitenancy-integration`
 

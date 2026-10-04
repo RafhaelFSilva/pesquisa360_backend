@@ -1,5 +1,64 @@
 # Status atual
 
+## Apuração TSE — API analítica e Web (2026-10-04, ADR-085 e ADR-086)
+
+Sobre a fundação de dados abaixo foram entregues a API e as telas. Migration
+`0f1b3b6c572f` (painéis), filha de `cd95ebf79450`, **novo head único**.
+
+| Item | Estado |
+|---|---|
+| API de leitura `/apuracao/tse/...` (eleições, resumo, cargo, nominatas, candidato, território, evolução) | IMPLEMENTADO; VALIDADO por HTTP real no banco de QA |
+| Painéis personalizados `/apuracao/paineis` (multitenant) | IMPLEMENTADO; VALIDADO (Empresa B recebe 404 no painel da Empresa A) |
+| Web: Central, Majoritário, Proporcional/Nominata, Meus painéis, Painel, Candidato (territorial até Zona) | IMPLEMENTADO; VALIDADO por E2E real em Chrome headless (10 passos) com dados do **simulado** |
+| Atualização automática (polling de 15 s, só Backend) | IMPLEMENTADO |
+| Estado "oficial zerado" | VALIDADO com a apuração oficial ainda não iniciada |
+| Telas com apuração oficial **parcial** e com votos reais | PENDENTE — depende do smoke test oficial |
+| Evolução com mais de uma totalização real | PENDENTE — só há uma totalização por abrangência na base |
+| Detalhamento por seção | PENDENTE — depende do BU oficial; a tela mostra a opção desabilitada |
+| Entitlement comercial do módulo | PENDENTE — o acesso hoje é só por permissão (`INTELIGENCIA_VER`) |
+| Execução agendada da ingestão | FUTURO — o polling do Web só relê o banco; quem atualiza o banco é a CLI manual |
+
+Presidente aparece com o resultado **na UF** (EA20 de abrangência UF); o total
+nacional não é ingerido.
+
+## Apuração TSE — fundação de dados (2026-10-04, ADR-076 a ADR-084)
+
+Novo domínio independente em `pesquisa360/services/tse/`, com tabelas `tse_*`
+globais (sem `company_id`). Migration `cd95ebf79450`, filha de `be8036a45b28`.
+Detalhes em `11-apuracao-tse.md`.
+
+| Item | Estado |
+|---|---|
+| Ingestão EA11, EA12, EA14, EA15, EA16, EA20 (UF, município, zona) | IMPLEMENTADO; VALIDADO no ambiente oficial de **simulação** do TSE |
+| Snapshots, histórico append-only, idempotência | IMPLEMENTADO; idempotência VALIDADA em ingestão real (simulado); histórico com mudança real só em teste automatizado |
+| Reconciliação zonas × município e municípios × UF | IMPLEMENTADO; VALIDADO (simulado) |
+| Separação `OFICIAL` × `SIMULADO` | IMPLEMENTADO |
+| EA18 | PARCIAL — contrato com arquivos visto só em 2024; simulado 2026 vem sem arquivos |
+| BU / votos por seção | PENDENTE — exige `bu.asn1` oficial; não há parser nem `tse_resultados_secao` |
+| Apuração **oficial** 2026 com votos reais | PENDENTE — smoke test oficial ainda não executado |
+| API e dashboards | entregues na rodada seguinte (seção acima) |
+| Polling contínuo do TSE (ingestão agendada) | FUTURO |
+
+Ingestão: somente manual, via `scripts/tse_apuracao.py`. Mobile não foi alterado.
+
+**Ambientes de banco.**
+
+- **QA descartável (`p360_tse_qa`, PostgreSQL 15.4 / PostGIS 3.3.4): REFERÊNCIA
+  PARA NOVAS MIGRATIONS TSE.** Sobe do zero até `0f1b3b6c572f`.
+- **DEV local (`pesquisa360_db`): NÃO CANÔNICO, PENDENTE DE RECONCILIAÇÃO.** `alembic_version`
+  está em `e8f9a0b1c2d3`, revisão que não existe mais no repositório, e a
+  migration sintética `c6d7e8f9a0b1` nunca foi aplicada nele (faltam em
+  `coletas`: `is_synthetic`, `seed_run_id`, `synthetic_source`,
+  `synthetic_operator_id`, a FK, o CHECK e o índice parcial). `alembic stamp`
+  e `alembic upgrade` estão proibidos nesse banco até decisão entre
+  reconstrução, reparo controlado ou substituição. As migrations TSE e de
+  painéis **não** foram aplicadas nele.
+- **PROD:** não recebeu nenhuma alteração e o deploy não foi feito.
+  **PRE-DEPLOY BLOCKER:** patch não versionado em `pesquisa360/crud.py`, a
+  auditar antes de qualquer pull/rebuild. `main` remoto diverge da feature.
+  Procedimento de ingestão e lista de bloqueadores: `11-apuracao-tse.md`,
+  seções 25 e 26.
+
 ## Hardening P0 — Integridade histórica Setor × Cenário (ADR-075)
 
 Corrigido em 2026-09-16: a FK `lideranca_cenario_setores.setor_id` deixou de

@@ -1,0 +1,286 @@
+{
+ "dg": "02/10/2026",
+ "hg": "18:30:57",
+ "f": "o",
+ "idg": "980407",
+ "arq": [
+  {
+   "tp": "ft",
+   "dir": "<base>/<ambiente>/<ciclo>/<cd_eleicao>/fotos/<uf>"
+  },
+  {
+   "tp": "cm",
+   "dir": "<base>/<ambiente>/<ciclo>/<cd_eleicao>/config"
+  },
+  {
+   "tp": "e",
+   "dir": "<base>/<ambiente>/<ciclo>/<cd_eleicao>/dados/<uf>"
+  },
+  {
+   "tp": "cs",
+   "dir": "<base>/<ambiente>/<ciclo>/arquivo-urna/<cd_pleito>/config/<uf>"
+  },
+  {
+   "tp": "ab",
+   "dir": "<base>/<ambiente>/<ciclo>/<cd_eleicao>/dados/<uf>"
+  },
+  {
+   "tp": "u",
+   "dir": "<base>/<ambiente>/<ciclo>/<cd_eleicao>/dados/<uf>"
+  },
+  {
+   "tp": "aux",
+   "dir": "<base>/<ambiente>/<ciclo>/arquivo-urna/<cd_pleito>/dados/<uf>/<municipio>/<zona>/<secao>"
+  }
+ ],
+ "pl": [
+  {
+   "cd": "452",
+   "cdpr": "439",
+   "c": "ele2024",
+   "dt": "06/10/2024",
+   "dtlim": "06/10/2028",
+   "e": [
+    {
+     "cd": "619",
+     "cdt2": "620",
+     "sqele": "2045202024",
+     "nm": "Eleição Ordinária Municipal - 2024 - 06/10/2024 1º Turno",
+     "t": "1",
+     "tp": "3",
+     "abr": [
+      {
+       "cd": "br",
+       "cp": [
+        {
+         "cd": "11",
+         "ds": "Prefeito",
+         "tp": "1"
+        },
+        {
+         "cd": "13",
+         "ds": "Vereador",
+         "tp": "2"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "cd": "635",
+     "cdt2": "",
+     "nm": "Consulta Popular - São Luís",
+     "t": "1",
+     "tp": "7",
+     "abr": [
+      {
+       "cd": "ma",
+       "mu": [
+        {
+         "cd": "09210",
+         "cdi": "2111300"
+        }
+       ],
+       "cp": [
+        {
+         "cd": "51",
+         "ds": "Você é a favor da implantação do passe livre estudantil no Município de São Luís?",
+         "tp": "3"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "cd": "636",
+     "cdt2": "",
+     "nm": "Consulta Popular - Governador Edison Lobão",
+     "t": "1",
+     "tp": "7",
+     "abr": [
+      {
+       "cd": "ma",
+       "mu": [
+        {
+         "cd": "07609",
+         "cdi": "2104552"
+        }
+       ],
+       "cp": [
+        {
+         "cd": "54",
+         "ds": "Você é a favor da mudança do nome do Município de Governador Edison Lobão para Ribeirãozinho do Maranhão?",
+         "tp": "3"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "cd": "634",
+     "cdt2": "",
+     "nm": "Consulta Popular - Belo Horizonte",
+     "t": "1",
+     "tp": "7",
+     "abr": [
+      {
+       "cd": "mg",
+       "mu": [
+        {
+         "cd": "41238",
+         "cdi": "3106200"
+        }
+       ],
+       "cp": [
+        {
+         "cd": "53",
+         "ds": "    Você aprova a alteração da bandeira  de Belo Horizonte?",
+         "tp": "3"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "cd": "633",
+     "cdt2": "",
+     "nm": "Consulta Popular - São Luiz",
+     "t": "1",
+     "tp": "7",
+     "abr": [
+      {
+       "cd": "rr",
+       "mu": [
+        {
+         "cd": "03158",
+         "cdi": "1400605"
+        }
+       ],
+       "cp": [
+        {
+         "cd": "55",
+         "ds": "Você é a favor da alteração do nome de São Luiz para São Luiz do Anauá?",
+         "tp": "3"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "cd": "637",
+     "cdt2": "",
+     "nm": "Consulta Popular - Dois Lajeados",
+     "t": "1",
+     "tp": "7",
+     "abr": [
+      {
+       "cd": "rs",
+       "mu": [
+        {
+         "cd": "84824",
+         "cdi": "4306452"
+        }
+       ],
+       "cp": [
+        {
+         "cd": "52",
+         "ds": "Você é a favor que o Novo Centro Administrativo Municipal seja construído na área do Parque Municipal de Eventos João de Pizzol?",
+         "tp": "3"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "cd": "3220",
+   "cdpr": "1219",
+   "c": "ele2026",
+   "dt": "04/10/2026",
+   "dtlim": "04/10/2034",
+   "e": [
+    {
+     "cd": "6257",
+     "cdt2": "6258",
+     "sqele": "20322002026",
+     "nm": "Eleição Ordinária Federal - 2026 1º Turno",
+     "t": "1",
+     "tp": "8",
+     "abr": [
+      {
+       "cd": "br",
+       "cp": [
+        {
+         "cd": "1",
+         "ds": "Presidente",
+         "tp": "1"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "cd": "6259",
+     "cdt2": "6260",
+     "sqele": "20322002026",
+     "nm": "Eleição Ordinária Estadual - 2026 1º Turno",
+     "t": "1",
+     "tp": "1",
+     "abr": [
+      {
+       "cd": "br",
+       "cp": [
+        {
+         "cd": "3",
+         "ds": "Governador",
+         "tp": "1"
+        },
+        {
+         "cd": "5",
+         "ds": "Senador",
+         "tp": "1"
+        },
+        {
+         "cd": "6",
+         "ds": "Deputado Federal",
+         "tp": "2"
+        },
+        {
+         "cd": "7",
+         "ds": "Deputado Estadual",
+         "tp": "2"
+        },
+        {
+         "cd": "8",
+         "ds": "Deputado Distrital",
+         "tp": "2"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "cd": "6261",
+     "cdt2": "",
+     "sqele": "20322002026",
+     "nm": "Eleição Ordinária Municipal - 2026 - 04/10/2026 1º Turno",
+     "t": "1",
+     "tp": "3",
+     "abr": [
+      {
+       "cd": "br",
+       "cp": [
+        {
+         "cd": "25",
+         "ds": "Conselheiro Distrital",
+         "tp": "1"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

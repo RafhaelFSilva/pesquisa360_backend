@@ -625,3 +625,86 @@ mesmo estado analítico (pesquisa, pergunta, resposta, filtros).
 - Permissão de escrita = `canManageLeadership` (LIDERANCA_GERENCIAR); o
   Backend continua a autoridade. Nenhum request carrega `company_id`.
 - Testes: `tests/liderancaCenarios.test.mjs` (26).
+
+## 16. Apuração Eleitoral (TSE)
+
+Estado em 2026-10-04: IMPLEMENTADO e validado por E2E real com dados do
+ambiente de **simulação** do TSE. Telas com apuração oficial parcial ainda não
+foram vistas com dados reais.
+
+### Rotas
+
+Todas sob `ProtectedRoute` + `PermissionRoute(['INTELIGENCIA_VER'])`. Criar e
+editar painel exigem também `RELATORIO_CONFIGURAR`. A tela só representa: quem
+barra é o Backend.
+
+| Rota | Página |
+|---|---|
+| `/apuracao` | `ApuracaoCentralPage` — origem, eleição, UF, progresso por cargo, painéis salvos |
+| `/apuracao/majoritario` | `ApuracaoMajoritarioPage` — Presidente, Governador, Senado |
+| `/apuracao/proporcional` | `ApuracaoProporcionalPage` — nominatas de Deputado Federal/Estadual |
+| `/apuracao/paineis` | `ApuracaoPaineisPage` — painéis da empresa |
+| `/apuracao/paineis/novo`, `/apuracao/paineis/:panelId/editar` | `ApuracaoPainelFormPage` |
+| `/apuracao/paineis/:panelId` | `ApuracaoPainelPage` |
+| `/apuracao/candidato/:sqcand?eleicao=<id>` | `ApuracaoCandidatoPage` — Resumo, Municípios, Zonas, Evolução |
+
+Origem, pleito e UF ficam na URL (`?origem=SIMULADO&pleito=17801&uf=ap`).
+Entrada: link "Apuração Eleitoral" no cabeçalho de `/projetos`, visível a quem
+tem `INTELIGENCIA_VER`.
+
+### Camadas
+
+- `src/api/electionResultsService.ts` — toda a comunicação HTTP do módulo.
+  Páginas não montam URL nem usam axios. Nada no Web acessa `tse.jus.br`.
+- `src/lib/apuracao.ts` — lógica pura (contextos, formatação, estados,
+  nominata, territorial, payload de painel, redutor da consulta).
+- `src/hooks/useApuracao.ts` — `useConsultaApuracao` (consulta + polling),
+  `useContextoApuracao` (origem/pleito/UF na URL), `useAtualizacaoAutomatica`.
+- `src/components/apuracao/` — `ApuracaoLayout` (cabeçalho, selo, abas,
+  controles), `OrigemBadge`, `EstadoDaConsulta`, `ProgressoTotalizacao`,
+  `TabelaCandidatos`.
+
+### Regras de apresentação
+
+- **OFICIAL × SIMULADO:** selo no cabeçalho de todas as telas. `SIMULADO TSE`
+  tem borda tracejada âmbar e um aviso fixo ("Não é resultado oficial");
+  `OFICIAL` é verde. Um contexto nunca mistura as duas origens.
+- **Sem inferência:** a situação exibida é a publicada pelo TSE
+  (`situacaoOficial`). Voto não válido mostra a destinação ("Anulado sub
+  judice") e a linha é destacada. Não há vencedor, projeção nem previsão de
+  cadeiras. No simulado, o mais votado para Governador aparece como "Anulado
+  sub judice" — a tela mostra exatamente isso.
+- **Senado:** o cartão informa "2 vagas em disputa" e lista todos os
+  candidatos em ordem de votos; não há layout de disputa de vaga única.
+- **Nominata:** posição = ordem de votos dentro do partido/federação.
+- **Territorial:** UF → Município → Zona, com percentual sobre os votos do
+  candidato na UF. Seção: botão desabilitado e o texto "Detalhamento por
+  seção ainda não disponível". Nenhum dado é simulado pelo Web.
+- **Presidente:** resultado na UF selecionada (não é o total nacional).
+
+### Atualização automática
+
+Polling de 15 s (`POLLING_INTERVAL_MS`) contra o Backend do Pesquisa360, com
+"Atualização automática: ON/OFF", "Atualizar agora" e "Última atualização:
+HH:mm:ss". A aba em segundo plano não consulta. O polling relê o banco; quem
+traz dado novo do TSE é a ingestão (hoje manual).
+
+### Estados
+
+`EstadoDaConsulta` trata carregando, erro, vazio e dados. Se uma atualização
+falha, a última resposta válida permanece na tela com um aviso ("Exibindo a
+última informação recebida"). `ProgressoTotalizacao` distingue sem dados,
+oficial ainda não iniciada, apuração parcial e apuração finalizada.
+
+### Painéis
+
+O Web nunca envia empresa; `montarPayloadPainel` produz só `nome, descricao,
+eleicao_id, uf, itens`. Itens: resultado do cargo, nominata (todas ou uma
+agremiação) e candidato acompanhado; reordenáveis. Um painel pode reunir
+cargos de eleições diferentes do mesmo pleito (ex.: Presidente e Governador).
+
+### Testes
+
+`tests/apuracao.test.mjs` (lógica pura) e `tests/apuracaoPage.test.mjs`
+(verificação estática de service, rotas, polling, selo e estados) rodam em
+`npm test`. `tests/apuracao.e2e.cdp.mjs` é o E2E real, opt-in.

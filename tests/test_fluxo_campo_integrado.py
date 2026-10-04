@@ -51,7 +51,7 @@ from tests.test_base_eleitoral_import import run_alembic_upgrade
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_QA = Path(__file__).resolve().parent / "fixtures_qa"
 
-HEAD = "be8036a45b28"
+HEAD = "0f1b3b6c572f"
 ANTES_DAS_NOVAS = "e6f7a8b9c0d1"   # estado imediatamente anterior a f7a8b9c0d1e2
 NOVAS = [
     "f7a8b9c0d1e2",

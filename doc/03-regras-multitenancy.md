@@ -364,3 +364,42 @@ Exemplo: usuário da Empresa A sem ACL pede Projeto da Empresa B. A resposta é
 404 de recurso, mesmo que A não possua o módulo. Nunca se responde 403 de
 licenciamento antes dessa validação. Um usuário multiempresa explicitamente
 autorizado usa o tenant do recurso, coerente com a ADR-034.
+
+# Exceção: dados oficiais do TSE são globais (ADR-076)
+
+As tabelas `tse_*` guardam resultados públicos da Justiça Eleitoral. Elas
+**não pertencem a tenant**: não têm `company_id`, não são filtradas por
+empresa e não são duplicadas por empresa.
+
+```
+dados_tse.company_id  = inexistente
+painel.company_id     = obrigatório (futuro)
+```
+
+- Nenhuma tabela `tse_*` tem FK para tabela de tenant, e nenhuma tabela de
+  tenant tem FK para `tse_*` (fixado em `test_tse_persistencia.py`).
+- Configuração de painel, favoritos, watchlists e preferências, quando
+  existirem, **serão multitenant** e seguirão todas as regras deste documento:
+  `JWT → current_user → acesso ao módulo → painel da company`.
+- O acesso à funcionalidade continuará passando por autenticação e
+  entitlement; o que é global é o dado, não a permissão.
+
+Esta exceção vale **somente** para dado público oficial do TSE. Ela não
+flexibiliza nada em Projeto, Pesquisa, Pergunta, Coleta, Resposta, Setor,
+Liderança ou Base Eleitoral privada, que continuam isolados por `company_id`.
+`origem` (`OFICIAL` | `SIMULADO`) não é tenant: separa o ambiente de simulação
+do TSE do resultado oficial.
+
+## Painéis da Apuração Eleitoral são do tenant (ADR-085)
+
+Implementado: `apuracao_paineis.company_id` é obrigatório e vem de
+`current_user.company_id`. O corpo das rotas usa `extra="forbid"`, então
+`company_id` enviado pelo cliente é rejeitado com 422. Listagem filtra pela
+empresa; leitura, edição e exclusão de painel de outra empresa respondem 404.
+
+O painel aponta para a eleição pela chave natural
+(`origem + pleito + codigo_eleicao`), sem FK: tabela de tenant não depende do
+domínio global `tse_*`, e o dado do TSE continua o mesmo para todas as empresas.
+
+Testes: `tests/test_apuracao_api.py` (Empresa A cria, Empresa B não vê; GET,
+PUT e DELETE cruzados → 404) e E2E Web `tests/apuracao.e2e.cdp.mjs`.

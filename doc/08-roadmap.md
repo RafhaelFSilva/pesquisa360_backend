@@ -386,3 +386,26 @@ Sequência aprovada:
   futuras (ponderação, comparação temporal, mapa de município, persistência
   de execuções, ativação comercial) permanecem NÃO iniciadas e dependem de
   decisão de produto.
+
+# Apuração Eleitoral TSE
+
+| Fase | Escopo | Estado |
+|---|---|---|
+| A | Ingestão oficial: EA11, EA12, EA14, EA15, EA16, EA20 (UF, município, zona) | Entregue; validada no ambiente de simulação do TSE |
+| B | Persistência + histórico append-only + idempotência + reconciliação | Entregue |
+| C | APIs analíticas | Entregue |
+| D | Painel Majoritário | Entregue (validado com dados do simulado) |
+| E | Painel Proporcional / Nominatas | Entregue (sem previsão de cadeiras) |
+| F | Painel Personalizado (multitenant) | Entregue na versão básica |
+| G | Inteligência Territorial UF → Município → Zona → Seção | Entregue até Zona (API e tela do candidato); **Seção pendente de parser BU oficial** |
+
+Pendências antes de avançar:
+
+- Smoke test com a apuração **oficial** (EA20 com votos reais, mesmo contrato).
+- EA18 de 2026 com arquivos reais.
+- `bu.asn1` oficial do TSE para decodificar o BU.
+- Reconciliação do banco DEV local (ver `00-status-atual.md`).
+- Execução agendada da ingestão (hoje é manual; o polling do Web só relê o banco).
+- Entitlement comercial do módulo de Apuração (hoje o acesso é por permissão).
+- Total nacional de Presidente (hoje só o resultado por UF).
+- Mapas, alertas e comparação com pesquisa: fora do escopo atual.

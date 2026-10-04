@@ -1913,3 +1913,100 @@ pelo percentual (`apresentarRespostaAlvo`, teste estático); sem amostra válida
 UI mostra "Não disponível", nunca "0 de 0". Nenhuma fórmula, cenário, Base
 Eleitoral, migration ou coluna foi alterada; duas lideranças no mesmo setor
 seguem compartilhando a amostra (individualização é assunto futuro).
+
+## ADR-076 — Dados TSE são domínio global
+
+Resultados oficiais do TSE são públicos. As tabelas `tse_*` não têm
+`company_id`, não são filtradas nem duplicadas por tenant e não se relacionam
+com Projeto/Pesquisa/Coleta. Configurações de painel, quando existirem, serão
+multitenant. A exceção não flexibiliza nenhuma regra existente de multitenancy.
+
+## ADR-077 — EA20 é a fonte consolidada oficial
+
+Voto de UF, município e zona vem do EA20. Nenhuma soma própria (de zonas, de
+municípios ou de seções) substitui silenciosamente o valor do EA20; somas
+servem apenas à reconciliação.
+
+## ADR-078 — BU é camada analítica por seção
+
+O BU alimenta a granularidade por seção e a reconciliação seção × zona. É
+ASN.1 BER e só pode ser decodificado com a especificação oficial `bu.asn1`.
+Parser especulativo é proibido. Enquanto a especificação não estiver
+disponível, não existe `tse_resultados_secao`.
+
+## ADR-079 — Histórico append-only
+
+Snapshots, totalizações e resultados nunca sofrem UPDATE. Um EA20 gera nova
+totalização apenas quando o conteúdo material muda; IDG e data de geração não
+contam. Reingerir o mesmo arquivo não duplica nada.
+
+## ADR-080 — Ingestão orientada por mudança
+
+EA14 decide se a UF precisa de nova consulta; EA15, quais municípios. Só
+então os EA20 correspondentes são buscados, sempre por GET condicional. Não há
+polling cego. Complemento: também se busca o EA20 de abrangência sem dado ou
+cuja totalização gravada está atrás do acompanhamento.
+
+## ADR-081 — Seções agregadas não são urnas independentes
+
+Seção agregada não tem BU próprio; seus votos estão na principal. Contagens de
+urna e a futura ingestão de BU usam somente seções principais.
+
+## ADR-082 — Identidade de candidato
+
+`sqcand` é o identificador oficial principal. O número do candidato é chave
+operacional contextual (exige cargo + UF). Nome nunca identifica candidato.
+
+## ADR-083 — Origem OFICIAL × SIMULADO
+
+O TSE mantém um ambiente oficial de simulação com o mesmo contrato. Toda
+eleição, snapshot e seção carrega `origem`, derivada do campo `f` do próprio
+arquivo. A origem faz parte da chave natural da eleição
+(`origem + pleito + codigo_eleicao`), e a ingestão recusa arquivo cuja origem
+difere do escopo. O simulado serve para validar contrato e pipeline; nunca é
+exibido como resultado oficial.
+
+## ADR-084 — Revision IDs Alembic já aplicados são imutáveis
+
+Incidente (2026-10-04): o ID `c6d7e8f9a0b1` nasceu como `modulos_entitlements`
+e foi reutilizado para `add_synthetic_collection_metadata`; a migration
+`setor_cenario_restrict` foi renomeada de `e8f9a0b1c2d3` para `be8036a45b28`.
+O banco DEV local, migrado pela linhagem antiga, ficou com `alembic_version`
+órfão e **sem** a migration sintética, embora parecesse equivalente ao head.
+
+Decisão:
+
+- É proibido reutilizar um revision ID.
+- É proibido renomear uma revision já aplicada em qualquer ambiente sem plano
+  explícito de compatibilidade.
+- Merge de branches com migrations divergentes exige reconciliação formal da
+  linhagem.
+- Antes de qualquer `alembic stamp`, o schema real e o `alembic_version` são
+  verificados efeito a efeito contra a cadeia atual. Equivalência parcial não
+  autoriza stamp.
+
+Estado: PROD está correto em `be8036a45b28`. DEV local segue **pendente de
+reconciliação**. Novas migrations são validadas em PostgreSQL descartável
+criado do zero.
+
+## ADR-085 — Painéis de apuração são configuração do tenant, sem FK para o TSE
+
+Os resultados do TSE são globais (ADR-076); a seleção que uma empresa faz
+sobre eles é dela. `apuracao_paineis.company_id` é obrigatório e vem do
+usuário autenticado; o corpo das rotas recusa campos extras. Painel de outra
+empresa responde 404. O painel referencia a eleição pela chave natural
+(`origem + pleito + codigo_eleicao`), sem FK para `tse_*`: nenhuma tabela de
+tenant depende do domínio global, e um painel sobrevive a uma base em que a
+eleição ainda não foi ingerida (`eleicao_id` volta nulo). Exclusão é física:
+painel é preferência, não entidade estrutural (ADR-003 não se aplica).
+
+## ADR-086 — API e telas de apuração são factuais e só leem o Backend
+
+A API de apuração lê o que a ingestão gravou; não consulta o TSE. O Web só
+consulta o Backend. Nenhuma camada infere eleito, projeta vencedor ou prevê
+cadeiras: `situacao` e `eleito` são os publicados pelo TSE, e "posição" é
+sempre ordenação por votos. Voto de candidato com destinação não válida é
+exibido com a destinação. Toda resposta carrega `origem`, e `SIMULADO` tem
+identificação visual própria em todas as telas. O acesso é por permissão
+(`INTELIGENCIA_VER` para ler, `RELATORIO_CONFIGURAR` para escrever painel);
+o entitlement comercial do módulo fica para decisão de produto.

@@ -1559,3 +1559,74 @@ class ConfiguracaoCampoPesquisa(Base):
     )
 
     pesquisa = relationship("Pesquisa")
+
+
+TIPOS_ITEM_PAINEL_APURACAO = ("CARGO", "CANDIDATO", "NOMINATA")
+ORIGENS_APURACAO = ("OFICIAL", "SIMULADO")
+
+
+class ApuracaoPainel(Base):
+    """Painel personalizado da Apuracao Eleitoral -- configuracao do TENANT.
+
+    Os resultados do TSE sao globais (tabelas `tse_*`, ADR-076); o painel e a
+    selecao que uma empresa faz sobre eles e por isso tem `company_id`. A
+    eleicao e guardada pela chave natural (origem + pleito + codigo), sem FK:
+    nenhuma tabela de tenant depende do dominio TSE.
+    """
+
+    __tablename__ = "apuracao_paineis"
+    __table_args__ = (
+        CheckConstraint(_sql_in("origem", ORIGENS_APURACAO), name="ck_apuracao_paineis_origem"),
+        Index("ix_apuracao_paineis_company", "company_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    nome = Column(String(120), nullable=False)
+    descricao = Column(Text, nullable=True)
+    origem = Column(String(10), nullable=False)
+    pleito = Column(String(10), nullable=False)
+    codigo_eleicao = Column(String(10), nullable=False)
+    uf = Column(String(2), nullable=False)
+    criado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    itens = relationship(
+        "ApuracaoPainelItem", back_populates="painel", cascade="all, delete-orphan",
+        order_by="ApuracaoPainelItem.ordem",
+    )
+
+
+class ApuracaoPainelItem(Base):
+    __tablename__ = "apuracao_painel_itens"
+    __table_args__ = (
+        CheckConstraint(
+            _sql_in("tipo", TIPOS_ITEM_PAINEL_APURACAO), name="ck_apuracao_painel_itens_tipo"
+        ),
+        CheckConstraint(
+            "tipo <> 'CANDIDATO' OR sqcand IS NOT NULL", name="ck_apuracao_painel_itens_candidato"
+        ),
+        Index("ix_apuracao_painel_itens_painel", "painel_id", "ordem"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    painel_id = Column(
+        Integer, ForeignKey("apuracao_paineis.id", ondelete="CASCADE"), nullable=False
+    )
+    tipo = Column(String(12), nullable=False)
+    cargo_codigo = Column(String(4), nullable=False)
+    sqcand = Column(String(20), nullable=True)
+    partido_numero = Column(String(5), nullable=True)
+    federacao_numero = Column(String(10), nullable=True)
+    ordem = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    ativo = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+
+    painel = relationship("ApuracaoPainel", back_populates="itens")
+
+
+# Dominio de Apuracao TSE: tabelas globais (sem tenant) em modulo proprio,
+# registradas no mesmo metadata. Import no fim para evitar ciclo.
+from . import models_tse  # noqa: E402,F401

@@ -1531,3 +1531,93 @@ declarado para a UI):
   fallback para o oficial).
 
 Sem cenário ATIVO o contrato e os números são idênticos aos anteriores.
+
+## Apuração Eleitoral (TSE + painéis)
+
+Prefixo `/apuracao`. Autenticação obrigatória. Detalhes de domínio em
+`11-apuracao-tse.md`.
+
+### Leitura dos dados do TSE — `INTELIGENCIA_VER`
+
+Dados globais: a resposta é a mesma para qualquer empresa. Nenhuma rota
+consulta o TSE; todas leem a base já ingerida. `origem` (opcional,
+`OFICIAL` | `SIMULADO`) é conferida: se divergir da eleição, responde 404.
+Datas em ISO-8601 UTC (`...Z`).
+
+| Método e rota | Parâmetros | Resposta |
+|---|---|---|
+| `GET /apuracao/tse/eleicoes` | `origem?` | eleições com resultado: `id, origem, pleito, codigo_eleicao, nome, turno, data_eleicao, ufs[], cargos[{codigo,nome}]` |
+| `GET /apuracao/tse/eleicoes/{eleicao_id}/resumo` | `uf`, `origem?` | `eleicao, origem, uf, cargos[{codigo,nome,vagas,totalizacao}], ultima_atualizacao, totalizacao` |
+| `GET /apuracao/tse/eleicoes/{eleicao_id}/cargos/{cargo_codigo}` | `uf`, `municipio?` (5 dígitos), `zona?` (4 dígitos, exige município), `origem?`, `limite?` | `eleicao, origem, cargo{codigo,nome,vagas}, abrangencia, totalizacao, total_candidatos, candidatos[]` |
+| `GET /apuracao/tse/eleicoes/{eleicao_id}/cargos/{cargo_codigo}/nominatas` | `uf`, `municipio?`, `zona?`, `origem?` | idem, com `nominatas[]` no lugar de `candidatos[]` |
+| `GET /apuracao/tse/candidatos/{sqcand}` | `eleicao_id`, `origem?` | `eleicao, origem, candidato, abrangencia, consolidado, totalizacao` |
+| `GET /apuracao/tse/candidatos/{sqcand}/territorio` | `eleicao_id`, `group_by` (`municipio` \| `zona`), `municipio?`, `origem?` | `candidato, group_by, total_votos_uf, itens[], reconciliacao, secao_disponivel` |
+| `GET /apuracao/tse/candidatos/{sqcand}/evolucao` | `eleicao_id`, `municipio?`, `zona?`, `origem?` | `candidato, abrangencia, pontos[]` |
+
+Objetos:
+
+- `totalizacao`: `idg, gerado_em, ultima_totalizacao, capturado_em, andamento`
+  (`n`/`p`/`f`), `totalizacao_final` (bool), `secoes_total, secoes_totalizadas,
+  percentual_secoes, eleitores, comparecimento, abstencoes, votos_validos,
+  votos_nominais, votos_legenda, votos_brancos, votos_nulos,
+  votos_anulados_sub_judice`.
+- `candidatos[]`: `posicao, sqcand, numero, nome, nome_urna, partido{numero,sigla,nome},
+  federacao{...}|null, votos, percentual, situacao, eleito, destinacao_voto,
+  voto_valido`. `situacao` e `eleito` são repassados do TSE — **a API não
+  infere eleito**; `eleito` é `null` quando o TSE não informa. `posicao` é a
+  ordem factual por votos.
+- `nominatas[]`: `tipo` (`FEDERACAO` | `PARTIDO`), `numero, sigla, nome, partidos[],
+  candidatos[]` (com `posicao` dentro da nominata e `posicao_geral`),
+  `votos_nominais` (soma de todos), `votos_nominais_validos`, `votos_legenda`,
+  `total` (= nominais válidos + legenda). Não há previsão de vagas.
+- `territorio.itens[]`: `posicao, municipio_codigo, municipio_nome, zona, votos,
+  percentual_dos_votos_do_candidato` (base: votos do candidato na UF),
+  `secoes_total, secoes_totalizadas, andamento, idg, gerado_em`.
+  `reconciliacao`: `status` (`CONSISTENT` | `TEMPORAL_LAG` | `INCONSISTENT` |
+  `INSUFFICIENT_DATA`), `oficial, soma_das_partes, diferenca, partes,
+  partes_esperadas`. `secao_disponivel` é sempre `false` nesta fase.
+- `evolucao.pontos[]`: `timestamp, gerado_em, idg, votos, percentual, andamento,
+  secoes_totalizadas, secoes_total, percentual_secoes`.
+
+Erros: 401 sem token; 403 sem `INTELIGENCIA_VER`; 404 eleição, cargo,
+abrangência ou candidato inexistente na base (ou `origem` divergente); 422
+parâmetro inválido (`zona` sem `municipio`, `group_by` desconhecido, formato).
+
+### Painéis personalizados — tenant do usuário
+
+`company_id` vem de `current_user`; **não é aceito no corpo** (campo extra →
+422). Painel de outra empresa responde 404 em leitura, edição e exclusão.
+
+| Método e rota | Permissão | Observação |
+|---|---|---|
+| `GET /apuracao/paineis` | `INTELIGENCIA_VER` | lista só os painéis da empresa |
+| `POST /apuracao/paineis` | `RELATORIO_CONFIGURAR` | 201 |
+| `GET /apuracao/paineis/{painel_id}` | `INTELIGENCIA_VER` | |
+| `PUT /apuracao/paineis/{painel_id}` | `RELATORIO_CONFIGURAR` | substitui o painel e seus itens |
+| `DELETE /apuracao/paineis/{painel_id}` | `RELATORIO_CONFIGURAR` | 204; exclusão física |
+
+Corpo de `POST`/`PUT`:
+
+```json
+{
+  "nome": "Geral AP",
+  "descricao": null,
+  "eleicao_id": 3,
+  "uf": "ap",
+  "itens": [
+    {"tipo": "CARGO", "cargo_codigo": "0003"},
+    {"tipo": "NOMINATA", "cargo_codigo": "0006", "federacao_numero": "100"},
+    {"tipo": "CANDIDATO", "cargo_codigo": "0006", "sqcand": "41609530"}
+  ]
+}
+```
+
+A ordem dos itens é a ordem da lista. `CANDIDATO` exige `sqcand`;
+`partido_numero`/`federacao_numero` só em `NOMINATA` (e nunca os dois). A
+resposta traz `id, nome, descricao, origem, pleito, codigo_eleicao, eleicao_id`
+(nulo se a eleição não estiver ingerida), `eleicao_nome, uf, total_itens,
+criado_em, atualizado_em` e, no detalhe, `itens[{id,tipo,cargo_codigo,sqcand,
+partido_numero,federacao_numero,ordem,ativo}]`. A origem do painel é a da
+eleição informada.
+
+Impacto: Web consome todas as rotas acima; Mobile não é afetado.

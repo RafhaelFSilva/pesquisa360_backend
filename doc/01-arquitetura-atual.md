@@ -383,3 +383,57 @@ HTTP (router potencial_crescimento)
 ```
 
 A feature permanece inativa no catálogo real; a arquitetura geral não muda.
+
+## Apuração TSE — domínio global de resultados oficiais (ADR-076 a ADR-083)
+
+```
+TSE (arquivos EA) ──> pesquisa360/services/tse ──> PostgreSQL (tse_*) ──> API futura ──> Dashboards
+```
+
+Domínio independente: não referencia Projeto, Pesquisa, Pergunta, Coleta ou
+Resposta, e nenhuma tabela de tenant referencia `tse_*`. **EA20 = fonte oficial
+consolidada. BU = fonte analítica por seção (PENDENTE).**
+
+| Módulo | Responsabilidade |
+|---|---|
+| `config.py` | `TseSettings` a partir de `TSE_*`, com defaults seguros |
+| `client.py` | `httpx.Client` síncrono: limite de taxa, retry/backoff, GET condicional, 404 definitivo |
+| `normalization.py` | DTOs e conversões; `origem_from_fase` (OFICIAL × SIMULADO) |
+| `discovery.py` | EA11, EA12 e montagem de URLs pelos templates do EA11 |
+| `acompanhamento.py` | EA14/EA15 e impressões de mudança |
+| `ea20.py` | resultado consolidado |
+| `sections.py` | EA16 (principal/agregada) e EA18 |
+| `bu.py` | identificação do formato ASN.1 BER; decodificação PENDENTE |
+| `repository.py` | persistência append-only, idempotência e consultas |
+| `ingestion.py` | orquestração orientada por mudança, uma transação por execução |
+| `reconciliation.py` | soma das partes × EA20 oficial |
+| `analytics.py` | leituras da API: dicionários serializáveis, sem ORM nem payload bruto |
+
+Models em `pesquisa360/db/models_tse.py` (mesmo `Base`, importado ao fim de
+`models.py`). Fluxo: GET condicional → snapshot (`tse_snapshots`, por
+`url + sha256`) → normalização → `tse_totalizacoes` + resultados (linha nova
+apenas quando o conteúdo material muda) → reconciliação sob demanda.
+
+O cliente é síncrono por decisão: as sessões SQLAlchemy e a CLI são síncronas
+e a ingestão é serial a poucas requisições por segundo. Execução somente
+manual (`scripts/tse_apuracao.py`); não há worker, fila nem polling.
+Diagrama completo e contratos em `11-apuracao-tse.md`.
+
+### Apuração TSE — API e Web (ADR-085, ADR-086)
+
+```
+Web (polling 15 s) ──> /apuracao/tse/*  ──> services/tse/analytics.py ──> tse_*            (global)
+                  └──> /apuracao/paineis ──> services/apuracao_paineis.py ──> apuracao_paineis (tenant)
+CLI manual ──> TseIngestion ──> TSE
+```
+
+- `api/endpoints/apuracao_tse.py`: um router, dois grupos de escopo. Leitura
+  exige `INTELIGENCIA_VER`; escrita de painel exige `RELATORIO_CONFIGURAR`.
+- A API **nunca** consulta o TSE: lê o que a ingestão gravou. O Web nunca
+  consulta o TSE: só o Backend.
+- `apuracao_paineis` / `apuracao_painel_itens` (models em `models.py`) são
+  tabelas de tenant. Guardam a eleição pela chave natural
+  (`origem + pleito + codigo_eleicao`), sem FK para `tse_*`.
+- Web: `src/api/electionResultsService.ts` → `src/hooks/useApuracao.ts`
+  (consulta com polling) → páginas `Apuracao*Page.tsx`; lógica pura em
+  `src/lib/apuracao.ts`.

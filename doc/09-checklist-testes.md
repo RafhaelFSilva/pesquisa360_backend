@@ -938,3 +938,78 @@ captura (projeção e Gap/Plus NÃO podem mudar):
 - [ ] Mapa: card sem linha "Taxa alvo" duplicada; "Amostra" continua.
 - [ ] Larguras desktop/intermediária/estreita: tabela sem quebra da célula.
 - [ ] Recorte filtrado continua mostrando só a taxa do recorte.
+
+## Apuração TSE
+
+Automatizados: `tests/test_tse_service.py` (parsers, URLs, cliente HTTP,
+reconciliação), `tests/test_tse_simulado.py` (contrato com votos, fixtures
+`SIMULADO_*`) e `tests/test_tse_persistencia.py` (migration, ingestão,
+histórico, idempotência, origem).
+
+- [x] EA11 (oficial e simulado)
+- [x] EA12
+- [x] EA14 (zerado e com progresso)
+- [x] EA15
+- [x] EA16 (principal e agregada)
+- [ ] EA18 — parser e persistência testados com o contrato de 2024; **pendente** EA18 de 2026 com arquivos
+- [x] EA20 UF — com votos no simulado
+- [x] EA20 município — com votos no simulado
+- [x] EA20 zona — com votos no simulado
+- [ ] BU — **pendente** de `bu.asn1` oficial
+- [x] snapshot (`url + sha256`)
+- [x] idempotência (reingestão e arquivo regerado sem mudança material)
+- [x] histórico append-only (teste automatizado com dois estados)
+- [x] reconciliação (CONSISTENT, TEMPORAL_LAG, INCONSISTENT, INSUFFICIENT_DATA)
+- [x] retry / backoff em 5xx e falha de rede
+- [x] 304
+- [x] 404 sem repetição
+- [x] 429 com `Retry-After`
+- [x] candidato anulado sub judice (`dvt`)
+- [x] separação OFICIAL × SIMULADO
+- [x] isolamento: nenhuma tabela `tse_*` com `company_id` ou FK de tenant
+- [x] dados reais do ambiente de **simulação** (AP, Deputado Federal)
+- [ ] dados reais da apuração **oficial** — smoke test pendente
+- [ ] histórico com duas totalizações reais do TSE — pendente
+- [x] não duplicação (3 execuções reais, contagens idênticas)
+
+QA manual do smoke test oficial:
+
+- [ ] `ingest --uf ap --cargo 0006 --municipios todos --zonas-de 06050` em banco de QA.
+- [ ] EA20 UF, Macapá e zonas com votos > 0 e `origem = OFICIAL`.
+- [ ] Verificar se o EA20 oficial traz `dvt`; conferir soma dos válidos = `vnom`.
+- [ ] Segunda execução minutos depois: nova totalização, anterior preservada.
+- [ ] `consulta --reconciliar-municipio 06050`: CONSISTENT ou TEMPORAL_LAG.
+
+## Apuração Eleitoral — API e Web
+
+Automatizados: backend `tests/test_apuracao_api.py`; Web
+`tests/apuracao.test.mjs` e `tests/apuracaoPage.test.mjs`; E2E opt-in
+`tests/apuracao.e2e.cdp.mjs`.
+
+- [x] API: eleições, resumo, cargo (UF/município/zona), nominatas, candidato, território, evolução
+- [x] API: `origem` divergente → 404; parâmetros inválidos → 422
+- [x] API: `eleito`/`situacao` repassados do TSE, sem inferência
+- [x] API: mesma resposta para empresas diferentes (dado global)
+- [x] Painéis: Empresa A cria; Empresa B não vê; GET/PUT/DELETE cruzados → 404
+- [x] Painéis: `company_id` no corpo → 422
+- [x] Painéis: Cliente lê e não escreve; Agente → 403
+- [x] Web: service, normalização, loading, erro, vazio, SIMULADO, OFICIAL, majoritário, nominata, territorial, payload de painel
+- [x] E2E real (Chrome headless, dados do simulado): 10 passos
+- [ ] Web com apuração oficial **parcial** e com votos reais — pendente do smoke oficial
+- [ ] Evolução com mais de uma totalização — pendente de dado real
+- [ ] Detalhamento por seção — pendente de BU
+
+QA manual (ambiente: API apontando para `p360_tse_qa`, Web com `VITE_API_URL`
+dessa API, usuários do seed QA):
+
+- [ ] `/projetos` mostra "Apuração Eleitoral" para Gerente e não para Agente.
+- [ ] Central em SIMULADO: selo "SIMULADO TSE", aviso âmbar, 5 cargos com 100% das seções.
+- [ ] Trocar para OFICIAL: selo verde, sem aviso, "Apuração oficial ainda não iniciada" enquanto zerada.
+- [ ] Majoritário: três cartões da mesma altura; Senado com "2 vagas em disputa"; situação igual à do TSE.
+- [ ] Proporcional: trocar de cargo e de nominata; marcar candidatos e criar painel.
+- [ ] Painel: criar, reordenar itens, editar, excluir; abrir com outro usuário da mesma empresa.
+- [ ] Painel da Empresa A aberto pela Empresa B: "Painel não encontrado."
+- [ ] Candidato: Resumo, Municípios, clicar em Macapá → Zonas 0002/0010/0014, Evolução; "Seções" desabilitado.
+- [ ] Atualização automática: desligar e ligar; "Atualizar agora"; hora muda a cada 15 s.
+- [ ] Parar a API com a tela aberta: dados permanecem, com aviso de indisponibilidade.
+- [ ] Janela estreita (≤ 768 px): sem rolagem horizontal; tabelas roláveis na vertical.

@@ -70,10 +70,14 @@ class TseIngestion:
         self.client = client
         self.settings = settings
         self.repo = TseRepository(session)
+        self.error_context = dict.fromkeys((
+            "origem", "pleito", "eleicao", "cargo", "uf", "municipio", "zona",
+            "url", "snapshot_id", "abrangencia_id", "cargo_id", "phase"))
 
     def run(self, scope: IngestScope) -> IngestReport:
         report = IngestReport()
         uf = scope.uf.lower()
+        self.error_context.update(origem=scope.origem, pleito=scope.pleito, uf=uf)
         inicio = len(self.client.requests)
 
         ea11_doc, _snap, _new = self._fetch(
@@ -82,8 +86,10 @@ class TseIngestion:
         if ea11_doc is None:
             raise RuntimeError("EA11 indisponivel: nao ha como descobrir a eleicao")
         report.pleito = scope.pleito or discovery.discover_pleito(ea11_doc, scope.cargos)
+        self.error_context.update(pleito=report.pleito, phase="parse_ea11")
         config = discovery.parse_ea11(ea11_doc, base_url=self.settings.base_url,
                                       ambiente=self.settings.ambiente, pleito=report.pleito)
+        self.error_context["phase"] = "upsert_catalog"
         eleicoes = self.repo.upsert_eleicoes(config)
 
         por_eleicao: dict[str, list[str]] = {}
@@ -95,6 +101,7 @@ class TseIngestion:
             self._ingest_election(scope, report, config, eleicoes[codigo], cargos, uf)
 
         self._ingest_sections(scope, report, config, uf)
+        self.error_context["phase"] = "commit"
         self.session.commit()
         feitas = self.client.requests[inicio:]
         report.requisicoes = len(feitas)
@@ -104,8 +111,12 @@ class TseIngestion:
     # ---------------------------------------------------------------- eleicao
     def _ingest_election(self, scope, report, config, eleicao, cargos, uf):
         codigo = eleicao.codigo_eleicao
+        self.error_context.update(eleicao=codigo, cargo=None, municipio=None, zona=None,
+                                  cargo_id=None, abrangencia_id=None)
         ea12_doc, _s, _n = self._fetch(scope, report, "EA12", discovery.ea12_url(config, codigo))
+        self.error_context["phase"] = "parse_ea12"
         municipios = {m.codigo: m for m in discovery.parse_ea12(ea12_doc, uf)}
+        self.error_context["phase"] = "upsert_abrangencia"
         abr_uf = self.repo.upsert_abrangencia(eleicao, uf=uf)
         for municipio in municipios.values():
             self.repo.upsert_abrangencia(eleicao, uf=uf, municipio=municipio)
@@ -160,6 +171,7 @@ class TseIngestion:
         doc, _snapshot, new = self._fetch(scope, report, tipo, url)
         if doc is None:
             return set(), {}
+        self.error_context["phase"] = f"parse_{tipo.lower()}"
         atual = acompanhamento.parse_acompanhamento(doc)
         current = atual.fingerprints()
         if previous is None:
@@ -187,10 +199,15 @@ class TseIngestion:
             report.ea20_ignorados_sem_mudanca += 1
             return
         url = discovery.ea20_url(config, eleicao.codigo_eleicao, uf, cargo, municipio, zona)
+        self.error_context.update(eleicao=eleicao.codigo_eleicao, cargo=cargo,
+                                  cargo_id=cargo_row.id, abrangencia_id=abrangencia.id,
+                                  municipio=municipio, zona=zona)
         doc, snapshot, _new = self._fetch(scope, report, "EA20", url)
         if doc is None:
             return
+        self.error_context["phase"] = "parse_ea20"
         resultado = ea20.parse_ea20(doc)
+        self.error_context["phase"] = "record_ea20"
         _total, created = self.repo.record_ea20(eleicao, abrangencia, snapshot, resultado, uf)
         if created:
             report.totalizacoes_novas += 1
@@ -202,10 +219,15 @@ class TseIngestion:
 
     # ----------------------------------------------------------------- secoes
     def _ingest_sections(self, scope, report, config, uf):
+        self.error_context.update(eleicao=None, cargo=None, cargo_id=None, abrangencia_id=None,
+                                  municipio=None, zona=None)
         doc, _snapshot, _new = self._fetch(scope, report, "EA16", discovery.ea16_url(config, uf))
         if doc is None:
             return
-        report.secoes = self.repo.sync_secoes(scope.origem, sections.parse_ea16(doc, uf))
+        self.error_context["phase"] = "parse_ea16"
+        parsed = sections.parse_ea16(doc, uf)
+        self.error_context["phase"] = "sync_secoes"
+        report.secoes = self.repo.sync_secoes(scope.origem, parsed)
         if not scope.secoes_ea18:
             return
         municipio = f"{int(scope.zonas_de[0]):05d}" if scope.zonas_de else None
@@ -214,6 +236,7 @@ class TseIngestion:
                                                   principais=True) if s.auxiliar_em is not None]
         for secao in candidatas[: scope.secoes_ea18]:
             args = (config, uf, secao.municipio_codigo, secao.zona, secao.secao)
+            self.error_context.update(municipio=secao.municipio_codigo, zona=secao.zona)
             aux_doc, snapshot, _n = self._fetch(scope, report, "EA18",
                                                 discovery.ea18_url(*args))
             if aux_doc is None:
@@ -225,7 +248,9 @@ class TseIngestion:
     # ------------------------------------------------------------------ fetch
     def _fetch(self, scope, report, tipo, url):
         """GET condicional + snapshot. Devolve (documento, snapshot, snapshot_novo)."""
+        self.error_context.update(url=url, snapshot_id=None, phase="latest_snapshot")
         previous = self.repo.latest_snapshot(url)
+        self.error_context["phase"] = "http_get"
         response = self.client.get(
             url, etag=previous.etag if previous else None,
             last_modified=previous.last_modified if previous else None)
@@ -233,17 +258,21 @@ class TseIngestion:
             report.nao_encontrados.append(url)
             return None, None, False
         if response.not_modified:
+            self.error_context.update(snapshot_id=previous.id, phase="cached_snapshot")
             report.nao_modificados += 1
             return previous.payload_json, previous, False
 
+        self.error_context["phase"] = "decode_json"
         doc = json.loads(response.content.decode("utf-8"))
         origem = origem_from_fase(doc.get("f"))
         if origem != scope.origem:
             raise TseOrigemError(
                 f"{tipo} {url} e do ambiente {origem}, mas o escopo pede {scope.origem}")
+        self.error_context["phase"] = "save_snapshot"
         snapshot, created = self.repo.save_snapshot(
             origem=origem, tipo=tipo, response=response, payload=doc, idg=doc.get("idg"),
             gerado_em=to_datetime(doc.get("dg"), doc.get("hg")))
+        self.error_context["snapshot_id"] = snapshot.id
         if created:
             report.snapshots_novos += 1
         else:

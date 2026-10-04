@@ -24,14 +24,20 @@ import argparse
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import threading
 import time
+import traceback
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .client import TseClient
+import httpx
+from sqlalchemy.exc import DBAPIError, OperationalError
+
+from .client import TseClient, TseHttpError, TseTransientError
 from .config import (
     TseIngestionSettings, TseSettings, load_ingestion_settings, settings_for_origem,
 )
@@ -63,6 +69,17 @@ class TseIngestorWorker:
         self.stop_event = stop_event or threading.Event()
         self.lock = IngestionLock(engine, settings.origem)
         self._last_standby_log = 0.0
+        self._cycle_state = {
+            "cycle_id": None, "last_cycle_started_at": None, "last_cycle_finished_at": None,
+            "last_success_at": None, "last_error_at": None, "consecutive_errors": 0,
+            "last_error_kind": None,
+        }
+        try:
+            previous = json.loads(settings.heartbeat_file.read_text(encoding="utf-8"))
+            if previous.get("origem") == settings.origem:
+                self._cycle_state.update({k: previous[k] for k in self._cycle_state if k in previous})
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass  # Primeiro startup ou heartbeat invalido: o proximo ciclo escreve o estado.
 
     # ------------------------------------------------------------------ loop
     def run(self, max_iterations: int | None = None) -> int:
@@ -97,8 +114,11 @@ class TseIngestorWorker:
         try:
             acquired = self.lock.try_acquire()
         except Exception as exc:  # banco indisponivel: tenta de novo no proximo ciclo
+            self._remember_error(_error_kind(exc))
             self._heartbeat("db_unavailable")
-            logger.error("tse_ingestor_lock_error %s", json.dumps({"erro": _erro(exc)}))
+            logger.error("tse_ingestor_lock_error %s\n%s", json.dumps({
+                "origem": self.settings.origem, "phase": "advisory_lock", "erro": _erro(exc)}),
+                _safe_traceback(exc))
             return
         if not acquired:
             self._heartbeat("standby")
@@ -117,7 +137,13 @@ class TseIngestorWorker:
         """Uma passada por todas as UFs. Nunca levanta: erros viram `status`."""
         s = self.settings
         started = time.monotonic()
+        cycle_id = uuid.uuid4().hex
+        self._cycle_state.update(cycle_id=cycle_id, last_cycle_started_at=time.time())
+        self._heartbeat("running")
+        logger.info("tse_ingest_cycle_start %s", json.dumps({
+            "cycle_id": cycle_id, "origem": s.origem, "ufs": list(s.ufs)}))
         record = {
+            "cycle_id": cycle_id,
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "origem": s.origem, "ufs": list(s.ufs), "cargos": list(s.cargos), "pleito": None,
             # UFs que mudaram (lista curta) e QUANTOS municipios mudaram: a lista de
@@ -136,17 +162,23 @@ class TseIngestorWorker:
                                     municipios=s.municipios, zonas_de=s.zonas_de,
                                     origem=s.origem)
                 session = self.session_factory()
+                ingestion = TseIngestion(session, client, self.tse_settings)
                 try:
-                    report = TseIngestion(session, client, self.tse_settings).run(scope)
+                    report = ingestion.run(scope)
                 except ShutdownRequested:
                     session.rollback()
                     record["status"] = "interrupted"
                     break
                 except Exception as exc:
+                    error = {**ingestion.error_context, "cycle_id": cycle_id,
+                             "exception_type": type(exc).__name__,
+                             "error_kind": _error_kind(exc), "erro": _erro(exc)}
+                    logger.error("tse_ingest_error %s\n%s", json.dumps(error, ensure_ascii=False),
+                                 _safe_traceback(exc))
                     # Rollback: nada do ciclo desta UF fica gravado pela metade.
                     session.rollback()
                     record["status"] = "error"
-                    record["errors"].append({"uf": uf, "erro": _erro(exc)})
+                    record["errors"].append(error)
                     continue
                 finally:
                     session.close()
@@ -158,6 +190,17 @@ class TseIngestorWorker:
                 if status == 200 and url.endswith("-u.json"):
                     record["ea20"] += 1
         record["duration_ms"] = round((time.monotonic() - started) * 1000)
+        finished = time.time()
+        self._cycle_state["last_cycle_finished_at"] = finished
+        if record["errors"]:
+            record["status"] = "error"
+            kind = "structural" if any(e["error_kind"] == "structural" for e in record["errors"]) \
+                else "transient"
+            self._remember_error(kind, finished)
+        elif record["status"] == "ok":
+            self._cycle_state.update(last_success_at=finished, consecutive_errors=0,
+                                     last_error_kind=None)
+        self._heartbeat(record["status"])
         nivel = logging.ERROR if record["status"] == "error" else logging.INFO
         logger.log(nivel, "tse_ingest_cycle %s", json.dumps(record, ensure_ascii=False))
         return record
@@ -173,6 +216,14 @@ class TseIngestorWorker:
         record["totalizacoes_new"] += report.totalizacoes_novas
 
     # ---------------------------------------------------------------- suporte
+    def _remember_error(self, kind: str, at: float | None = None) -> None:
+        state = self._cycle_state
+        state["last_error_at"] = time.time() if at is None else at
+        state["consecutive_errors"] += 1
+        # Uma falha transitoria posterior nao apaga uma falha estrutural pendente.
+        if state["last_error_kind"] != "structural":
+            state["last_error_kind"] = kind
+
     def _sleep(self, seconds: float) -> None:
         """Espera do cliente HTTP: mantem o heartbeat e respeita o pedido de parada."""
         self._heartbeat("running")
@@ -180,9 +231,12 @@ class TseIngestorWorker:
             raise ShutdownRequested()
 
     def _heartbeat(self, status: str) -> None:
-        payload = {"at": time.time(), "status": status, "pid": os.getpid(),
+        at = time.time()
+        payload = {**self._cycle_state, "at": at, "last_heartbeat_at": at,
+                   "status": status, "pid": os.getpid(),
                    "origem": self.settings.origem,
-                   "interval_seconds": self.settings.interval_seconds}
+                   "interval_seconds": self.settings.interval_seconds,
+                   "max_consecutive_errors": self.settings.max_consecutive_errors}
         path = self.settings.heartbeat_file
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -194,11 +248,41 @@ class TseIngestorWorker:
 
 
 def _erro(exc: Exception) -> str:
-    return f"{type(exc).__name__}: {exc}"[:300]
+    # DBAPIError.__str__ inclui SQL e parametros (podem conter payload/credenciais).
+    if isinstance(exc, DBAPIError):
+        diag = getattr(exc.orig, "diag", None)
+        message = getattr(diag, "message_primary", None) or str(exc.orig)
+        names = {name: getattr(diag, name, None) for name in (
+            "constraint_name", "table_name", "column_name")}
+        if any(names.values()):
+            message += " " + json.dumps({k: v for k, v in names.items() if v})
+        # DETAIL/CONTEXT podem conter a linha inteira, inclusive payload_json.
+        message = re.split(r"\n(?:DETAIL|CONTEXT):", message, maxsplit=1)[0]
+    else:
+        message = str(exc)
+    for key, value in os.environ.items():
+        if len(value) >= 8 and any(part in key.upper() for part in ("PASSWORD", "SECRET", "TOKEN")):
+            message = message.replace(value, "[redacted]")
+    message = re.sub(r"([a-z][a-z0-9+.-]*://)[^/\s@]+@", r"\1[redacted]@", message)
+    return f"{type(exc).__name__}: {message}"
+
+
+def _safe_traceback(exc: Exception) -> str:
+    # Pilha completa sem locals, SQL ou parametros; conserva a mensagem do driver.
+    return "Traceback (most recent call last):\n" + "".join(
+        traceback.format_tb(exc.__traceback__)) + _erro(exc)
+
+
+def _error_kind(exc: Exception) -> str:
+    if isinstance(exc, TseHttpError) and (exc.status == 429 or 500 <= exc.status < 600):
+        return "transient"
+    return "transient" if isinstance(exc, (
+        TseTransientError, httpx.TransportError, TimeoutError, ConnectionError, OperationalError,
+    )) else "structural"
 
 
 def healthcheck(heartbeat_file: Path, now: float | None = None) -> tuple[bool, str]:
-    """Saudavel = heartbeat recente e processo nao encerrado."""
+    """Heartbeat recente, sem erro estrutural pendente ou limite de falhas atingido."""
     try:
         beat = json.loads(Path(heartbeat_file).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -209,6 +293,10 @@ def healthcheck(heartbeat_file: Path, now: float | None = None) -> tuple[bool, s
         return False, "worker encerrado"
     if age > limite:
         return False, f"heartbeat ha {age:.0f}s (limite {limite:.0f}s)"
+    if beat.get("last_error_kind") == "structural":
+        return False, "erro estrutural sem sucesso posterior"
+    if beat.get("consecutive_errors", 0) >= beat.get("max_consecutive_errors", 3):
+        return False, "limite de erros consecutivos atingido"
     return True, f"{beat.get('status')} ha {age:.0f}s"
 
 

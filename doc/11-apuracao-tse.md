@@ -354,6 +354,7 @@ Processo separado da API (ADR-087), mesma imagem, comando
 | `TSE_INGESTION_PLEITO` | vazio | vazio = descoberto no EA11 |
 | `TSE_INGESTION_HEARTBEAT_FILE` | `<tmp>/tse_ingestor.heartbeat` | lido pelo healthcheck |
 | `TSE_INGESTION_LOG_LEVEL` | `INFO` | |
+| `TSE_INGESTION_MAX_CONSECUTIVE_ERRORS` | `3` | inteiro positivo; limite de falhas transitórias consecutivas |
 
 Configuração inválida (origem, UF, cargo, intervalo) impede o processo de
 subir, com a mensagem do erro.
@@ -376,7 +377,15 @@ uma transação; erro faz rollback e o ciclo seguinte tenta de novo.
 SELECT classid, objid, granted FROM pg_locks WHERE locktype = 'advisory';
 ```
 
-**Log.** Uma linha por ciclo, sem payload:
+**Replay histórico.** Um EA20 já conhecido pode voltar depois de outro mais
+novo. A chave `(cargo_id, abrangencia_id, snapshot_id)` determina NO-OP antes
+do hash da última totalização (ADR-089); o evento INFO
+`snapshot_already_processed` é normal. A UNIQUE continua intacta; uma corrida
+usa SAVEPOINT sem desfazer a transação externa. Snapshot genuinamente novo
+com horário anterior segue a regra histórica, sem exigir timestamp crescente.
+
+**Log.** Início `tse_ingest_cycle_start` e resumo `tse_ingest_cycle` compartilham
+`cycle_id`, sem payload:
 
 ```
 tse_ingest_cycle {"timestamp": ..., "origem": "OFICIAL", "ufs": ["ap"], "cargos": [...],
@@ -388,12 +397,21 @@ tse_ingest_cycle {"timestamp": ..., "origem": "OFICIAL", "ufs": ["ap"], "cargos"
 `status`: `ok`, `error` (com `errors[]`; houve rollback da UF) ou
 `interrupted` (parada pedida). Outros eventos: `tse_ingestor_start`,
 `tse_ingestor_standby`, `tse_ingestor_signal`, `tse_ingestor_stop`.
+`tse_ingest_error` inclui tipo/mensagem completa, traceback e contexto
+(origem, pleito, eleição, cargo, UF, município/zona, URL, snapshot_id,
+abrangencia_id, cargo_id, fase e cycle_id). SQL, parâmetros e DETAIL/CONTEXT
+com valores de linha são omitidos; mensagem primária e nomes do driver ficam.
 
 **Health.** `python -m pesquisa360.services.tse.worker --healthcheck` sai com
-0 se o heartbeat tem menos de `max(120 s, 4 × intervalo)` e o worker não foi
-encerrado. O heartbeat é renovado a cada ciclo e a cada espera entre
-requisições, então um worker travado fica `unhealthy`. Desligado e em espera
-também são estados saudáveis.
+0 se o heartbeat tem menos de `max(120 s, 4 × intervalo)`, o worker não foi
+encerrado, não há erro estrutural pendente e o limite de falhas consecutivas
+não foi atingido (ADR-090). O arquivo separa `last_heartbeat_at`,
+`last_cycle_started_at`, `last_cycle_finished_at`, `last_success_at`,
+`last_error_at`, `consecutive_errors` e `last_error_kind`. Heartbeat recente
+nunca apaga erro estrutural; somente ciclo completo bem-sucedido recupera
+health e zera o contador. Reinício preserva falha pendente no heartbeat da
+mesma origem quando o arquivo existe. Timeout/rede/429/5xx são transitórios: uma falha
+isolada é tolerada. Desligado e em espera inicialmente são saudáveis.
 
 **Startup.**
 
@@ -441,11 +459,11 @@ produção.
 | container `healthy`, sem `tse_ingest_cycle` | `TSE_INGESTION_ENABLED=false` | habilitar e reiniciar o serviço |
 | `tse_ingestor_standby` repetido | outro ingestor ou uma CLI segura a trava | localizar em `pg_locks`; manter só um |
 | `status: error` com `TseTransientError` | TSE fora do ar ou lento | nenhuma: o próximo ciclo repete |
-| `status: error` com `JSONDecodeError` | resposta inválida do TSE | nenhuma: o último estado válido foi preservado |
+| `status: error` com `JSONDecodeError` | resposta inválida do TSE | investigar contrato; unhealthy até ciclo bem-sucedido; último estado válido preservado |
 | `status: error` com `TseOrigemError` | origem configurada ≠ ambiente consultado | conferir `TSE_INGESTION_ORIGIN` |
 | `status: error` com `LookupError` | pleito, cargo ou município inexistente no EA11/EA12 | conferir cargos e `TSE_INGESTION_PLEITO` |
 | `tse_ingestor_lock_error` | banco indisponível | o worker tenta de novo a cada ciclo |
-| container `unhealthy` | worker travado ou encerrado | `docker compose restart tse_ingestor` |
+| container `unhealthy` | heartbeat expirado, erro estrutural ou limite de erros consecutivos | conferir `tse_ingest_error` e heartbeat; corrigir causa; não tratar reinício como prova de recuperação |
 | CLI sai com código 3 | worker ativo | parar o worker antes (25.2) |
 
 ### 25.4 Procedimento de deploy

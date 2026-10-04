@@ -92,8 +92,11 @@ class TseIngestionSettings:
     # None = descoberto no EA11 (pleito mais recente que disputa os cargos).
     pleito: str | None = None
     heartbeat_file: Path = Path(tempfile.gettempdir()) / "tse_ingestor.heartbeat"
+    max_consecutive_errors: int = 3
 
     def __post_init__(self):
+        if self.max_consecutive_errors < 1:
+            raise ValueError("TSE_INGESTION_MAX_CONSECUTIVE_ERRORS deve ser positivo")
         if self.origem not in (OFICIAL, SIMULADO):
             raise ValueError("TSE_INGESTION_ORIGIN deve ser OFICIAL ou SIMULADO")
         invalidas = [uf for uf in self.ufs if uf not in UFS]
@@ -154,4 +157,6 @@ def load_ingestion_settings(environ=None) -> TseIngestionSettings:
         interval_seconds=float(env.get("TSE_INGESTION_INTERVAL_SECONDS", padrao.interval_seconds)),
         pleito=(env.get("TSE_INGESTION_PLEITO") or "").strip() or None,
         heartbeat_file=Path(env.get("TSE_INGESTION_HEARTBEAT_FILE") or padrao.heartbeat_file),
+        max_consecutive_errors=int(env.get(
+            "TSE_INGESTION_MAX_CONSECUTIVE_ERRORS", padrao.max_consecutive_errors)),
     )

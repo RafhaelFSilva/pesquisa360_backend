@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from pesquisa360.db.models_tse import (
@@ -27,6 +29,7 @@ from .normalization import (
 )
 
 TIPO_POR_TPABR = {"br": "BR", "uf": "UF", "mu": "MUNICIPIO", "zona": "ZONA"}
+logger = logging.getLogger("pesquisa360.tse.repository")
 
 
 def abrangencia_key(uf: str | None = None, municipio: str | None = None,
@@ -166,6 +169,20 @@ class TseRepository:
             TseAbrangencia.parent_id == abrangencia_id).order_by(TseAbrangencia.chave)))
 
     # ------------------------------------------------------------------ EA20
+    def _totalizacao_for_snapshot(self, abrangencia_id: int, cargo_id: int,
+                                  snapshot_id: int) -> TseTotalizacao | None:
+        return self.session.scalars(select(TseTotalizacao).where(
+            TseTotalizacao.abrangencia_id == abrangencia_id,
+            TseTotalizacao.cargo_id == cargo_id,
+            TseTotalizacao.snapshot_id == snapshot_id)).first()
+
+    @staticmethod
+    def _snapshot_replayed(total: TseTotalizacao) -> tuple[TseTotalizacao, bool]:
+        logger.info("snapshot_already_processed %s", json.dumps({
+            "cargo_id": total.cargo_id, "abrangencia_id": total.abrangencia_id,
+            "snapshot_id": total.snapshot_id, "totalizacao_id": total.id}))
+        return total, False
+
     def latest_totalizacao(self, abrangencia_id: int, cargo_id: int) -> TseTotalizacao | None:
         return self.session.scalars(
             select(TseTotalizacao).where(TseTotalizacao.abrangencia_id == abrangencia_id,
@@ -189,6 +206,9 @@ class TseRepository:
                 f"EA20 tpabr={resultado.tipo_abrangencia} incompativel com {abrangencia.chave}")
 
         cargo = self.get_cargo(resultado.cargo, resultado.cargo_nome)
+        existing = self._totalizacao_for_snapshot(abrangencia.id, cargo.id, snapshot.id)
+        if existing is not None:
+            return self._snapshot_replayed(existing)
         digest = content_hash(resultado)
         latest = self.latest_totalizacao(abrangencia.id, cargo.id)
         if latest is not None and latest.conteudo_hash == digest:
@@ -210,8 +230,19 @@ class TseRepository:
             votos_anulados_sub_judice=resultado.votos_anulados_sub_judice,
             quociente_eleitoral=resultado.quociente_eleitoral, conteudo_hash=digest,
         )
-        self.session.add(total)
-        self.session.flush()
+        try:
+            # A corrida pela UNIQUE desfaz somente este INSERT, nao a transacao da UF.
+            with self.session.begin_nested():
+                self.session.add(total)
+                self.session.flush()
+        except IntegrityError as exc:
+            if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) != \
+                    "uq_tse_totalizacoes_snapshot":
+                raise
+            existing = self._totalizacao_for_snapshot(abrangencia.id, cargo.id, snapshot.id)
+            if existing is None:
+                raise
+            return self._snapshot_replayed(existing)
         self.session.add_all(TseResultadoCandidato(
             totalizacao_id=total.id, candidato_id=candidatos[c.sqcand].id, votos=c.votos or 0,
             percentual=c.percentual, situacao=c.situacao, eleito=c.eleito,

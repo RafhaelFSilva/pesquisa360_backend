@@ -2039,3 +2039,29 @@ cai, o PostgreSQL solta a trava: não há trava órfã nem tabela de controle.
   worker e rodar a CLI.
 - OFICIAL e SIMULADO têm chaves diferentes e podem rodar juntos.
 - Fora do PostgreSQL (SQLite dos testes) a exclusão vale só dentro do processo.
+
+## ADR-089 — Replay histórico é idempotente pela chave do snapshot
+
+O TSE pode reapresentar um EA20 histórico conhecido depois de outro mais novo
+(incidente PROD de 04/10/2026: cargo 5, abrangência 20, snapshot 174). Consultar
+`cargo_id + abrangencia_id + snapshot_id` antes de comparar o hash material
+com a última totalização. Se existe, retornar a linha histórica como NO-OP;
+nunca alterar o histórico nem criar outro snapshot para contornar a UNIQUE.
+`uq_tse_totalizacoes_snapshot` permanece como defesa final. Uma corrida nesse
+INSERT usa SAVEPOINT e recupera a linha vencedora somente quando o driver
+identifica exatamente essa constraint; outros IntegrityErrors são propagados.
+Snapshot novo, materialmente diferente, com timestamp anterior continua sendo
+persistido: não há regra de monotonicidade de IDG/horário. Sem migration.
+
+## ADR-090 — Heartbeat não substitui sucesso de ingestão
+
+Separar heartbeat, início/fim do ciclo, último sucesso/erro e falhas consecutivas.
+Timeout/rede/429/5xx e indisponibilidade de conexão são transitórios; falha de
+integridade, contrato/parse ou programação é estrutural. Erro estrutural deixa
+health unhealthy até um ciclo completo bem-sucedido, inclusive se um heartbeat
+ou erro transitório ocorrer depois. Falhas transitórias isoladas são toleradas;
+`TSE_INGESTION_MAX_CONSECUTIVE_ERRORS` (padrão 3) limita a sequência. Sucesso
+zera o contador; a API continua independente. Logs de erro conservam pilha,
+mensagem primária do driver e contexto do pipeline/ciclo, sem SQL/params/
+DETAIL de linha/payload/secrets. Reinício restaura a falha pendente do
+heartbeat existente da mesma origem, até um ciclo bem-sucedido.

@@ -1016,6 +1016,20 @@ dessa API, usuários do seed QA):
 
 ## Apuração TSE — ingestor automático
 
+Regressões do incidente de replay: `test_tse_historical_replay.py` e
+`test_tse_worker_recovery.py`. PostgreSQL real usa exclusivamente
+`P360_TSE_PG_URL` de QA descartável; cria schemas privados e os remove ao fim.
+
+- [x] T1–T7: primeiro insert, repetição imediata, A→B→A, A→B→C→B, cargo/abrangência distintos e snapshot novo com horário anterior
+- [x] T8: duas sessões PostgreSQL disputam a UNIQUE; uma insere, outra retorna NO-OP; ambas preservam sua transação externa
+- [x] UNIQUE não relacionada continua levantando erro, com sessão utilizável após o SAVEPOINT
+- [x] Worker em PostgreSQL: A→B→A (2 totalizações), A→B→C→A→B (3), histórico preservado e health saudável
+- [x] Erro estrutural permanece unhealthy apesar de heartbeat ou erro transitório posterior; sucesso recupera health
+- [x] Falhas transitórias isoladas toleradas; limite configurável de erros consecutivos; contador zerado no sucesso
+- [x] Erro contém traceback, mensagem completa e IDs/contexto; parâmetros SQL/payload não são logados
+- [x] DETAIL real do PostgreSQL com valores da linha é omitido; 5xx fora da lista de retry continua transitório para health
+- [x] Reinício com heartbeat da mesma origem preserva erro estrutural até sucesso posterior
+
 Automatizados: `tests/test_tse_worker.py`. O advisory lock real do PostgreSQL
 roda com `P360_TSE_PG_URL` apontando para um banco de QA descartável (sem a
 variável, 2 testes são pulados).

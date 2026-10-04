@@ -1,0 +1,36 @@
+# Ingestor automatico do TSE - OVERRIDE para o compose de producao.
+#
+# O compose de producao NAO e versionado neste repositorio. Este arquivo e o
+# patch de infra que o deploy aplica POR CIMA dele, sem edita-lo:
+#
+#   docker compose -f <compose de producao> \
+#       -f deploy/tse_ingestor/docker-compose.tse-ingestor.yml up -d tse_ingestor
+#
+# Antes de usar, conferir com o compose real de producao (e ajustar aqui):
+#   - `image`:    a MESMA imagem do servico da API (o worker nao tem imagem propria);
+#   - `env_file`: o mesmo arquivo de ambiente da API (precisa de DATABASE_URL);
+#   - `depends_on`: o nome do servico de banco (aqui `db`).
+#
+# Regras:
+#   - sem `ports`: o worker nao expoe nada;
+#   - um unico container: ha advisory lock por origem (ADR-088) e um segundo
+#     ingestor so ficaria em espera;
+#   - a ingestao so acontece com TSE_INGESTION_ENABLED=true no ambiente.
+services:
+  tse_ingestor:
+    image: ${P360_API_IMAGE:?defina P360_API_IMAGE com a imagem da API em producao}
+    container_name: pesquisa360_tse_ingestor
+    restart: unless-stopped
+    command: ["python", "-m", "pesquisa360.services.tse.worker"]
+    env_file:
+      - ${P360_ENV_FILE:-.env}
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-m", "pesquisa360.services.tse.worker", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy

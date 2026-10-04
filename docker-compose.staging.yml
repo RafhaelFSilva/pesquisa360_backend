@@ -1,6 +1,7 @@
 # Pesquisa360 - STAGING (QA remoto). Isolado da producao e do compose de DEV:
 #   - projeto compose proprio:   -p pesquisa360_staging
-#   - containers proprios:       pesquisa360_staging_db / pesquisa360_staging_api
+#   - containers proprios:       pesquisa360_staging_db / pesquisa360_staging_api /
+#                                pesquisa360_staging_tse_ingestor
 #   - volumes proprios:          staging_pgdata / staging_uploads
 #   - Postgres SEM porta publicada (so a rede interna do projeto)
 #   - API publicada SOMENTE em 127.0.0.1:8010 (o nginx do host faz o HTTPS)
@@ -51,6 +52,32 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Ingestor automatico do TSE (ADR-087): MESMA imagem da API, outro comando,
+  # sem porta publicada. DESLIGADO por padrao -- so consulta o TSE quando
+  # `.env.staging` define TSE_INGESTION_ENABLED=true. Um unico ingestor por
+  # origem grava de cada vez (advisory lock, ADR-088): nao escalar este servico.
+  tse_ingestor:
+    build: .
+    image: pesquisa360_staging_api:latest
+    container_name: pesquisa360_staging_tse_ingestor
+    restart: unless-stopped
+    command: ["python", "-m", "pesquisa360.services.tse.worker"]
+    env_file:
+      - .env.staging
+    environment:
+      APP_ENV: ${APP_ENV:-staging}
+    # Tempo para a ingestao em andamento ser abortada com rollback.
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-m", "pesquisa360.services.tse.worker", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       db:
         condition: service_healthy

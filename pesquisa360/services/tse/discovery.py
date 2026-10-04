@@ -7,6 +7,7 @@ localizacao do proprio EA11 e fixa: ela e o ponto de partida da descoberta.
 from __future__ import annotations
 
 import unicodedata
+from datetime import date, datetime
 
 from .normalization import (
     CargoConfig, EleicaoConfig, Municipio, PleitoConfig, cargo_code, to_datetime, to_int,
@@ -42,6 +43,37 @@ def parse_ea11(doc: dict, *, base_url: str, ambiente: str, pleito: str) -> Pleit
         eleicoes=tuple(eleicoes),
         templates={a["tp"]: a["dir"] for a in doc.get("arq", [])},
     )
+
+
+def discover_pleito(doc: dict, cargos, hoje: date | None = None) -> str:
+    """Pleito mais recente, ja realizado, que disputa TODOS os cargos pedidos.
+
+    Evita fixar o codigo do pleito na operacao: o EA11 e a fonte. Um segundo
+    turno (so Presidente/Governador) ou uma suplementar nao disputam o conjunto
+    completo de cargos e por isso nao substituem o pleito geral.
+    """
+    hoje = hoje or date.today()
+    pedidos = {cargo_code(c) for c in cargos}
+    candidatos = []
+    for pl in doc.get("pl", []):
+        disputados = {cargo_code(cp["cd"]) for ele in pl.get("e", [])
+                      for abr in ele.get("abr", []) for cp in abr.get("cp", [])}
+        try:
+            data = datetime.strptime(pl.get("dt", ""), "%d/%m/%Y").date()
+        except ValueError:
+            continue
+        if pedidos <= disputados and data <= hoje:
+            candidatos.append((data, pl["cd"]))
+    if not candidatos:
+        raise LookupError(
+            f"Nenhum pleito ja realizado no EA11 disputa os cargos {sorted(pedidos)}")
+    mais_recente = max(data for data, _cd in candidatos)
+    escolhidos = sorted(cd for data, cd in candidatos if data == mais_recente)
+    if len(escolhidos) > 1:
+        raise LookupError(
+            f"Pleito ambiguo no EA11 para os cargos {sorted(pedidos)}: {escolhidos}. "
+            "Informe o pleito explicitamente.")
+    return escolhidos[0]
 
 
 def election_for_cargo(config: PleitoConfig, cargo: str) -> EleicaoConfig:

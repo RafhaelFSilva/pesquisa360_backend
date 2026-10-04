@@ -10,6 +10,7 @@ Execucao manual (CLI). Nao ha daemon, worker nem polling continuo.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
@@ -29,12 +30,13 @@ class TseOrigemError(RuntimeError):
 
 @dataclass(frozen=True)
 class IngestScope:
-    pleito: str
+    # None = descoberto no EA11 (`discovery.discover_pleito`).
+    pleito: str | None
     uf: str
     cargos: tuple[str, ...]
     # Codigos TSE dos municipios com EA20 municipal; (TODOS,) = todos da UF.
     municipios: tuple[str, ...] = ()
-    # Municipios cujas zonas tambem sao ingeridas.
+    # Municipios cujas zonas tambem sao ingeridas; (TODOS,) = todos da UF.
     zonas_de: tuple[str, ...] = ()
     # Quantas secoes principais consultar no EA18 (prova de fluxo, nao carga).
     secoes_ea18: int = 0
@@ -45,7 +47,10 @@ class IngestScope:
 
 @dataclass
 class IngestReport:
+    pleito: str | None = None
     requisicoes: int = 0
+    # Requisicoes de rede por status HTTP (0 = falha de transporte).
+    status_http: dict = field(default_factory=dict)
     nao_modificados: int = 0
     nao_encontrados: list[str] = field(default_factory=list)
     snapshots_novos: int = 0
@@ -69,14 +74,16 @@ class TseIngestion:
     def run(self, scope: IngestScope) -> IngestReport:
         report = IngestReport()
         uf = scope.uf.lower()
+        inicio = len(self.client.requests)
 
         ea11_doc, _snap, _new = self._fetch(
             scope, report, "EA11",
             discovery.ea11_url(self.settings.base_url, self.settings.ambiente))
         if ea11_doc is None:
             raise RuntimeError("EA11 indisponivel: nao ha como descobrir a eleicao")
+        report.pleito = scope.pleito or discovery.discover_pleito(ea11_doc, scope.cargos)
         config = discovery.parse_ea11(ea11_doc, base_url=self.settings.base_url,
-                                      ambiente=self.settings.ambiente, pleito=scope.pleito)
+                                      ambiente=self.settings.ambiente, pleito=report.pleito)
         eleicoes = self.repo.upsert_eleicoes(config)
 
         por_eleicao: dict[str, list[str]] = {}
@@ -89,7 +96,9 @@ class TseIngestion:
 
         self._ingest_sections(scope, report, config, uf)
         self.session.commit()
-        report.requisicoes = len(self.client.requests)
+        feitas = self.client.requests[inicio:]
+        report.requisicoes = len(feitas)
+        report.status_http = dict(Counter(str(status) for _t, _url, status in feitas))
         return report
 
     # ---------------------------------------------------------------- eleicao
@@ -103,7 +112,8 @@ class TseIngestion:
 
         alvo_municipios = (sorted(municipios) if TODOS in scope.municipios
                            else [f"{int(m):05d}" for m in scope.municipios])
-        alvo_zonas = [f"{int(m):05d}" for m in scope.zonas_de]
+        alvo_zonas = (sorted(municipios) if TODOS in scope.zonas_de
+                      else [f"{int(m):05d}" for m in scope.zonas_de])
         for cod in set(alvo_municipios) | set(alvo_zonas):
             if cod not in municipios:
                 raise LookupError(f"Municipio {cod} nao pertence a UF {uf} no EA12")

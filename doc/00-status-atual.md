@@ -1,5 +1,36 @@
 # Status atual
 
+## Apuração TSE — ingestor automático (2026-10-04, ADR-087 e ADR-088)
+
+| Item | Estado |
+|---|---|
+| Worker `python -m pesquisa360.services.tse.worker`, processo separado da API | IMPLEMENTADO; VALIDADO em container (mesma imagem da API) contra PostgreSQL de QA |
+| Singleton por origem (PostgreSQL advisory lock), compartilhado com a CLI | IMPLEMENTADO; VALIDADO com dois workers e CLI concorrentes |
+| Descoberta do pleito pelo EA11 (sem código fixo) | IMPLEMENTADO; VALIDADO (3220 no oficial, 17801 no simulado) |
+| Parada por SIGTERM/SIGINT com rollback, healthcheck por heartbeat | IMPLEMENTADO; VALIDADO (`docker stop` → código 0; `healthy`) |
+| Serviço `tse_ingestor` no compose de staging e de DEV (profile `tse`); override para PROD em `deploy/tse_ingestor/` | IMPLEMENTADO; o compose de PROD não é versionado — o override precisa ser conferido no deploy |
+| `httpx` declarado em `pyproject.toml` | IMPLEMENTADO; imagem construída do zero instala `httpx 0.28.1` |
+| Worker com apuração oficial **com votos** | VALIDADO em QA (04/10/2026, 17:22): AP com 32/1914 seções, votos reais em UF, Macapá e zonas, histórico real de 3 totalizações. Em PRODUÇÃO: PENDENTE |
+
+O worker nasce **desligado** (`TSE_INGESTION_ENABLED=false`): sobe ocioso e
+não consulta o TSE até ser habilitado. Operação em `11-apuracao-tse.md`,
+seção 25. Nenhuma migration nova: o head continua `0f1b3b6c572f`.
+
+## Relatórios — resposta espontânea sem texto vira NS/SR (2026-10-04)
+
+`resolve_reportable_response_value` devolve `NS/SR` quando a resposta
+espontânea não tem letra nem dígito (vazia, só espaços, só pontuação ou só
+emoji). Antes essas respostas inflavam "Não categorizada", que é a fila de
+trabalho da apuração espontânea. Texto válido segue a categorização de sempre;
+perguntas não espontâneas não mudam. O total de cada pergunta é preservado.
+Afeta relatório simples, crosstab, cruzamentos, mapas, filtros de universo,
+Gestão de Lideranças e Potencial de Crescimento, que usam a mesma função.
+
+Origem: a correção existia em PROD como patch não versionado em
+`pesquisa360/crud.py`. Foi **reimplementada** a partir da regra descrita na
+auditoria de PROD, sem cópia do arquivo — a equivalência linha a linha com o
+patch de PROD deve ser conferida no preflight.
+
 ## Apuração TSE — API analítica e Web (2026-10-04, ADR-085 e ADR-086)
 
 Sobre a fundação de dados abaixo foram entregues a API e as telas. Migration
@@ -12,11 +43,11 @@ Sobre a fundação de dados abaixo foram entregues a API e as telas. Migration
 | Web: Central, Majoritário, Proporcional/Nominata, Meus painéis, Painel, Candidato (territorial até Zona) | IMPLEMENTADO; VALIDADO por E2E real em Chrome headless (10 passos) com dados do **simulado** |
 | Atualização automática (polling de 15 s, só Backend) | IMPLEMENTADO |
 | Estado "oficial zerado" | VALIDADO com a apuração oficial ainda não iniciada |
-| Telas com apuração oficial **parcial** e com votos reais | PENDENTE — depende do smoke test oficial |
+| Telas com apuração oficial **parcial** e com votos reais | PENDENTE — o backend já foi validado com votos oficiais em QA; as telas ainda não foram vistas com eles |
 | Evolução com mais de uma totalização real | PENDENTE — só há uma totalização por abrangência na base |
 | Detalhamento por seção | PENDENTE — depende do BU oficial; a tela mostra a opção desabilitada |
 | Entitlement comercial do módulo | PENDENTE — o acesso hoje é só por permissão (`INTELIGENCIA_VER`) |
-| Execução agendada da ingestão | FUTURO — o polling do Web só relê o banco; quem atualiza o banco é a CLI manual |
+| Execução agendada da ingestão | entregue na rodada seguinte (worker `tse_ingestor`, seção acima) |
 
 Presidente aparece com o resultado **na UF** (EA20 de abrangência UF); o total
 nacional não é ingerido.
@@ -35,7 +66,7 @@ Detalhes em `11-apuracao-tse.md`.
 | Separação `OFICIAL` × `SIMULADO` | IMPLEMENTADO |
 | EA18 | PARCIAL — contrato com arquivos visto só em 2024; simulado 2026 vem sem arquivos |
 | BU / votos por seção | PENDENTE — exige `bu.asn1` oficial; não há parser nem `tse_resultados_secao` |
-| Apuração **oficial** 2026 com votos reais | PENDENTE — smoke test oficial ainda não executado |
+| Apuração **oficial** 2026 com votos reais | VALIDADO em QA na rodada do worker (seção acima); em produção, pendente |
 | API e dashboards | entregues na rodada seguinte (seção acima) |
 | Polling contínuo do TSE (ingestão agendada) | FUTURO |
 
@@ -54,8 +85,10 @@ Ingestão: somente manual, via `scripts/tse_apuracao.py`. Mobile não foi altera
   reconstrução, reparo controlado ou substituição. As migrations TSE e de
   painéis **não** foram aplicadas nele.
 - **PROD:** não recebeu nenhuma alteração e o deploy não foi feito.
-  **PRE-DEPLOY BLOCKER:** patch não versionado em `pesquisa360/crud.py`, a
-  auditar antes de qualquer pull/rebuild. `main` remoto diverge da feature.
+  O patch local de `pesquisa360/crud.py` (NS/SR) foi reimplementado no Git;
+  conferir a equivalência no preflight antes de qualquer pull/rebuild. O
+  `AGENTS.md` modificado em PROD é instrução operacional local e não entra
+  no repositório. `main` remoto diverge da feature.
   Procedimento de ingestão e lista de bloqueadores: `11-apuracao-tse.md`,
   seções 25 e 26.
 

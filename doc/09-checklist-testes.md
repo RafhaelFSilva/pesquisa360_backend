@@ -1013,3 +1013,39 @@ dessa API, usuários do seed QA):
 - [ ] Atualização automática: desligar e ligar; "Atualizar agora"; hora muda a cada 15 s.
 - [ ] Parar a API com a tela aberta: dados permanecem, com aviso de indisponibilidade.
 - [ ] Janela estreita (≤ 768 px): sem rolagem horizontal; tabelas roláveis na vertical.
+
+## Apuração TSE — ingestor automático
+
+Automatizados: `tests/test_tse_worker.py`. O advisory lock real do PostgreSQL
+roda com `P360_TSE_PG_URL` apontando para um banco de QA descartável (sem a
+variável, 2 testes são pulados).
+
+- [x] config: desligado por padrão, habilitado, origem/UF/cargo/intervalo/pleito inválidos
+- [x] descoberta do pleito pelo EA11 (geral, futuro, segundo turno, empate)
+- [x] ciclo 1 ingere; ciclo 2 só 304; ciclo 3 sem duplicação
+- [x] 404 sem retry; 429 com `Retry-After`; 5xx, timeout e erro de parse → rollback, último estado preservado
+- [x] advisory lock adquirido / ocupado / por origem; conexão perdida solta a trava (PostgreSQL)
+- [x] dois workers: o segundo fica em espera e assume quando o primeiro sai
+- [x] CLI recusa ingestão com o worker ativo (código 3) e volta a funcionar com ele parado
+- [x] parada antes do ciclo, no meio da ingestão (rollback) e durante a espera
+- [x] healthcheck: recente, travado, encerrado, sem heartbeat
+- [x] QA real em container: simulado (3 ciclos), oficial zerado, singleton, `docker stop`, restart
+- [x] worker com apuração oficial com votos reais, em QA (AP, 32/1914 seções; histórico real 0 → 543 → 566)
+- [ ] o mesmo em produção — pendente do deploy
+
+QA manual do worker (banco de QA no head, imagem do backend):
+
+- [ ] Subir com `TSE_INGESTION_ENABLED=false`: container `healthy`, nenhuma requisição ao TSE.
+- [ ] Habilitar: log `tse_ingest_cycle` com `status: ok` a cada intervalo.
+- [ ] Segundo container: `tse_ingestor_standby`; `pg_locks` com um único lock advisory `5526341`.
+- [ ] `scripts/tse_apuracao.py ingest ...` com o worker ativo: sai com código 3.
+- [ ] `docker stop`: sai em segundos, código 0, lock liberado.
+- [ ] `docker start`: lock readquirido, primeiro ciclo só 304, contagens iguais.
+
+## Relatórios — NS/SR em resposta espontânea sem texto
+
+- [x] vazia, whitespace, só pontuação, só emoji, pontuação + emoji → `NS/SR`
+- [x] texto válido: mapeado → categoria; sem mapa → "Não categorizada"
+- [x] pergunta não espontânea não é afetada
+- [x] relatório simples e crosstab: totais preservados
+- [ ] conferir equivalência com o patch local de PROD no preflight

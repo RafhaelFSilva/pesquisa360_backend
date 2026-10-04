@@ -122,8 +122,9 @@ soma dos candidatos com `dvt` "Válido" = 378.662 = `vnom`; soma dos anulados
 sub judice = 84.351 = `vansj`. Somar `vap` sem olhar `dvt` infla o resultado.
 
 **Diferença estrutural observada.** O EA20 oficial zerado (pré-totalização)
-não traz `dvt`, `esae` nem `mnae`; o simulado totalizado traz. Não se sabe se
-o oficial passará a trazê-los quando houver votos: o parser aceita os dois.
+não traz `dvt`, `esae` nem `mnae`; o simulado totalizado traz os três. Com a
+apuração oficial em andamento (04/10/2026), o oficial passou a trazer `dvt`,
+mas não `esae` nem `mnae`. O parser aceita todas as variações.
 
 ## 10. BU — boletim de urna (PENDENTE)
 
@@ -286,6 +287,7 @@ votos reais — é a linha de base para o smoke test oficial.
 - **`INSUFFICIENT_DATA` na UF**: nem todos os municípios foram ingeridos
   (`--municipios todos`).
 - **`alembic current` falha no DEV local**: ver ADR-084 e `00-status-atual.md`.
+- **Worker**: ver seção 25.3.
 
 ## 22. Roadmap dos dashboards
 
@@ -328,63 +330,142 @@ VITE_API_URL=http://127.0.0.1:8010 npx vite --host localhost --port 5173
 
 Usuários: seed QA (`scripts/seed_qa_dataset.py`) aplicado ao banco de QA.
 
-## 25. Ingestão em produção — CLI manual controlada
+## 25. Ingestão em produção — worker automático e CLI de fallback
 
-Não há scheduler nesta versão. A ingestão é uma execução manual, repetida por
-um operador, dentro do container da API (ou em qualquer ambiente com o código
-e `DATABASE_URL` do banco alvo). Cada execução é uma passada e termina sozinha.
+### 25.1 Worker `tse_ingestor`
 
-**Comando (origem OFICIAL, pleito 3220):**
-
-```bash
-python scripts/tse_apuracao.py ingest --uf ap     --cargo 0001 --cargo 0003 --cargo 0005 --cargo 0006 --cargo 0007     --municipios todos --zonas-de 06050
+```
+TSE oficial ──> worker ──> PostgreSQL ──> API
 ```
 
-- **Origem:** OFICIAL é o padrão. Nunca usar `--simulado` em produção.
-- **UF:** uma por execução (`--uf`). Não há modo "Brasil inteiro".
-- **Cargos:** um `--cargo` por cargo. 0001 Presidente (resultado na UF),
-  0003 Governador, 0005 Senador, 0006 Deputado Federal, 0007 Deputado Estadual.
-- **Zonas:** `--zonas-de` lista os municípios cujas zonas também entram.
-- **Intervalo recomendado:** a cada 2 a 5 minutos durante a apuração. Não
-  rodar duas execuções ao mesmo tempo. O serviço limita a 2 requisições/s; a
-  primeira passada do AP com 5 cargos faz cerca de 108 requisições (~1 min);
-  uma passada sem novidade faz cerca de 6, todas 304.
+Processo separado da API (ADR-087), mesma imagem, comando
+`python -m pesquisa360.services.tse.worker`, sem porta. Nasce **desligado**.
 
-**Como reconhecer sucesso.** O comando imprime um JSON e sai com código 0:
-
-- `totalizacoes_novas` > 0: houve atualização gravada;
-- `totalizacoes_novas` = 0 com `ea20_ignorados_sem_mudanca` > 0: nada mudou
-  no TSE desde a última passada — também é sucesso;
-- `nao_encontrados` vazio; `pico_requisicoes_por_segundo` ≤ 2.
-
-Conferência: `python scripts/tse_apuracao.py consulta --uf ap --cargo 0006
---reconciliar-municipio 06050` (mostra votos, IDG, seções e a reconciliação).
-
-**Como reconhecer erro.** Código de saída diferente de 0 e traceback:
-
-| Erro | Significado | Ação |
+| Variável | Padrão | Observação |
 |---|---|---|
-| `TseTransientError` | TSE indisponível após 3 tentativas com backoff | repetir na próxima passada |
-| `TseHttpError` | resposta 4xx inesperada | não insistir; investigar a URL |
-| `TseOrigemError` | arquivo de outro ambiente | conferir o uso de `--simulado` |
-| `LookupError` | pleito, cargo ou município inexistente | conferir os parâmetros |
-| URLs em `nao_encontrados` | arquivo ainda não publicado (404) | esperado antes da totalização |
+| `TSE_INGESTION_ENABLED` | `false` | desligado: o processo fica vivo e ocioso |
+| `TSE_INGESTION_ORIGIN` | `OFICIAL` | ou `SIMULADO`; define o ambiente do TSE |
+| `TSE_INGESTION_UFS` | — | obrigatória quando habilitado; ex.: `AP` ou `AP,PA` |
+| `TSE_INGESTION_CARGOS` | `0001,0003,0005,0006,0007` | 4 dígitos |
+| `TSE_INGESTION_MUNICIPIOS` | `todos` | `todos` ou códigos TSE de 5 dígitos |
+| `TSE_INGESTION_ZONAS_DE` | vazio | vazio, `todos` ou códigos; habilita o nível zona |
+| `TSE_INGESTION_INTERVAL_SECONDS` | `20` | de 15 a 3600 |
+| `TSE_REQUESTS_PER_SECOND` | `2` | teto interno de 10 |
+| `TSE_INGESTION_PLEITO` | vazio | vazio = descoberto no EA11 |
+| `TSE_INGESTION_HEARTBEAT_FILE` | `<tmp>/tse_ingestor.heartbeat` | lido pelo healthcheck |
+| `TSE_INGESTION_LOG_LEVEL` | `INFO` | |
 
-**Repetir com segurança.** Cada execução é uma transação: se falhar, nada é
-gravado. Repetir o mesmo comando nunca duplica snapshot, candidato, seção ou
-totalização. `--force` reconsulta todos os EA20 do escopo (por GET
-condicional) e continua idempotente.
+Configuração inválida (origem, UF, cargo, intervalo) impede o processo de
+subir, com a mensagem do erro.
 
-**Parar.** Basta não executar de novo. Interromper uma execução em andamento
-(Ctrl+C) desfaz a transação. Os dados já gravados permanecem.
+**Pleito.** Sem `TSE_INGESTION_PLEITO`, o worker escolhe no EA11 o pleito mais
+recente, já realizado, que disputa todos os cargos configurados. Um segundo
+turno não disputa todos e por isso não substitui o pleito geral; para
+ingeri-lo, configurar um worker/escopo com os cargos do segundo turno (ou
+fixar o pleito).
 
-**Pré-requisito.** O banco alvo precisa estar no head `0f1b3b6c572f`.
+**Ciclo.** A cada intervalo, para cada UF: EA11 → EA12 → EA14 → (se a UF
+mudou) EA15 → EA20 só do que mudou → EA16. Tudo por GET condicional. Uma
+passada sem novidade no AP faz cerca de 6 requisições, todas 304. Cada UF é
+uma transação; erro faz rollback e o ciclo seguinte tenta de novo.
+
+**Singleton.** Advisory lock `pg_try_advisory_lock(5526341, 1|2)` por origem
+(ADR-088). Um segundo ingestor da mesma origem fica em espera. Conferir:
+
+```sql
+SELECT classid, objid, granted FROM pg_locks WHERE locktype = 'advisory';
+```
+
+**Log.** Uma linha por ciclo, sem payload:
+
+```
+tse_ingest_cycle {"timestamp": ..., "origem": "OFICIAL", "ufs": ["ap"], "cargos": [...],
+  "pleito": "3220", "ea14_changed": ["uf:ap"], "ea15_changed": 3, "requests": 14,
+  "200": 8, "304": 6, "404": 0, "429": 0, "ea20": 6, "snapshots_new": 8,
+  "totalizacoes_new": 6, "errors": [], "status": "ok", "duration_ms": 7012}
+```
+
+`status`: `ok`, `error` (com `errors[]`; houve rollback da UF) ou
+`interrupted` (parada pedida). Outros eventos: `tse_ingestor_start`,
+`tse_ingestor_standby`, `tse_ingestor_signal`, `tse_ingestor_stop`.
+
+**Health.** `python -m pesquisa360.services.tse.worker --healthcheck` sai com
+0 se o heartbeat tem menos de `max(120 s, 4 × intervalo)` e o worker não foi
+encerrado. O heartbeat é renovado a cada ciclo e a cada espera entre
+requisições, então um worker travado fica `unhealthy`. Desligado e em espera
+também são estados saudáveis.
+
+**Startup.**
+
+```bash
+# staging (compose versionado)
+docker compose -p pesquisa360_staging -f docker-compose.staging.yml \
+    --env-file .env.staging up -d tse_ingestor
+
+# produção: o compose não é versionado; aplicar o override conferido
+docker compose -f <compose de produção> \
+    -f deploy/tse_ingestor/docker-compose.tse-ingestor.yml up -d tse_ingestor
+```
+
+Pré-requisitos: banco no head `0f1b3b6c572f`, imagem com `httpx` e o código do
+worker, `TSE_INGESTION_ENABLED=true` e `TSE_INGESTION_UFS` no ambiente.
+
+**Shutdown.** `docker compose stop tse_ingestor` envia SIGTERM: a espera é
+interrompida, uma ingestão em andamento é abortada com rollback, a trava é
+solta e o processo sai com código 0 (`stop_grace_period: 30s`).
+
+### 25.2 CLI manual (fallback)
+
+A CLI usa a **mesma trava**. Com o worker ativo na mesma origem ela não
+executa e sai com código 3. Para ingerir manualmente: parar o worker, rodar a
+CLI, subir o worker de novo.
+
+```bash
+docker compose stop tse_ingestor
+python scripts/tse_apuracao.py ingest --uf ap \
+    --cargo 0001 --cargo 0003 --cargo 0005 --cargo 0006 --cargo 0007 \
+    --municipios todos --zonas-de 06050
+docker compose start tse_ingestor
+```
+
+Sem `--pleito`, a CLI também descobre o pleito pelo EA11. Sucesso: JSON na
+saída e código 0 (`totalizacoes_novas` > 0, ou 0 com
+`ea20_ignorados_sem_mudanca` > 0 quando nada mudou). `--force` reconsulta
+todos os EA20 do escopo e continua idempotente. Nunca usar `--simulado` em
+produção.
+
+### 25.3 Troubleshooting
+
+| Sintoma | Causa provável | Ação |
+|---|---|---|
+| container `healthy`, sem `tse_ingest_cycle` | `TSE_INGESTION_ENABLED=false` | habilitar e reiniciar o serviço |
+| `tse_ingestor_standby` repetido | outro ingestor ou uma CLI segura a trava | localizar em `pg_locks`; manter só um |
+| `status: error` com `TseTransientError` | TSE fora do ar ou lento | nenhuma: o próximo ciclo repete |
+| `status: error` com `JSONDecodeError` | resposta inválida do TSE | nenhuma: o último estado válido foi preservado |
+| `status: error` com `TseOrigemError` | origem configurada ≠ ambiente consultado | conferir `TSE_INGESTION_ORIGIN` |
+| `status: error` com `LookupError` | pleito, cargo ou município inexistente no EA11/EA12 | conferir cargos e `TSE_INGESTION_PLEITO` |
+| `tse_ingestor_lock_error` | banco indisponível | o worker tenta de novo a cada ciclo |
+| container `unhealthy` | worker travado ou encerrado | `docker compose restart tse_ingestor` |
+| CLI sai com código 3 | worker ativo | parar o worker antes (25.2) |
+
+### 25.4 Procedimento de deploy
+
+1. Preflight: conferir que o patch local de `crud.py` em PROD equivale ao do
+   repositório; conferir o override `deploy/tse_ingestor/` contra o compose real.
+2. Atualizar o código e reconstruir a imagem (instala `httpx` declarado).
+3. `alembic upgrade head` → `0f1b3b6c572f`.
+4. Subir a API; depois o `tse_ingestor` com `TSE_INGESTION_ENABLED=true`.
+5. Conferir `healthy`, o primeiro `tse_ingest_cycle` com `status: ok` e um
+   único lock advisory.
+6. **Smoke oficial com votos reais**: `scripts/tse_apuracao.py consulta` e a
+   API com candidato com votos > 0 em UF, município e zona.
 
 ## 26. Estado de publicação e bloqueadores de deploy (2026-10-04)
 
 O backend foi validado em PostgreSQL descartável criado do zero
 (`p360_tse_release_qa`), com ingestão real do simulado e do oficial ainda
-zerado. **Não está validado em produção eleitoral.**
+zerado, e depois com a apuração oficial em andamento. **Não está validado
+em produção.**
 
 IMPLEMENTADO: ingestão (EA11/12/14/15/16/20), persistência, histórico
 append-only, origem OFICIAL × SIMULADO, reconciliação, API analítica, painéis
@@ -392,20 +473,49 @@ multitenant (backend), território até zona.
 
 PENDENTE:
 
-- **Smoke oficial com votos reais** — a apuração oficial estava zerada
-  (0/1914 seções, `and = n`) em todas as validações. O deploy deve repetir o
-  smoke: ingestão oficial, candidato com votos > 0 em UF/município/zona,
-  presença ou não de `dvt`, reconciliação.
-- **Histórico real** — só há uma totalização por abrangência; a prova de
-  append-only é a automatizada.
+- **Smoke oficial em PRODUÇÃO** — feito apenas em QA (abaixo); o deploy deve
+  repetir.
 - **BU e seção** — sem `bu.asn1` oficial; EA18 de 2026 com arquivos não visto.
-- **Ingestão agendada** — não implementada; operação manual (seção 25).
+- **Operação prolongada do worker** — validado em QA com a apuração oficial
+  em andamento, por alguns minutos; não há prova de horas de operação.
 - **DEV antigo = NÃO CANÔNICO** — `alembic_version` órfão e migration
   sintética ausente. Nenhum stamp foi feito. A referência para migrations é o
   banco de QA criado do zero.
 - **Deploy em PROD** — não realizado.
 
-**PRE-DEPLOY BLOCKER:** PROD tem um patch operacional não versionado em
-`pesquisa360/crud.py`. Antes de qualquer `git pull`/rebuild em PROD é preciso
-auditar esse patch e decidir se ele entra no Git; caso contrário o deploy o
-sobrescreve ou conflita.
+**Smoke oficial com votos reais — executado em QA (04/10/2026, 17:22–17:24
+de Brasília).** O worker, em container, ingeriu a apuração oficial do AP
+(pleito 3220 descoberto pelo EA11) no banco de QA descartável, com a
+apuração em andamento (`and = p`, 32 de 1.914 seções):
+
+| Abrangência | Código | Votos | IDG | Gerado em (Brasília) |
+|---|---|---|---|---|
+| UF | `ap` | 566 | 1103376 | 04/10 17:23:28 |
+| Município | `06050` Macapá | 31 | 1103311 | 04/10 17:23:09 |
+| Zona | `0010` | 10 | 1103306 | 04/10 17:23:09 |
+| Zona | `0014` | 21 | 1089672 | 04/10 17:21:19 |
+| Zona | `0002` | 0 | 1079417 | 03/10 16:06:51 (sem seção totalizada) |
+
+Candidato: JOSENILDO, nº 1212, `sqcand 30002532841`, Deputado Federal, PDT,
+11,16% na UF, `dvt = Válido`, situação ainda não publicada pelo TSE.
+
+- Zonas × Macapá: 31 = 31, 5 = 5 seções → `CONSISTENT`.
+- Municípios × UF: 566 × 553, 32 × 30 seções → `TEMPORAL_LAG` (os arquivos
+  municipais estavam uma janela atrás do da UF; não é inconsistência).
+- Soma dos candidatos válidos = `vnom` (4.935); legenda 135; válidos 5.070.
+- **O EA20 oficial passou a trazer `dvt`** assim que houve votos (inclusive
+  "Anulado sub judice"); `esae` e `mnae` não apareceram. O contrato com votos
+  é o mesmo do simulado nesse ponto.
+- **Histórico real:** três totalizações da UF para o mesmo candidato —
+  0 votos (IDG 1078269, zerada) → 543 (IDG 1089442, 28 seções) → 566
+  (IDG 1103376, 32 seções) —, todas preservadas.
+
+Isso valida ingestão, normalização, reconciliação e histórico com dado
+oficial **em QA**. Não substitui o smoke em produção, que o deploy deve
+repetir.
+
+**Patch de PROD em `pesquisa360/crud.py`:** a regra (resposta espontânea sem
+texto → `NS/SR`) foi reimplementada no repositório com teste. O preflight deve
+comparar com o patch local de PROD antes do pull; se forem equivalentes, o
+arquivo local pode ser descartado em favor do versionado. O `AGENTS.md`
+alterado em PROD é instrução operacional local e fica fora do Git.

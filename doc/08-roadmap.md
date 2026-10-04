@@ -405,7 +405,11 @@ Pendências antes de avançar:
 - EA18 de 2026 com arquivos reais.
 - `bu.asn1` oficial do TSE para decodificar o BU.
 - Reconciliação do banco DEV local (ver `00-status-atual.md`).
-- Execução agendada da ingestão (hoje é manual; o polling do Web só relê o banco).
+- Smoke oficial em produção (em QA já foi feito com votos reais).
+- Ingestão de mais de uma UF em paralelo (hoje as UFs são percorridas em série).
 - Entitlement comercial do módulo de Apuração (hoje o acesso é por permissão).
 - Total nacional de Presidente (hoje só o resultado por UF).
 - Mapas, alertas e comparação com pesquisa: fora do escopo atual.
+
+Entregue em 2026-10-04: ingestão automática por worker separado
+(`tse_ingestor`), com singleton por advisory lock e CLI como fallback.

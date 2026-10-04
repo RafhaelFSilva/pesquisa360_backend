@@ -424,7 +424,8 @@ Diagrama completo e contratos em `11-apuracao-tse.md`.
 ```
 Web (polling 15 s) ──> /apuracao/tse/*  ──> services/tse/analytics.py ──> tse_*            (global)
                   └──> /apuracao/paineis ──> services/apuracao_paineis.py ──> apuracao_paineis (tenant)
-CLI manual ──> TseIngestion ──> TSE
+worker tse_ingestor ─┐
+CLI manual (fallback)─┴─> advisory lock ──> TseIngestion ──> TSE
 ```
 
 - `api/endpoints/apuracao_tse.py`: um router, dois grupos de escopo. Leitura
@@ -437,3 +438,20 @@ CLI manual ──> TseIngestion ──> TSE
 - Web: `src/api/electionResultsService.ts` → `src/hooks/useApuracao.ts`
   (consulta com polling) → páginas `Apuracao*Page.tsx`; lógica pura em
   `src/lib/apuracao.ts`.
+
+### Apuração TSE — ingestor automático (ADR-087, ADR-088)
+
+```
+TSE oficial ──> worker (container tse_ingestor) ──> PostgreSQL ──> API ──> Web
+```
+
+- `services/tse/worker.py` — entrypoint `python -m pesquisa360.services.tse.worker`.
+  Mesmo código e mesma imagem da API, comando diferente, sem porta. A API não
+  agenda nada e não fala com o TSE.
+- `services/tse/config.py` — `TseIngestionSettings` (`TSE_INGESTION_*`),
+  desligado por padrão.
+- `services/tse/locking.py` — `IngestionLock`: advisory lock de sessão por
+  origem, usado pelo worker e pela CLI.
+- `discovery.discover_pleito` — o pleito vem do EA11.
+- Cada UF de cada ciclo é uma transação; erro → rollback e o último estado
+  válido permanece. Sem Celery, Redis ou fila.

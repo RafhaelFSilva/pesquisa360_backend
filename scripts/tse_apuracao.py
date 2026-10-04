@@ -1,6 +1,9 @@
 """CLI da Apuracao TSE: ingestao manual e consulta de validacao.
 
-Usa o banco de DATABASE_URL. Nao ha daemon: cada execucao faz uma passada.
+Usa o banco de DATABASE_URL. Cada execucao faz uma passada. A ingestao
+automatica e o worker (`python -m pesquisa360.services.tse.worker`); a CLI e
+o fallback manual e respeita a MESMA trava: com o worker ativo para a origem,
+`ingest` recusa a execucao (codigo de saida 3) em vez de gravar em paralelo.
 
     python scripts/tse_apuracao.py ingest --uf ap --cargo 0006 \\
         --municipios todos --zonas-de 06050
@@ -16,32 +19,28 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pesquisa360.db.models_tse import TseCargo, TseEleicao  # noqa: E402
-from pesquisa360.db.session import SessionLocal  # noqa: E402
+from pesquisa360.db.session import SessionLocal, engine  # noqa: E402
 from pesquisa360.services.tse import reconciliation  # noqa: E402
 from pesquisa360.services.tse.client import TseClient  # noqa: E402
-from pesquisa360.services.tse.config import load_settings  # noqa: E402
+from pesquisa360.services.tse.config import settings_for_origem  # noqa: E402
 from pesquisa360.services.tse.ingestion import TODOS, IngestScope, TseIngestion  # noqa: E402
+from pesquisa360.services.tse.locking import IngestionLock  # noqa: E402
 from pesquisa360.services.tse.normalization import OFICIAL, SIMULADO  # noqa: E402
 from pesquisa360.services.tse.repository import TseRepository, abrangencia_key  # noqa: E402
 
-# Ambiente oficial de simulacao das Eleicoes 2026, documentado pelo TSE.
-SIMULADO_BASE_URL = "https://resultados-sim.tse.jus.br/simulado"
-SIMULADO_AMBIENTE = "simulado2026"
-PLEITO_PADRAO = {OFICIAL: "3220", SIMULADO: "17801"}
+EXIT_LOCK_OCUPADO = 3
 
 
 def _contexto(args):
+    """(origem, settings do ambiente TSE, pleito). Sem `--pleito` ele e descoberto."""
     origem = SIMULADO if args.simulado else OFICIAL
-    settings = load_settings()
-    if args.simulado:
-        settings = replace(settings, base_url=SIMULADO_BASE_URL, ambiente=SIMULADO_AMBIENTE)
-    return origem, settings, args.pleito or PLEITO_PADRAO[origem]
+    return origem, settings_for_origem(origem), args.pleito or None
 
 
 def cmd_ingest(args) -> int:
@@ -52,10 +51,16 @@ def cmd_ingest(args) -> int:
         zonas_de=tuple(args.zonas_de), secoes_ea18=args.secoes_ea18, origem=origem,
         force=args.force,
     )
-    with SessionLocal() as session, TseClient(settings=settings) as client:
-        report = TseIngestion(session, client, settings).run(scope)
-        pico = client.peak_requests_per_second()
-    print(json.dumps({"origem": origem, "pleito": pleito, **asdict(report),
+    with IngestionLock(engine, origem) as lock:
+        if not lock.try_acquire():
+            print(f"Ingestao {origem} em andamento por outro processo (worker automatico ou "
+                  "outra CLI). Nada foi executado. Pare o worker para ingerir manualmente.",
+                  file=sys.stderr)
+            return EXIT_LOCK_OCUPADO
+        with SessionLocal() as session, TseClient(settings=settings) as client:
+            report = TseIngestion(session, client, settings).run(scope)
+            pico = client.peak_requests_per_second()
+    print(json.dumps({"origem": origem, **asdict(report),
                       "pico_requisicoes_por_segundo": pico}, ensure_ascii=False, indent=1))
     return 0
 
@@ -66,7 +71,12 @@ def cmd_consulta(args) -> int:
     with SessionLocal() as session:
         repo = TseRepository(session)
         cargo = session.query(TseCargo).filter_by(codigo=args.cargo).first()
-        eleicao = next((e for e in session.query(TseEleicao).filter_by(origem=origem, pleito=pleito)
+        consulta = session.query(TseEleicao).filter_by(origem=origem)
+        if pleito:
+            consulta = consulta.filter_by(pleito=pleito)
+        # Sem `--pleito`: a eleicao mais recente da origem que disputa o cargo.
+        eleicao = next((e for e in consulta.order_by(TseEleicao.data_eleicao.desc(),
+                                                     TseEleicao.id.desc())
                         if args.cargo in (e.metadata_json or {}).get("cargos", [])), None)
         if eleicao is None or cargo is None:
             print("Eleicao/cargo nao ingeridos para esta origem.", file=sys.stderr)

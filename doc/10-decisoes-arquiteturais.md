@@ -2010,3 +2010,32 @@ exibido com a destinação. Toda resposta carrega `origem`, e `SIMULADO` tem
 identificação visual própria em todas as telas. O acesso é por permissão
 (`INTELIGENCIA_VER` para ler, `RELATORIO_CONFIGURAR` para escrever painel);
 o entitlement comercial do módulo fica para decisão de produto.
+
+## ADR-087 — Ingestão TSE é executada em processo separado da API
+
+A ingestão automática roda em um worker próprio
+(`python -m pesquisa360.services.tse.worker`), no serviço `tse_ingestor`: a
+mesma imagem da API com outro comando, sem porta publicada. A API não agenda
+ingestão e não consulta o TSE. Motivos: a API pode ter vários processos (o
+scheduler rodaria em duplicidade), um ciclo longo ou uma falha do TSE não pode
+afetar requisições de usuário, e parar/reiniciar a ingestão não pode derrubar
+a API. Não se usa Celery nem Redis: um laço com intervalo, descoberta do
+pleito pelo EA11 e a ingestão orientada por mudança (ADR-080) bastam. O worker
+nasce desligado (`TSE_INGESTION_ENABLED=false`) e a CLI continua existindo
+como fallback manual.
+
+## ADR-088 — Ingestor TSE usa PostgreSQL advisory lock para singleton
+
+Só um processo por origem grava dados do TSE de cada vez. A exclusão é um
+advisory lock de sessão, `pg_try_advisory_lock(5526341, <origem>)` —
+`5526341` é `0x545345` ("TSE"), `1` = OFICIAL, `2` = SIMULADO —, mantido numa
+conexão dedicada enquanto o processo vive. Se o processo morre ou a conexão
+cai, o PostgreSQL solta a trava: não há trava órfã nem tabela de controle.
+
+- Worker sem a trava fica em **espera** (standby), saudável, e tenta de novo a
+  cada ciclo; assume sozinho quando o titular sai.
+- A CLI disputa a **mesma** trava e, com o worker ativo, recusa a execução
+  (código de saída 3) em vez de gravar em paralelo. Fallback manual = parar o
+  worker e rodar a CLI.
+- OFICIAL e SIMULADO têm chaves diferentes e podem rodar juntos.
+- Fora do PostgreSQL (SQLite dos testes) a exclusão vale só dentro do processo.

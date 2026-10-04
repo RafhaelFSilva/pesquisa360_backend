@@ -30,5 +30,28 @@ services:
       db:
         condition: service_healthy # Garante que o DB esteja pronto antes de iniciar a API
 
+  # Ingestor automatico do TSE (ADR-087). Fora do `up` padrao: so sobe com
+  # `docker compose --profile tse up -d tse_ingestor`, e so ingere com
+  # TSE_INGESTION_ENABLED=true no .env. Exige o banco no head atual.
+  tse_ingestor:
+    build: .
+    container_name: pesquisa360_tse_ingestor
+    profiles: ["tse"]
+    command: ["python", "-m", "pesquisa360.services.tse.worker"]
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-m", "pesquisa360.services.tse.worker", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   postgres_data:

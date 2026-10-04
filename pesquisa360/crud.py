@@ -2052,6 +2052,10 @@ def get_relatorio_filtros(db: Session, pesquisa_id: int, current_user: models.Us
     }
 
 NAO_CATEGORIZADA = "Não categorizada"
+# Resposta espontanea sem conteudo textual (vazia, so espacos, so pontuacao ou
+# so emoji): o entrevistado nao disse nada categorizavel. Vai para NS/SR, e
+# nao para a fila de "Nao categorizada", que e trabalho pendente de apuracao.
+NS_SR = "NS/SR"
 
 
 # --- Canonicalizacao de respostas categoricas (HOTFIX G.1) --------------------
@@ -2147,6 +2151,10 @@ def resolve_reportable_response_value(
         return canonicalizar_valor_categorico(pergunta, valor_original)
 
     chave_normalizada = normalizar_resposta_espontanea(valor_resposta)
+    if not chave_normalizada:
+        # A normalizacao descarta pontuacao, simbolos e emoji: chave vazia
+        # significa que nao sobrou letra nem digito na resposta.
+        return NS_SR
     return spontaneous_mapping.get(chave_normalizada, NAO_CATEGORIZADA)
 
 

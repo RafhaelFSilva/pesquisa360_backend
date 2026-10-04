@@ -297,6 +297,42 @@ class ApuracaoEspontaneaTests(unittest.TestCase):
         ), "Não categorizada")
         self.assertEqual(original, " Clécio  ")
 
+    def test_spontaneous_response_without_text_is_reported_as_ns_sr(self):
+        espontanea = SimpleNamespace(eh_resposta_espontanea=True)
+        mapping = {"clecio": "Clécio Luís"}
+
+        def resolver(valor, pergunta=espontanea):
+            return crud.resolve_reportable_response_value(
+                pergunta=pergunta, valor_resposta=valor, spontaneous_mapping=mapping,
+            )
+
+        sem_texto = {
+            "nulo": None,
+            "vazia": "",
+            "whitespace": "   \t\n ",
+            "pontuacao": "...",
+            "pontuacao variada": "?!- _ ;",
+            "emoji": "\U0001F937",
+            "varios emoji": "\U0001F44D\U0001F3FD \U0001F602",
+            "pontuacao + emoji": "... \U0001F937\u200d\u2642\ufe0f !!",
+        }
+        for caso, valor in sem_texto.items():
+            self.assertEqual(resolver(valor), "NS/SR", caso)
+            self.assertEqual(resolver(valor), crud.NS_SR, caso)
+
+        # Texto valido segue a categorizacao atual: mapeado ou "Nao categorizada".
+        self.assertEqual(resolver(" Clécio  "), "Clécio Luís")
+        self.assertEqual(resolver("Clécio!!! \U0001F44D"), "Clécio Luís")
+        self.assertEqual(resolver("Sem mapa"), "Não categorizada")
+        self.assertEqual(resolver("ns"), "Não categorizada")
+        self.assertEqual(resolver("13"), "Não categorizada")     # digito e conteudo
+        self.assertEqual(resolver("não sei \U0001F937"), "Não categorizada")
+
+        # Pergunta nao espontanea nao e afetada: o valor bruto e preservado.
+        normal = SimpleNamespace(eh_resposta_espontanea=False)
+        self.assertEqual(resolver("...", normal), "...")
+        self.assertEqual(resolver("", normal), "")
+
     def test_simple_report_resolves_spontaneous_values_and_preserves_totals(self):
         self._seed_report_mappings()
         with self.engine.begin() as connection:
@@ -318,9 +354,12 @@ class ApuracaoEspontaneaTests(unittest.TestCase):
         spontaneous = results[10]
         normal = results[12]
 
+        # As respostas 7 ('') e 8 ('   ') nao tem conteudo textual: NS/SR, e
+        # nao "Nao categorizada". O total da pergunta nao muda.
         self.assertEqual(spontaneous["opcoes_resposta"], {
             "Clécio Luís": 3,
-            "Não categorizada": 5,
+            "NS/SR": 2,
+            "Não categorizada": 3,
         })
         self.assertEqual(spontaneous["total"], 8)
         self.assertEqual(sum(spontaneous["opcoes_resposta"].values()), 8)
@@ -367,19 +406,24 @@ class ApuracaoEspontaneaTests(unittest.TestCase):
             )
 
         self.assertEqual(counts(normal_normal), {("Ignorar", "A"): 1})
+        # Respostas sem texto ('' na coleta 100, '   ' na 101) viram NS/SR nos
+        # dois eixos; os totais gerais continuam iguais.
         self.assertEqual(counts(normal_spontaneous), {
             ("Ignorar", "Clécio Luís"): 2,
-            ("Ignorar", "Não categorizada"): 4,
+            ("Ignorar", "NS/SR"): 1,
+            ("Ignorar", "Não categorizada"): 3,
         })
         self.assertEqual(counts(spontaneous_normal), {
             ("Clécio Luís", "A"): 2,
             ("Clécio Luís", "B"): 1,
-            ("Não categorizada", "A"): 4,
-            ("Não categorizada", "B"): 1,
+            ("NS/SR", "A"): 1,
+            ("NS/SR", "B"): 1,
+            ("Não categorizada", "A"): 3,
         })
         self.assertEqual(counts(spontaneous_spontaneous), {
             ("Clécio Luís", "Dr. Furlan"): 3,
-            ("Não categorizada", "Dr. Furlan"): 5,
+            ("NS/SR", "Dr. Furlan"): 2,
+            ("Não categorizada", "Dr. Furlan"): 3,
         })
         self.assertEqual(sum(counts(spontaneous_normal).values()), 8)
         self.assertEqual(sum(counts(spontaneous_spontaneous).values()), 8)

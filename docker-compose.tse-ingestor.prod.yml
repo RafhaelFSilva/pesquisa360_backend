@@ -1,0 +1,27 @@
+services:
+  tse_ingestor:
+    image: pesquisa360-api
+    container_name: pesquisa360_tse_ingestor
+    restart: unless-stopped
+    command: ["python", "-m", "pesquisa360.services.tse.worker"]
+    environment:
+      TSE_INGESTION_ZONAS_DE: "06050"
+    env_file:
+      - .env
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-m", "pesquisa360.services.tse.worker", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - pesquisa360_network

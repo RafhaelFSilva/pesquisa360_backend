@@ -1,0 +1,37 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+
+.venv
+venv
+env
+
+__pycache__
+*.pyc
+*.pyo
+
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+backups
+uploads
+*.dump
+*.sql
+*.log
+
+Dockerfile
+docker-compose.yml
+docker-compose.prod.yml
+
+# Operational artifacts excluded from production image
+Eleitorado Apto (Amapá 2026).pdf
+Setores.zip
+artifacts/
+exports/
+Dockerfile.prod.dockerignore
+docker-compose.tse-ingestor.prod.yml

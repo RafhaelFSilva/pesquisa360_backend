@@ -1,0 +1,29 @@
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+RUN groupadd --gid 10001 pesquisa360 \
+    && useradd \
+        --uid 10001 \
+        --gid pesquisa360 \
+        --create-home \
+        --shell /usr/sbin/nologin \
+        pesquisa360
+
+COPY . .
+
+# Build reproduzivel: toda versao (inclusive a do pip) vem de constraints-prod.txt.
+RUN python -m pip install --no-cache-dir --upgrade -c constraints-prod.txt pip \
+    && python -m pip install --no-cache-dir -c constraints-prod.txt . \
+    && mkdir -p /app/uploads \
+    && chown -R pesquisa360:pesquisa360 /app
+
+USER pesquisa360
+
+EXPOSE 8000
+
+CMD ["python", "-m", "uvicorn", "pesquisa360.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

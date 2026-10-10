@@ -31,9 +31,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import bu_reconciliation
+from .bu_ingestion import BuIngestion, BuScope
 from .client import TseClient
 from .config import (
-    TseIngestionSettings, TseSettings, load_ingestion_settings, settings_for_origem,
+    TODOS, TseIngestionSettings, TseSettings, load_ingestion_settings, settings_for_origem,
 )
 from .ingestion import IngestScope, TseIngestion
 from .locking import IngestionLock
@@ -72,6 +74,7 @@ class TseIngestorWorker:
             "tse_ingestor_start %s", json.dumps({
                 "enabled": s.enabled, "origem": s.origem, "ufs": list(s.ufs),
                 "cargos": list(s.cargos), "interval_seconds": s.interval_seconds,
+                "bu_enabled": s.bu_enabled, "bu_batch_size": s.bu_batch_size,
                 "requests_per_second": self.tse_settings.requests_per_second,
                 "base_url": self.tse_settings.base_url, "pid": os.getpid(),
             }))
@@ -151,6 +154,8 @@ class TseIngestorWorker:
                 finally:
                     session.close()
                 self._somar(record, report)
+                if s.bu_enabled and not self._boletins(client, uf, report.pleito, record):
+                    break
             record["requests"] = len(client.requests)
             for _t, url, status in client.requests:
                 if str(status) in ("200", "304", "404", "429"):
@@ -161,6 +166,39 @@ class TseIngestorWorker:
         nivel = logging.ERROR if record["status"] == "error" else logging.INFO
         logger.log(nivel, "tse_ingest_cycle %s", json.dumps(record, ensure_ascii=False))
         return record
+
+    def _boletins(self, client, uf: str, pleito: str, record: dict) -> bool:
+        """Um lote de BUs da UF. Devolve False se o worker deve parar o ciclo.
+
+        Roda depois do EA20 e com sessao propria: uma falha aqui nao desfaz a
+        totalizacao ja gravada, e cada boletim e a sua propria transacao.
+        """
+        s = self.settings
+        bu = record.setdefault("bu", {})
+        municipios = () if TODOS in s.bu_municipios else s.bu_municipios
+        session = self.session_factory()
+        try:
+            relatorio = BuIngestion(
+                session, client, self.tse_settings, archive_dir=s.bu_archive_dir,
+            ).run(BuScope(origem=s.origem, pleito=pleito, uf=uf,
+                          batch_size=s.bu_batch_size, municipios=municipios))
+            for chave, valor in relatorio.contadores().items():
+                bu[chave] = bu.get(chave, 0) + valor
+            conferencia = bu_reconciliation.conferir_zonas(
+                session, s.origem, pleito, uf, sorted(relatorio.zonas), s.cargos)
+            for chave, valor in conferencia.items():
+                bu[chave] = bu.get(chave, 0) + valor
+        except ShutdownRequested:
+            session.rollback()
+            record["status"] = "interrupted"
+            return False
+        except Exception as exc:
+            session.rollback()
+            record["status"] = "error"
+            record["errors"].append({"uf": uf, "etapa": "bu", "erro": _erro(exc)})
+        finally:
+            session.close()
+        return True
 
     @staticmethod
     def _somar(record: dict, report) -> None:

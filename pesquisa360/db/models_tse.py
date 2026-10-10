@@ -309,3 +309,137 @@ class TseArquivoSecao(Base):
     capturado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     secao = relationship("TseSecao")
+
+
+# ------------------------------------------------------------ Boletim de Urna
+STATUS_BU_CONTROLE = ("PROCESSADO", "AGUARDANDO", "ERRO")
+TIPOS_VOTO_BU = ("NOMINAL", "LEGENDA")
+
+
+class TseBoletimUrna(Base):
+    """Uma versao do BU de uma urna (ADR-090). Fonte oficial do nivel SECAO.
+
+    Pertence a secao PRINCIPAL: o BU nao lista secoes agregadas, e os votos das
+    agregadas estao neste mesmo boletim (relacao no EA16 / `tse_secoes`).
+    Append-only: arquivo diferente e linha nova; o corrente e o apontado por
+    `tse_bu_controle`. Datas `*_local` sao a hora local da urna, sem fuso.
+    """
+
+    __tablename__ = "tse_boletins_urna"
+    __table_args__ = (
+        UniqueConstraint("secao_id", "sha256", name="uq_tse_boletins_urna_arquivo"),
+        UniqueConstraint("snapshot_id", name="uq_tse_boletins_urna_snapshot"),
+        CheckConstraint(_sql_in("origem", ORIGENS_TSE), name="ck_tse_boletins_urna_origem"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    origem = Column(String(10), nullable=False)
+    pleito = Column(String(10), nullable=False)
+    secao_id = Column(Integer, ForeignKey("tse_secoes.id"), nullable=False)
+    snapshot_id = Column(Integer, ForeignKey("tse_snapshots.id"), nullable=False)
+    # SHA-256 do arquivo original: identidade da versao (idempotencia).
+    sha256 = Column(String(64), nullable=False)
+    tamanho_bytes = Column(Integer, nullable=False)
+    # Hash e situacao do EA18 que apontou este arquivo, e quando o TSE o recebeu.
+    hash_ea18 = Column(String(200), nullable=False)
+    situacao_ea18 = Column(String(40), nullable=True)
+    recebido_em = Column(DateTime(timezone=True), nullable=True)
+    tipo_bu = Column(String(10), nullable=False)   # SECAO | SA
+    local_votacao = Column(Integer, nullable=True)
+    comparecimento = Column(Integer, nullable=False)
+    gerado_local = Column(DateTime(timezone=False), nullable=True)
+    emitido_local = Column(DateTime(timezone=False), nullable=True)
+    abertura_local = Column(DateTime(timezone=False), nullable=True)
+    encerramento_local = Column(DateTime(timezone=False), nullable=True)
+    tipo_urna = Column(Integer, nullable=True)
+    tipo_arquivo = Column(Integer, nullable=True)
+    versao_votacao = Column(String(120), nullable=True)
+    numero_interno_urna = Column(Integer, nullable=True)
+    codigo_carga = Column(String(40), nullable=True)
+    processado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    secao = relationship("TseSecao")
+    snapshot = relationship("TseSnapshot")
+    cargos = relationship("TseBuCargo", back_populates="boletim")
+
+
+class TseBuCargo(Base):
+    """Totais de um cargo num BU. Brancos e nulos sao os do boletim."""
+
+    __tablename__ = "tse_bu_cargos"
+    __table_args__ = (
+        UniqueConstraint("boletim_id", "cargo_id", name="uq_tse_bu_cargos"),
+        Index("ix_tse_bu_cargos_cargo", "cargo_id", "boletim_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    boletim_id = Column(Integer, ForeignKey("tse_boletins_urna.id"), nullable=False)
+    eleicao_id = Column(Integer, ForeignKey("tse_eleicoes.id"), nullable=False)
+    cargo_id = Column(Integer, ForeignKey("tse_cargos.id"), nullable=False)
+    tipo_cargo = Column(String(12), nullable=False)
+    eleitores_aptos = Column(Integer, nullable=False)
+    comparecimento = Column(Integer, nullable=False)
+    votos_nominais = Column(Integer, nullable=False)
+    votos_legenda = Column(Integer, nullable=False)
+    votos_brancos = Column(Integer, nullable=False)
+    votos_nulos = Column(Integer, nullable=False)
+
+    boletim = relationship("TseBoletimUrna", back_populates="cargos")
+    cargo = relationship("TseCargo")
+    votos = relationship("TseBuVoto", back_populates="bu_cargo")
+
+
+class TseBuVoto(Base):
+    """Voto nominal (por candidato) ou de legenda (por partido) de um cargo no BU.
+
+    `numero` e o votavel do boletim. `candidato_id`/`partido_id` ligam ao
+    cadastro vindo do EA20; ficam nulos enquanto o cadastro nao existir.
+    """
+
+    __tablename__ = "tse_bu_votos"
+    __table_args__ = (
+        UniqueConstraint("bu_cargo_id", "tipo", "numero", name="uq_tse_bu_votos"),
+        CheckConstraint(_sql_in("tipo", TIPOS_VOTO_BU), name="ck_tse_bu_votos_tipo"),
+        Index("ix_tse_bu_votos_candidato", "candidato_id"),
+        Index("ix_tse_bu_votos_partido", "partido_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    bu_cargo_id = Column(Integer, ForeignKey("tse_bu_cargos.id"), nullable=False)
+    tipo = Column(String(8), nullable=False)
+    numero = Column(String(10), nullable=False)
+    partido_numero = Column(String(5), nullable=False)
+    candidato_id = Column(Integer, ForeignKey("tse_candidatos.id"), nullable=True)
+    partido_id = Column(Integer, ForeignKey("tse_partidos.id"), nullable=True)
+    votos = Column(Integer, nullable=False)
+
+    bu_cargo = relationship("TseBuCargo", back_populates="votos")
+
+
+class TseBuControle(Base):
+    """Estado da ingestao do BU de cada secao principal (uma linha por secao).
+
+    `auxiliar_em` guarda o carimbo do EA16 ja verificado: a secao so volta a
+    ser consultada quando o TSE publica outro. `boletim_id` e o BU corrente e
+    so avanca para um boletim NOVO -- um arquivo antigo servido de novo
+    (A -> B -> A) nao o faz regredir.
+    """
+
+    __tablename__ = "tse_bu_controle"
+    __table_args__ = (
+        UniqueConstraint("secao_id", name="uq_tse_bu_controle_secao"),
+        CheckConstraint(_sql_in("status", STATUS_BU_CONTROLE), name="ck_tse_bu_controle_status"),
+        Index("ix_tse_bu_controle_boletim", "boletim_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    secao_id = Column(Integer, ForeignKey("tse_secoes.id"), nullable=False)
+    status = Column(String(12), nullable=False)
+    boletim_id = Column(Integer, ForeignKey("tse_boletins_urna.id"), nullable=True)
+    auxiliar_em = Column(DateTime(timezone=True), nullable=True)
+    tentativas = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    erro = Column(String(300), nullable=True)
+    verificado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    secao = relationship("TseSecao")
+    boletim = relationship("TseBoletimUrna")

@@ -65,6 +65,8 @@ TODOS = "*"
 INTERVALO_PADRAO_SEGUNDOS = 20
 INTERVALO_MINIMO_SEGUNDOS = 15
 INTERVALO_MAXIMO_SEGUNDOS = 3600
+BU_LOTE_PADRAO = 50
+BU_LOTE_MAXIMO = 500
 
 
 def settings_for_origem(origem: str, settings: TseSettings | None = None) -> TseSettings:
@@ -92,6 +94,15 @@ class TseIngestionSettings:
     # None = descoberto no EA11 (pleito mais recente que disputa os cargos).
     pleito: str | None = None
     heartbeat_file: Path = Path(tempfile.gettempdir()) / "tse_ingestor.heartbeat"
+    # Boletins de Urna (resultado por secao). DESLIGADO por padrao, inclusive
+    # com a ingestao ligada: e carga adicional e precisa ser habilitada por ambiente.
+    bu_enabled: bool = False
+    # Secoes verificadas por UF a cada ciclo (2 requisicoes por secao, no maximo).
+    bu_batch_size: int = BU_LOTE_PADRAO
+    # (TODOS,) = todas as secoes da UF; senao, so as dos municipios listados.
+    bu_municipios: tuple[str, ...] = (TODOS,)
+    # Diretorio opcional para guardar os arquivos originais (nome = SHA-256).
+    bu_archive_dir: Path | None = None
 
     def __post_init__(self):
         if self.origem not in (OFICIAL, SIMULADO):
@@ -116,6 +127,13 @@ class TseIngestionSettings:
                 f"e {INTERVALO_MAXIMO_SEGUNDOS}")
         if self.pleito is not None and not self.pleito.isdigit():
             raise ValueError("TSE_INGESTION_PLEITO deve ser numerico")
+        if not 1 <= self.bu_batch_size <= BU_LOTE_MAXIMO:
+            raise ValueError(
+                f"TSE_INGESTION_BU_BATCH_SIZE deve ficar entre 1 e {BU_LOTE_MAXIMO}")
+        for codigo in self.bu_municipios:
+            if codigo != TODOS and not (len(codigo) == 5 and codigo.isdigit()):
+                raise ValueError(
+                    f"TSE_INGESTION_BU_MUNICIPIOS com municipio invalido: {codigo!r}")
 
 
 def _lista(valor: str | None) -> tuple[str, ...]:
@@ -131,13 +149,13 @@ def _municipios(valor: str | None, padrao: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(item.zfill(5) if item.isdigit() else item for item in itens)
 
 
-def _booleano(valor: str | None) -> bool:
+def _booleano(valor: str | None, nome: str = "TSE_INGESTION_ENABLED") -> bool:
     texto = (valor or "").strip().casefold()
     if texto in ("", "0", "false", "no", "nao", "off"):
         return False
     if texto in ("1", "true", "yes", "sim", "on"):
         return True
-    raise ValueError(f"TSE_INGESTION_ENABLED invalido: {valor!r}")
+    raise ValueError(f"{nome} invalido: {valor!r}")
 
 
 def load_ingestion_settings(environ=None) -> TseIngestionSettings:
@@ -154,4 +172,9 @@ def load_ingestion_settings(environ=None) -> TseIngestionSettings:
         interval_seconds=float(env.get("TSE_INGESTION_INTERVAL_SECONDS", padrao.interval_seconds)),
         pleito=(env.get("TSE_INGESTION_PLEITO") or "").strip() or None,
         heartbeat_file=Path(env.get("TSE_INGESTION_HEARTBEAT_FILE") or padrao.heartbeat_file),
+        bu_enabled=_booleano(env.get("TSE_INGESTION_BU_ENABLED"), "TSE_INGESTION_BU_ENABLED"),
+        bu_batch_size=int(env.get("TSE_INGESTION_BU_BATCH_SIZE") or padrao.bu_batch_size),
+        bu_municipios=_municipios(env.get("TSE_INGESTION_BU_MUNICIPIOS"), padrao.bu_municipios),
+        bu_archive_dir=(Path(env["TSE_INGESTION_BU_ARCHIVE_DIR"])
+                        if env.get("TSE_INGESTION_BU_ARCHIVE_DIR") else None),
     )

@@ -27,6 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pesquisa360.db.models_tse import TseCargo, TseEleicao  # noqa: E402
 from pesquisa360.db.session import SessionLocal, engine  # noqa: E402
 from pesquisa360.services.tse import reconciliation  # noqa: E402
+from pesquisa360.services.tse.bu_ingestion import LOTE_MAXIMO, BuIngestion, BuScope  # noqa: E402
+from pesquisa360.services.tse.bu_store import BuStore  # noqa: E402
 from pesquisa360.services.tse.client import TseClient  # noqa: E402
 from pesquisa360.services.tse.config import settings_for_origem  # noqa: E402
 from pesquisa360.services.tse.ingestion import TODOS, IngestScope, TseIngestion  # noqa: E402
@@ -108,7 +110,7 @@ def cmd_consulta(args) -> int:
                            for v in votos if v["tipo"] == "MUNICIPIO"],
             "zonas": [{"municipio": v["municipio_codigo"], "zona": v["zona"], **_linha(v)}
                       for v in votos if v["tipo"] == "ZONA"],
-            "secoes": "PENDENTE: depende da decodificacao do BU com o bu.asn1 oficial",
+            "secoes": "pela API (?municipio=&zona=&secao=), a partir dos Boletins de Urna ingeridos",
             "historico_uf": [{"totalizacao_id": h["totalizacao_id"], "idg": h["idg"],
                               "gerado_em": str(h["gerado_em"]), "votos": h["votos"],
                               "secoes_totalizadas": h["secoes_totalizadas"]}
@@ -120,6 +122,31 @@ def cmd_consulta(args) -> int:
             saida["reconciliacao"].append(
                 reconciliation.reconcile_abrangencia(repo, candidato.id, abr))
     print(json.dumps(saida, ensure_ascii=False, indent=1, default=str))
+    return 0
+
+
+def cmd_bu(args) -> int:
+    """Um lote de Boletins de Urna (fallback manual do worker). Mesma trava da ingestao."""
+    origem, settings, pleito = _contexto(args)
+    uf = args.uf.lower()
+    municipios = tuple(m.zfill(5) for m in args.municipios)
+    with IngestionLock(engine, origem) as lock:
+        if not lock.try_acquire():
+            print(f"Ingestao {origem} em andamento por outro processo (worker automatico ou "
+                  "outra CLI). Nada foi executado. Pare o worker para ingerir manualmente.",
+                  file=sys.stderr)
+            return EXIT_LOCK_OCUPADO
+        with SessionLocal() as session, TseClient(settings=settings) as client:
+            antes = BuStore(session).situacao(origem, pleito, uf, municipios=municipios)
+            relatorio = BuIngestion(session, client, settings).run(BuScope(
+                origem=origem, pleito=pleito, uf=uf, batch_size=args.lote,
+                municipios=municipios))
+            depois = BuStore(session).situacao(origem, pleito, uf, municipios=municipios)
+            print(json.dumps({
+                "origem": origem, "pleito": pleito, "uf": uf, "antes": antes,
+                **relatorio.contadores(), "erros": relatorio.erros[:20], "depois": depois,
+                "requisicoes": len(client.requests),
+            }, ensure_ascii=False, indent=1))
     return 0
 
 
@@ -135,7 +162,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="comando", required=True)
-    for nome in ("ingest", "consulta"):
+    for nome in ("ingest", "consulta", "bu"):
         p = sub.add_parser(nome)
         p.add_argument("--simulado", action="store_true",
                        help="usa o ambiente de simulacao do TSE (origem SIMULADO)")
@@ -150,6 +177,12 @@ def main() -> int:
     p.add_argument("--secoes-ea18", type=int, default=0)
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=cmd_ingest)
+    p = sub.choices["bu"]
+    p.add_argument("--municipios", nargs="*", default=[],
+                   help="codigos TSE; vazio = todas as secoes da UF")
+    p.add_argument("--lote", type=int, default=50,
+                   help=f"secoes verificadas nesta execucao (1 a {LOTE_MAXIMO})")
+    p.set_defaults(func=cmd_bu)
     p = sub.choices["consulta"]
     p.add_argument("--cargo", required=True)
     p.add_argument("--sqcand")
@@ -157,6 +190,8 @@ def main() -> int:
     p.add_argument("--reconciliar-municipio", nargs="*", default=[])
     p.set_defaults(func=cmd_consulta)
     args = parser.parse_args()
+    if args.comando == "bu" and not args.pleito:
+        parser.error("bu exige --pleito (ex.: 3220): os boletins sao do pleito ja ingerido")
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     return args.func(args)

@@ -5,6 +5,7 @@ A aplicacao de teste monta apenas o router da apuracao, com `get_db` e
 SIMULADO_* (mesma base de test_tse_persistencia).
 """
 
+import copy
 import os
 
 from fastapi import FastAPI
@@ -19,7 +20,7 @@ from pesquisa360.db import models
 from pesquisa360.db.models_tse import TseEleicao
 from pesquisa360.services.tse.normalization import OFICIAL
 
-from tests.test_tse_persistencia import CANDIDATO, _TseFixture
+from tests.test_tse_persistencia import CANDIDATO, DADOS, ESCOPO, _TseFixture
 
 ANULADO = "41609564"
 
@@ -307,3 +308,279 @@ class PaineisMultitenantTest(_ApiFixture):
                             json=self.corpo_painel(eleicao_id=oficial.id))
         self.assertEqual((r.json()["origem"], r.json()["pleito"], r.json()["eleicao_id"]),
                          ("OFICIAL", "3220", oficial.id))
+
+
+class FiltrosTerritoriaisTest(_ApiFixture):
+    """Municipio e zona recalculam a apuracao inteira a partir do EA20 do recorte.
+
+    Deputado Estadual (0007) e montado a partir dos arquivos do Federal: mesmo
+    contrato, `sqcand` prefixado com "7" e os votos dobrados, para que um filtro
+    que confundisse os cargos fosse detectado.
+    """
+
+    FEDERACAO = "100"
+
+    def setUp(self):
+        super().setUp()
+        for url, doc in list(self.tse.arquivos.items()):
+            if "-c0006-" not in url:
+                continue
+            estadual = copy.deepcopy(doc)
+            cargo = estadual["carg"][0]
+            cargo.update({"cd": "7", "nmn": "Deputado Estadual", "nv": "24"})
+            for agr in cargo["agr"]:
+                for par in agr["par"]:
+                    par["tvtl"] = str(int(par["tvtl"]) * 2)
+                    for cand in par["cand"]:
+                        cand["sqcand"] = "7" + cand["sqcand"]
+                        cand["vap"] = str(int(cand["vap"]) * 2)
+            self.tse.arquivos[url.replace("-c0006-", "-c0007-")] = estadual
+        # O EA11 simulado ja declara o cargo 7 na eleicao estadual.
+        self.ingerir(type(ESCOPO)(**{**ESCOPO.__dict__, "cargos": ("0006", "0007")}))
+        self.base = f"/apuracao/tse/eleicoes/{self.eleicao_id}"
+
+    def nominatas(self, cargo="0006", **filtro):
+        r = self.client.get(f"{self.base}/cargos/{cargo}/nominatas", params={"uf": "ap", **filtro})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def federacao(self, corpo):
+        return next(n for n in corpo["nominatas"]
+                    if n["tipo"] == "FEDERACAO" and n["numero"] == self.FEDERACAO)
+
+    def votos(self, corpo, sqcand=CANDIDATO):
+        return next(c["votos"] for n in corpo["nominatas"] for c in n["candidatos"]
+                    if c["sqcand"] == sqcand)
+
+    # 1 -------------------------------------------------------------- sem filtros
+    def test_sem_filtros_o_contrato_e_os_numeros_nao_mudam(self):
+        uf = self.nominatas()
+        self.assertEqual(sorted(uf), ["abrangencia", "cargo", "eleicao", "nominatas", "origem",
+                                      "totalizacao"])
+        self.assertEqual(sorted(uf["nominatas"][0]), [
+            "candidatos", "nome", "numero", "partidos", "sigla", "tipo", "total",
+            "votos_legenda", "votos_nominais", "votos_nominais_validos"])
+        self.assertEqual((uf["abrangencia"]["tipo"], self.votos(uf)), ("UF", 3115))
+        self.assertEqual(sum(n["votos_nominais_validos"] for n in uf["nominatas"]), 378662)
+        self.assertEqual(sum(n["votos_legenda"] for n in uf["nominatas"]), 66579)
+        # Filtro vazio nao e "sem filtro": o formato e validado (o Web omite o parametro).
+        self.assertEqual(self.client.get(
+            f"{self.base}/cargos/0006/nominatas",
+            params={"uf": "ap", "municipio": ""}).status_code, 422)
+
+    # 2, 3 ------------------------------------------------------ municipio e zona
+    def test_municipio_recalcula_pelo_ea20_do_municipio(self):
+        uf, mun = self.nominatas(), self.nominatas(municipio="06050")
+        self.assertEqual((mun["abrangencia"]["tipo"], mun["abrangencia"]["municipio_codigo"],
+                          mun["abrangencia"]["municipio_nome"]), ("MUNICIPIO", "06050", "MACAPÁ"))
+        self.assertEqual(self.votos(mun), 1612)
+        validos = sum(n["votos_nominais_validos"] for n in mun["nominatas"])
+        self.assertEqual(validos, mun["totalizacao"]["votos_nominais"])
+        self.assertLess(validos, sum(n["votos_nominais_validos"] for n in uf["nominatas"]))
+        self.assertEqual(sum(n["votos_legenda"] for n in mun["nominatas"]),
+                         mun["totalizacao"]["votos_legenda"])
+
+    def test_zona_recalcula_pelo_ea20_da_zona(self):
+        mun = self.nominatas(municipio="06050")
+        zonas = {z: self.nominatas(municipio="06050", zona=z) for z in ("0002", "0010", "0014")}
+        self.assertEqual({z: self.votos(c) for z, c in zonas.items()},
+                         {"0002": 676, "0010": 427, "0014": 509})
+        for zona, corpo in zonas.items():
+            self.assertEqual((corpo["abrangencia"]["tipo"], corpo["abrangencia"]["zona"],
+                              corpo["abrangencia"]["municipio_codigo"]), ("ZONA", zona, "06050"))
+            self.assertEqual(sum(n["votos_nominais_validos"] for n in corpo["nominatas"]),
+                             corpo["totalizacao"]["votos_nominais"])
+        # As tres zonas somam o municipio: nominal, legenda e total da nominata.
+        for campo in ("votos_nominais_validos", "votos_legenda", "total"):
+            self.assertEqual(sum(self.federacao(c)[campo] for c in zonas.values()),
+                             self.federacao(mun)[campo], campo)
+
+    # 9-13 ------------------------------- nominal, legenda, total, %, ranking
+    def test_nominata_do_recorte_tem_totais_percentuais_e_ranking_proprios(self):
+        uf = self.federacao(self.nominatas())
+        zona_corpo = self.nominatas(municipio="06050", zona="0002")
+        zona = self.federacao(zona_corpo)
+        self.assertEqual(zona["total"], zona["votos_nominais_validos"] + zona["votos_legenda"])
+        self.assertLess(zona["votos_legenda"], uf["votos_legenda"])
+        self.assertLess(zona["total"], uf["total"])
+        votos = [c["votos"] for c in zona["candidatos"]]
+        self.assertEqual(votos, sorted(votos, reverse=True))
+        self.assertEqual([c["posicao"] for c in zona["candidatos"]],
+                         list(range(1, len(votos) + 1)))
+        # Percentual e o do arquivo da zona, nao o da UF.
+        alvo_uf = next(c for c in uf["candidatos"] if c["sqcand"] == CANDIDATO)
+        alvo_zona = next(c for c in zona["candidatos"] if c["sqcand"] == CANDIDATO)
+        bruto = self.tse.arquivos[f"{DADOS}/ap/ap06050-z0002-c0006-e021272-u.json"]
+        esperado = next(c for a in bruto["carg"][0]["agr"] for p in a["par"] for c in p["cand"]
+                        if c["sqcand"] == CANDIDATO)
+        self.assertEqual(alvo_zona["percentual"], float(esperado["pvap"].replace(",", ".")))
+        self.assertNotEqual(alvo_zona["percentual"], alvo_uf["percentual"])
+        # O ranking de partidos/federacoes tambem e o do recorte.
+        totais = [n["total"] for n in zona_corpo["nominatas"]]
+        self.assertEqual(totais, sorted(totais, reverse=True))
+        self.assertNotEqual([n["sigla"] for n in zona_corpo["nominatas"]],
+                            [n["sigla"] for n in self.nominatas()["nominatas"]])
+
+    # 14 -------------------------------------------------------------- progresso
+    def test_progresso_usa_o_universo_do_recorte(self):
+        def secoes(**filtro):
+            t = self.nominatas(**filtro)["totalizacao"]
+            return t["secoes_totalizadas"], t["secoes_total"], t["percentual_secoes"], t["idg"]
+
+        self.assertEqual(secoes(), (2177, 2177, 100.0, "176223611"))
+        self.assertEqual(secoes(municipio="06050"), (1071, 1071, 100.0, "176248737"))
+        self.assertEqual(secoes(municipio="06050", zona="0002"), (395, 395, 100.0, "176247751"))
+        self.assertEqual(secoes(municipio="06050", zona="0010")[:2], (255, 255))
+        self.assertEqual(secoes(municipio="06050", zona="0014")[:2], (421, 421))
+
+    def test_progresso_parcial_da_zona_nao_usa_denominador_estadual(self):
+        url = f"{DADOS}/ap/ap06050-z0014-c0006-e021272-u.json"
+        self.tse.arquivos = copy.deepcopy(self.tse.arquivos)
+        self.tse.arquivos[url].update({"and": "p", "tf": "n"})
+        self.tse.arquivos[url]["s"]["st"] = "42"
+        self.ingerir(type(ESCOPO)(**{**ESCOPO.__dict__, "force": True}))
+        t = self.nominatas(municipio="06050", zona="0014")["totalizacao"]
+        self.assertEqual((t["secoes_totalizadas"], t["secoes_total"], t["andamento"],
+                          t["totalizacao_final"]), (42, 421, "p", False))
+        self.assertEqual(t["percentual_secoes"], 9.98)
+        self.assertEqual(self.nominatas()["totalizacao"]["secoes_total"], 2177)
+
+    # 8 ------------------------------------------------------ federal e estadual
+    def test_filtros_funcionam_para_federal_e_estadual(self):
+        for filtro in ({}, {"municipio": "06050"}, {"municipio": "06050", "zona": "0010"}):
+            federal, estadual = self.nominatas("0006", **filtro), self.nominatas("0007", **filtro)
+            self.assertEqual((federal["cargo"]["codigo"], estadual["cargo"]["codigo"]),
+                             ("0006", "0007"))
+            self.assertEqual(estadual["abrangencia"], federal["abrangencia"])
+            self.assertEqual(self.votos(estadual, "7" + CANDIDATO), 2 * self.votos(federal))
+            self.assertTrue(all(c["sqcand"].startswith("7")
+                                for n in estadual["nominatas"] for c in n["candidatos"]))
+            self.assertEqual(self.federacao(estadual)["votos_legenda"],
+                             2 * self.federacao(federal)["votos_legenda"])
+        cargo = self.client.get(f"{self.base}/cargos/0007",
+                                params={"uf": "ap", "municipio": "06050", "zona": "0002"}).json()
+        self.assertEqual((cargo["cargo"]["nome"], cargo["abrangencia"]["zona"]),
+                         ("Deputado Estadual", "0002"))
+
+    # 4 ------------------------------------------------------------------- secao
+    def test_secao_sem_bu_nunca_devolve_outro_recorte(self):
+        """Fase 3: a secao e aceita; sem BU ingerido nao ha resultado -- nem o da zona."""
+        zona = self.client.get(f"{self.base}/cargos/0006/nominatas",
+                               params={"uf": "ap", "municipio": "06050", "zona": "0002"}).json()
+        self.assertTrue(zona["nominatas"])
+        for rota, lista in (("cargos/0006/nominatas", "nominatas"), ("cargos/0006", "candidatos")):
+            r = self.client.get(f"{self.base}/{rota}",
+                                params={"uf": "ap", "municipio": "06050", "zona": "0002",
+                                        "secao": "0055"})
+            self.assertEqual(r.status_code, 200, rota)
+            corpo = r.json()
+            self.assertEqual((corpo["abrangencia"]["tipo"], corpo["abrangencia"]["secao"],
+                              corpo["secao"]["status"], corpo["totalizacao"], corpo[lista]),
+                             ("SECAO", "0055", "AGUARDANDO_BU", None, []), rota)
+        # Hierarquia e formato continuam recusados.
+        for filtro in ({"secao": "0055"}, {"municipio": "06050", "secao": "0055"},
+                       {"municipio": "06050", "zona": "0002", "secao": "55"}):
+            self.assertEqual(self.client.get(
+                f"{self.base}/cargos/0006/nominatas", params={"uf": "ap", **filtro}).status_code,
+                422, filtro)
+
+    # 5, 6, 7 --------------------------------------------- combinacoes invalidas
+    def test_combinacao_territorial_inexistente_e_404(self):
+        def status(**filtro):
+            return self.client.get(f"{self.base}/cargos/0006/nominatas",
+                                   params={"uf": "ap", **filtro}).status_code
+
+        self.assertEqual(status(municipio="99999"), 404)                  # municipio inexistente
+        self.assertEqual(status(municipio="06050", zona="0001"), 404)     # zona de outro municipio
+        self.assertEqual(status(municipio="06009", zona="0002"), 404)     # idem, invertido
+        self.assertEqual(status(municipio="06009"), 404)                  # cadastrado, sem resultado
+        self.assertEqual(self.client.get(
+            f"{self.base}/cargos/0006/nominatas",
+            params={"uf": "pa", "municipio": "06050"}).status_code, 404)  # municipio fora da UF
+        self.assertEqual(status(zona="0002"), 422)                        # zona sem municipio
+        self.assertEqual(status(municipio="6050"), 422)                   # formato
+
+    # 15, 16, 17 ------------------------------------------- descoberta territorial
+    def opcoes(self, **filtro):
+        return self.client.get(f"{self.base}/territorio", params={"uf": "ap", **filtro})
+
+    def test_municipios_sao_os_que_tem_resultado_na_uf(self):
+        corpo = self.opcoes().json()
+        self.assertEqual((corpo["nivel"], corpo["uf"], corpo["origem"], corpo["municipio"],
+                          corpo["zona"]), ("municipios", "ap", "SIMULADO", None, None))
+        # O EA12 cadastrou 16 municipios; so Macapa tem resultado ingerido.
+        self.assertEqual(corpo["itens"], [{"codigo": "06050", "nome": "MACAPÁ"}])
+        self.assertTrue(corpo["votos_por_secao_disponiveis"])
+        self.assertEqual(self.opcoes().status_code, 200)
+        self.assertEqual(self.client.get(f"{self.base}/territorio",
+                                         params={"uf": "pa"}).status_code, 404)
+
+    def test_municipios_vem_ordenados_por_nome(self):
+        self.tse.arquivos = copy.deepcopy(self.tse.arquivos)
+        for codigo in ("06157", "06009"):          # SANTANA e PRACUUBA
+            for cargo in ("0006", "0007"):
+                origem = self.tse.arquivos[f"{DADOS}/ap/ap06050-c{cargo}-e021272-u.json"]
+                clone = copy.deepcopy(origem)
+                clone["cdabr"] = codigo
+                self.tse.arquivos[f"{DADOS}/ap/ap{codigo}-c{cargo}-e021272-u.json"] = clone
+        self.ingerir(type(ESCOPO)(**{**ESCOPO.__dict__, "cargos": ("0006", "0007"),
+                                    "municipios": ("06050", "06157", "06009")}))
+        nomes = [m["nome"] for m in self.opcoes().json()["itens"]]
+        self.assertEqual(nomes, ["MACAPÁ", "PRACUÚBA", "SANTANA"])
+
+    def test_zonas_respeitam_o_municipio(self):
+        corpo = self.opcoes(municipio="06050").json()
+        self.assertEqual((corpo["nivel"], corpo["municipio"]),
+                         ("zonas", {"codigo": "06050", "nome": "MACAPÁ"}))
+        self.assertEqual(corpo["itens"], [{"zona": "0002"}, {"zona": "0010"}, {"zona": "0014"}])
+        self.assertEqual(self.opcoes(municipio="99999").status_code, 404)
+        # Municipio cadastrado mas sem zona ingerida: lista vazia, nao as zonas de outro.
+        self.assertEqual(self.opcoes(municipio="06009").json()["itens"], [])
+
+    def test_secoes_respeitam_municipio_e_zona(self):
+        corpo = self.opcoes(municipio="06050", zona="0002").json()
+        self.assertEqual((corpo["nivel"], corpo["zona"]), ("secoes", "0002"))
+        secoes = [s["secao"] for s in corpo["itens"]]
+        self.assertEqual(len(secoes), 10)
+        self.assertEqual(secoes, sorted(secoes))
+        self.assertTrue(all(s["zona"] == "0002" for s in corpo["itens"]))
+        self.assertEqual(sorted(corpo["itens"][0]),
+                         ["agregadas", "bu_status", "local_votacao", "principal", "recebida", "resultado_agregado",
+                          "resultado_disponivel", "secao", "secao_principal", "zona"])
+        self.assertEqual({s["bu_status"] for s in corpo["itens"]}, {"AGUARDANDO_BU"})
+        # O filtro por secao existe; o voto de cada uma depende do seu BU.
+        self.assertTrue(corpo["votos_por_secao_disponiveis"])
+        self.assertFalse(any(s["resultado_disponivel"] for s in corpo["itens"]))
+        outras = [s["secao"] for s in self.opcoes(municipio="06050", zona="0010").json()["itens"]]
+        self.assertNotEqual(outras, secoes)
+        self.assertEqual(self.opcoes(municipio="06050", zona="0001").status_code, 404)
+        self.assertEqual(self.opcoes(zona="0002").status_code, 422)
+
+    def test_territorio_exige_permissao_e_e_global(self):
+        url = f"{self.base}/territorio?uf=ap"
+        self.assertEqual(self.como(self.cliente_a).get(url).status_code, 200)
+        self.assertEqual(self.como(self.agente_a).get(url).status_code, 403)
+        self.assertEqual(self.como(self.gerente_a).get(url).json(),
+                         self.como(self.gerente_b).get(url).json())
+
+    # 18 ----------------------------------------------------- GET nao altera nada
+    def test_leituras_nao_modificam_dados_do_tse(self):
+        antes = self.contagens()
+        ultima = self.session.query(models_tse_totalizacao()).order_by(
+            models_tse_totalizacao().id.desc()).first().id
+        for filtro in ({}, {"municipio": "06050"}, {"municipio": "06050", "zona": "0002"}):
+            for cargo in ("0006", "0007"):
+                self.nominatas(cargo, **filtro)
+                self.client.get(f"{self.base}/cargos/{cargo}", params={"uf": "ap", **filtro})
+            self.opcoes(**filtro)
+        self.client.get(f"{self.base}/cargos/0006/nominatas",
+                        params={"uf": "ap", "municipio": "99999"})
+        self.session.expire_all()
+        self.assertEqual(self.contagens(), antes)
+        self.assertEqual(self.session.query(models_tse_totalizacao()).order_by(
+            models_tse_totalizacao().id.desc()).first().id, ultima)
+
+
+def models_tse_totalizacao():
+    from pesquisa360.db.models_tse import TseTotalizacao
+    return TseTotalizacao

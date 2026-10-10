@@ -82,7 +82,8 @@ class SeparacaoDeAmbienteTest(unittest.TestCase):
         for path in simuladas:
             self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["f"], "s", path.name)
         for path in sorted(FIXTURES.glob("ea*.json")):
-            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["f"], "o", path.name)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["f"].casefold(), "o",
+                             path.name)
 
 
 class AcompanhamentoComProgressoTest(unittest.TestCase):
@@ -207,3 +208,35 @@ class SecoesSimuladoTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Ea18Oficial2026Test(unittest.TestCase):
+    """Contrato real do EA18 oficial durante a apuracao (04/10/2026):
+    fase em maiuscula ("O"), secao "Recebida", hash "Recebido" e o tipo `imgbu`."""
+
+    def setUp(self):
+        self.doc = fixture("ea18_2026_recebido.json")
+        self.auxiliar = sections.parse_ea18(self.doc)
+
+    def test_fase_em_maiuscula_e_oficial(self):
+        self.assertEqual(self.doc["f"], "O")
+        self.assertEqual((origem_from_fase("O"), origem_from_fase("o")), (OFICIAL, OFICIAL))
+        self.assertEqual((origem_from_fase("S"), origem_from_fase("s")), (SIMULADO, SIMULADO))
+        for invalida in (None, "", "x", "OS"):
+            with self.assertRaises(ValueError):
+                origem_from_fase(invalida)
+
+    def test_secao_recebida_registra_arquivos_mas_nao_tem_bu_corrente(self):
+        self.assertEqual((self.auxiliar.fase, self.auxiliar.situacao), ("O", "Recebida"))
+        self.assertEqual(len(self.auxiliar.hashes), 1)
+        hash_ = self.auxiliar.hashes[0]
+        self.assertEqual(hash_.situacao, "Recebido")
+        self.assertIsNotNone(hash_.recebido_em)
+        self.assertEqual({a.tipo for a in hash_.arquivos}, {"bu", "log", "imgbu", "rdv", "vota"})
+        self.assertEqual(next(a.nome for a in hash_.arquivos if a.tipo == "bu"),
+                         "o03220ap0605000020069-bu.dat")
+        # Recebido ainda nao e Totalizado: nenhum BU e tratado como corrente.
+        self.assertIsNone(sections.current_bu(self.auxiliar))
+        totalizado = fixture("ea18_2026_recebido.json")
+        totalizado["hashes"][0]["st"] = "Totalizado"
+        self.assertIsNotNone(sections.current_bu(sections.parse_ea18(totalizado)))

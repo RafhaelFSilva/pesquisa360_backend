@@ -184,21 +184,31 @@ class MigrationTest(unittest.TestCase):
         _alembic(url, "upgrade", REVISAO_TSE)
         self.assertIn(REVISAO_TSE, _alembic(url, "current"))
         novas = tabelas() - antes
-        self.assertEqual(novas, {t.name for t in models.Base.metadata.sorted_tables
-                                 if t.name.startswith("tse_")})
-        self.assertNotIn("tse_resultados_secao", novas)   # depende do BU oficial
+        # O Boletim de Urna (fase 3) chega numa migration propria, mais adiante.
+        do_bu = {"tse_boletins_urna", "tse_bu_cargos", "tse_bu_votos", "tse_bu_controle"}
+        dos_locais = {"tse_locais_votacao"}           # metadados (fase 5), migration posterior
+        todas = {t.name for t in models.Base.metadata.sorted_tables if t.name.startswith("tse_")}
+        self.assertEqual(novas, todas - do_bu - dos_locais)
+        self.assertFalse(novas & (do_bu | dos_locais))
         _alembic(url, "downgrade", ANTERIOR)
         self.assertEqual(tabelas(), antes)
         _alembic(url, "upgrade", REVISAO_TSE)
         self.assertEqual(tabelas() - antes, novas)
         _alembic(url, "upgrade", "head")
         self.assertEqual(_alembic(url, "heads").count("(head)"), 1)
+        self.assertEqual({t for t in tabelas() if t.startswith("tse_")}, todas)
+        _alembic(url, "downgrade", "bcab956ae48e")        # so as tabelas do BU saem
+        self.assertEqual({t for t in tabelas() if t.startswith("tse_")}, todas - do_bu - dos_locais)
+        _alembic(url, "upgrade", "d2f4a9c17e36")          # BU sem os metadados de local
+        self.assertEqual({t for t in tabelas() if t.startswith("tse_")}, todas - dos_locais)
+        _alembic(url, "upgrade", "head")
+        self.assertEqual({t for t in tabelas() if t.startswith("tse_")}, todas)
 
 
 class IsolamentoGlobalTest(unittest.TestCase):
     def test_t18_dados_tse_nao_dependem_de_company_id(self):
         tabelas = [t for t in models.Base.metadata.sorted_tables if t.name.startswith("tse_")]
-        self.assertEqual(len(tabelas), 12)
+        self.assertEqual(len(tabelas), 17)
         for tabela in tabelas:
             self.assertNotIn("company_id", tabela.c, tabela.name)
             for fk in tabela.foreign_keys:
@@ -360,6 +370,46 @@ class IdempotenciaEHistoricoTest(_TseFixture):
         self.assertEqual((report.snapshots_novos, report.totalizacoes_novas), (1, 0))
         self.assertEqual(self.contar(TseTotalizacao), 5)
 
+    def test_arquivo_antigo_servido_de_novo_nao_quebra_nem_regride(self):
+        """A -> B -> A: o TSE (CDN) devolve uma versao anterior do EA20.
+
+        Regressao do worker em producao de QA (04/10/2026): o snapshot de A ja
+        tinha totalizacao e a segunda tentativa violava
+        `uq_tse_totalizacoes_snapshot`, derrubando o ciclo inteiro.
+        """
+        forcado = IngestScope(**{**ESCOPO.__dict__, "force": True})
+        versao_a = copy.deepcopy(self.tse.arquivos)
+        self.ingerir()                                               # A
+        abr_uf = self.abrangencia()
+        cargo_id = self.candidato().cargo_id
+        total_a = self.repo.latest_totalizacao(abr_uf.id, cargo_id)
+
+        versao_b = copy.deepcopy(versao_a)
+        alvo = next(c for agr in versao_b[URL_EA20_UF]["carg"][0]["agr"] for par in agr["par"]
+                    for c in par["cand"] if c["sqcand"] == CANDIDATO)
+        alvo["vap"] = "3200"
+        versao_b[URL_EA20_UF]["idg"] = "999000111"
+        self.tse.arquivos = versao_b
+        self.assertEqual(self.ingerir(forcado).totalizacoes_novas, 1)   # B
+        total_b = self.repo.latest_totalizacao(abr_uf.id, cargo_id)
+        antes = self.contagens()
+
+        self.tse.arquivos = versao_a                                 # A de novo
+        report = self.ingerir(forcado)                               # nao levanta IntegrityError
+        self.assertEqual((report.totalizacoes_novas, report.snapshots_novos), (0, 0))
+        self.assertEqual(report.snapshots_repetidos, 1)
+        self.assertEqual(self.contagens(), antes)
+        # A totalizacao corrente continua sendo B: nao se regride para o arquivo antigo.
+        self.session.expire_all()
+        self.assertEqual(self.repo.latest_totalizacao(abr_uf.id, cargo_id).id, total_b.id)
+        self.assertEqual(self.votos(abr_uf), 3200)
+        historico = self.repo.candidate_history(self.candidato().id, abr_uf.id)
+        self.assertEqual([h["totalizacao_id"] for h in historico], [total_a.id, total_b.id])
+
+        self.tse.arquivos = versao_b                                 # B volta: nada novo
+        self.assertEqual(self.ingerir(forcado).totalizacoes_novas, 0)
+        self.assertEqual(self.contagens(), antes)
+
     def test_historico_append_only_guiado_pelo_ea14(self):
         # Estado 1: apuracao parcial.
         parcial = copy.deepcopy(self.tse.arquivos)
@@ -473,3 +523,20 @@ class ReconciliacaoPersistidaTest(_TseFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Ea18OficialTest(_TseFixture):
+    def test_ea18_com_fase_maiuscula_e_aceito_e_os_arquivos_sao_registrados(self):
+        self.ingerir()
+        secao = self.repo.secoes(SIMULADO, "17801", "ap", municipio="06050", principais=True)[0]
+        snapshot = self.session.scalars(select(TseSnapshot)).first()
+        from pesquisa360.services.tse import sections
+        from pesquisa360.services.tse.normalization import origem_from_fase
+        doc = fixture("ea18_2026_recebido.json")
+        self.assertEqual(origem_from_fase(doc["f"]), OFICIAL)       # antes: ValueError
+        criados = self.repo.record_ea18(secao, snapshot, sections.parse_ea18(doc),
+                                        lambda hash_, nome: f"https://x/{hash_}/{nome}")
+        self.assertEqual(criados, 5)
+        arquivos = self.session.scalars(select(models_tse.TseArquivoSecao)).all()
+        self.assertEqual({a.situacao for a in arquivos}, {"Recebido"})
+        self.assertEqual({a.tipo_arquivo for a in arquivos}, {"bu", "log", "imgbu", "rdv", "vota"})

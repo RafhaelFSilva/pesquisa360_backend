@@ -1562,6 +1562,10 @@ class ConfiguracaoCampoPesquisa(Base):
 
 
 TIPOS_ITEM_PAINEL_APURACAO = ("CARGO", "CANDIDATO", "NOMINATA")
+# GERAL: cartoes independentes (cargo, nominata, candidato).
+# DISTRIBUICAO_TERRITORIAL: itens CANDIDATO/NOMINATA de UM cargo, comparados
+# por municipio (UF) ou por zona (municipio).
+TIPOS_PAINEL_APURACAO = ("GERAL", "DISTRIBUICAO_TERRITORIAL")
 ORIGENS_APURACAO = ("OFICIAL", "SIMULADO")
 
 
@@ -1577,6 +1581,7 @@ class ApuracaoPainel(Base):
     __tablename__ = "apuracao_paineis"
     __table_args__ = (
         CheckConstraint(_sql_in("origem", ORIGENS_APURACAO), name="ck_apuracao_paineis_origem"),
+        CheckConstraint(_sql_in("tipo", TIPOS_PAINEL_APURACAO), name="ck_apuracao_paineis_tipo"),
         Index("ix_apuracao_paineis_company", "company_id"),
     )
 
@@ -1584,6 +1589,7 @@ class ApuracaoPainel(Base):
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     nome = Column(String(120), nullable=False)
     descricao = Column(Text, nullable=True)
+    tipo = Column(String(30), nullable=False, default="GERAL", server_default=text("'GERAL'"))
     origem = Column(String(10), nullable=False)
     pleito = Column(String(10), nullable=False)
     codigo_eleicao = Column(String(10), nullable=False)

@@ -11,7 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pesquisa360.db import models
-from pesquisa360.db.models_tse import TseEleicao
+from pesquisa360.db.models_tse import (
+    TseCandidato, TseCargo, TseEleicao, TseFederacao, TsePartido,
+)
 from pesquisa360.schemas_apuracao import PainelIn
 
 
@@ -47,7 +49,7 @@ def resumo(db: Session, painel: models.ApuracaoPainel) -> dict:
     eleicao = _eleicao_do_painel(db, painel)
     return {
         "id": painel.id, "nome": painel.nome, "descricao": painel.descricao,
-        "origem": painel.origem, "pleito": painel.pleito,
+        "tipo": painel.tipo, "origem": painel.origem, "pleito": painel.pleito,
         "codigo_eleicao": painel.codigo_eleicao,
         "eleicao_id": eleicao.id if eleicao else None,
         "eleicao_nome": eleicao.nome if eleicao else None,
@@ -80,8 +82,46 @@ def obter(db: Session, painel_id: int, current_user) -> models.ApuracaoPainel:
     return painel
 
 
+def _invalido(detalhe: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detalhe)
+
+
+def _validar_acompanhados(db: Session, eleicao: TseEleicao, dados: PainelIn) -> None:
+    """Itens do painel de distribuicao precisam existir no pleito e bater com o cargo.
+
+    Um pleito tem mais de uma eleicao (federal e estadual): o candidato e o
+    partido sao procurados em qualquer eleicao do mesmo pleito e origem.
+    """
+    do_pleito = select(TseEleicao.id).where(TseEleicao.origem == eleicao.origem,
+                                            TseEleicao.pleito == eleicao.pleito)
+    for item in dados.itens:
+        if item.tipo == "CANDIDATO":
+            cargo = db.scalar(
+                select(TseCargo.codigo)
+                .join(TseCandidato, TseCandidato.cargo_id == TseCargo.id)
+                .where(TseCandidato.sqcand == item.sqcand,
+                       TseCandidato.eleicao_id.in_(do_pleito)))
+            if cargo is None:
+                raise _invalido(f"Candidato {item.sqcand} não existe neste pleito.")
+            if cargo != item.cargo_codigo:
+                raise _invalido(
+                    f"Candidato {item.sqcand} não disputa o cargo {item.cargo_codigo}.")
+        elif item.federacao_numero:
+            if db.scalar(select(TseFederacao.id).where(
+                    TseFederacao.numero == item.federacao_numero,
+                    TseFederacao.eleicao_id.in_(do_pleito))) is None:
+                raise _invalido(f"Federação {item.federacao_numero} não existe neste pleito.")
+        elif db.scalar(select(TsePartido.id).where(
+                TsePartido.numero == item.partido_numero,
+                TsePartido.eleicao_id.in_(do_pleito))) is None:
+            raise _invalido(f"Partido {item.partido_numero} não existe neste pleito.")
+
+
 def _aplicar(db: Session, painel: models.ApuracaoPainel, dados: PainelIn) -> None:
     eleicao = _eleicao_do_corpo(db, dados.eleicao_id)
+    if dados.tipo == "DISTRIBUICAO_TERRITORIAL":
+        _validar_acompanhados(db, eleicao, dados)
+    painel.tipo = dados.tipo
     painel.nome, painel.descricao, painel.uf = dados.nome, dados.descricao, dados.uf
     painel.origem, painel.pleito = eleicao.origem, eleicao.pleito
     painel.codigo_eleicao = eleicao.codigo_eleicao

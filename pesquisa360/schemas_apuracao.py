@@ -14,6 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Origem = Literal["OFICIAL", "SIMULADO"]
 TipoItem = Literal["CARGO", "CANDIDATO", "NOMINATA"]
+TipoPainel = Literal["GERAL", "DISTRIBUICAO_TERRITORIAL"]
+# Nominata so existe em cargo proporcional.
+CARGOS_PROPORCIONAIS = ("0006", "0007", "0008")
+# Mesmo teto da consulta de distribuicao (analytics.MAX_ITENS_DISTRIBUICAO).
+MAX_ITENS_DISTRIBUICAO = 20
 
 
 class PainelItemIn(BaseModel):
@@ -53,6 +58,7 @@ class PainelIn(BaseModel):
 
     nome: str = Field(min_length=1, max_length=120)
     descricao: Optional[str] = Field(default=None, max_length=2000)
+    tipo: TipoPainel = "GERAL"
     eleicao_id: int
     uf: str = Field(min_length=2, max_length=2)
     # A ordem dos itens e a ordem da lista.
@@ -71,6 +77,32 @@ class PainelIn(BaseModel):
     def _uf(cls, value: str) -> str:
         return value.lower()
 
+    @model_validator(mode="after")
+    def _distribuicao(self):
+        """Painel de distribuicao: 1+ acompanhados, de um unico cargo, sem repeticao."""
+        if self.tipo != "DISTRIBUICAO_TERRITORIAL":
+            return self
+        if not self.itens:
+            raise ValueError("Adicione ao menos um candidato ou nominata ao painel.")
+        if len(self.itens) > MAX_ITENS_DISTRIBUICAO:
+            raise ValueError(f"No máximo {MAX_ITENS_DISTRIBUICAO} acompanhados por painel.")
+        if len({item.cargo_codigo for item in self.itens}) != 1:
+            raise ValueError("Todos os acompanhados devem ser do mesmo cargo.")
+        vistos = set()
+        for item in self.itens:
+            if item.tipo == "CARGO":
+                raise ValueError("Painel de distribuição aceita apenas candidatos e nominatas.")
+            if item.tipo == "NOMINATA":
+                if item.cargo_codigo not in CARGOS_PROPORCIONAIS:
+                    raise ValueError("Nominata só existe em cargo proporcional.")
+                if not (item.partido_numero or item.federacao_numero):
+                    raise ValueError("Informe o partido ou a federação da nominata.")
+            chave = (item.tipo, item.sqcand, item.partido_numero, item.federacao_numero)
+            if chave in vistos:
+                raise ValueError("O mesmo acompanhado foi incluído mais de uma vez.")
+            vistos.add(chave)
+        return self
+
 
 class PainelItemOut(BaseModel):
     id: int
@@ -87,6 +119,7 @@ class PainelResumo(BaseModel):
     id: int
     nome: str
     descricao: Optional[str] = None
+    tipo: TipoPainel = "GERAL"
     origem: Origem
     pleito: str
     codigo_eleicao: str

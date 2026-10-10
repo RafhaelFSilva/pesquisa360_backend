@@ -439,6 +439,29 @@ CLI manual (fallback)─┴─> advisory lock ──> TseIngestion ──> TSE
   (consulta com polling) → páginas `Apuracao*Page.tsx`; lógica pura em
   `src/lib/apuracao.ts`.
 
+- **Recorte territorial (fase 2).** Município e zona vivem na URL
+  (`?municipio=06050&zona=0002`), lidos por um único hook
+  (`useRecorteTerritorial`) e exibidos por um único componente
+  (`FiltrosTerritoriais`). Central, Majoritário, Proporcional e Meus painéis
+  compartilham esse estado; cada consulta devolve o EA20 oficial da
+  abrangência pedida.
+- **Distribuição territorial (ADR-089).** `TseAnalytics.distribuicao` monta
+  em uma requisição a distribuição de até 20 acompanhados de um cargo:
+  UF → municípios, município → zonas, zona = nível mínimo. O número de
+  consultas SQL não cresce com o número de municípios nem de acompanhados.
+
+- **Seção = Boletim de Urna (fase 3, ADR-090).** `bu_decoder.py` (função pura
+  sobre o `bu.asn1` oficial de 2026) → `bu_store.py` (tabelas `tse_bu_*`,
+  append-only) ← `bu_ingestion.py` (EA18 → BU, um lote por ciclo do worker).
+  `analytics_secao.py` responde o recorte de seção; `bu_reconciliation.py`
+  confere BU × EA20 por zona, sem gravar. EA20 e BU nunca se substituem.
+
+```
+EA16 (seções, carimbo) ──> fila de pendentes ──> EA18 ──> BU (.dat) ──> bu_decoder ──> tse_bu_*
+                                                                              │
+Web ?secao=0069 ──> /apuracao/tse/* ──> analytics_secao ──────────────────────┘   (UF/município/zona: EA20)
+```
+
 ### Apuração TSE — ingestor automático (ADR-087, ADR-088)
 
 ```

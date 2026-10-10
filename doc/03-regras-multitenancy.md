@@ -403,3 +403,10 @@ domínio global `tse_*`, e o dado do TSE continua o mesmo para todas as empresas
 
 Testes: `tests/test_apuracao_api.py` (Empresa A cria, Empresa B não vê; GET,
 PUT e DELETE cruzados → 404) e E2E Web `tests/apuracao.e2e.cdp.mjs`.
+
+Fase 2 (painel `DISTRIBUICAO_TERRITORIAL`): mesma regra. O `tipo` e os
+acompanhados pertencem ao painel da empresa; o recorte Município/Zona é
+parâmetro de visualização e não é gravado. A rota `/distribuicao` lê só
+dados globais do TSE e não recebe nem devolve `company_id`. Testes:
+`tests/test_apuracao_fase2.py` (criação, `company_id` no corpo → 422,
+Empresa B → 404 em leitura, edição e exclusão).

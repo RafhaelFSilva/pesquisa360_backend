@@ -1934,6 +1934,9 @@ ASN.1 BER e só pode ser decodificado com a especificação oficial `bu.asn1`.
 Parser especulativo é proibido. Enquanto a especificação não estiver
 disponível, não existe `tse_resultados_secao`.
 
+Atualização (2026-10-04): a especificação oficial de 2026 foi obtida e a
+camada foi implementada — ver ADR-090.
+
 ## ADR-079 — Histórico append-only
 
 Snapshots, totalizações e resultados nunca sofrem UPDATE. Um EA20 gera nova
@@ -2039,3 +2042,130 @@ cai, o PostgreSQL solta a trava: não há trava órfã nem tabela de controle.
   worker e rodar a CLI.
 - OFICIAL e SIMULADO têm chaves diferentes e podem rodar juntos.
 - Fora do PostgreSQL (SQLite dos testes) a exclusão vale só dentro do processo.
+
+## ADR-089 — Distribuição territorial lê o EA20 de cada parte, em uma requisição
+
+O painel de Distribuição Territorial mostra onde estão os votos de até 20
+candidatos ou nominatas de um cargo. Cada parte (município ou zona) usa a
+totalização oficial mais recente **da própria abrangência**; o total do
+acompanhado usa a do recorte pai.
+
+- Não se soma zona para produzir município nem município para produzir UF.
+  `soma_das_partes` é devolvida ao lado do total oficial e a diferença é
+  mostrada como não reconciliada — as partes podem estar em estágios
+  diferentes de totalização.
+- Uma requisição devolve todas as partes; o número de consultas SQL é
+  constante em relação a municípios e acompanhados.
+- A zona é o nível mínimo. Seção depende do BU (`bu.asn1` oficial) e não é
+  inferida.
+- O recorte Município/Zona é estado de visualização (URL), compartilhado
+  pelas abas; não é gravado no painel.
+- `apuracao_paineis.tipo` (`GERAL` | `DISTRIBUICAO_TERRITORIAL`) distingue
+  os painéis; os itens reutilizam `apuracao_painel_itens`. Migration
+  `bcab956ae48e`, aditiva, com default `GERAL`.
+
+## ADR-090 — BU como fonte oficial do nível Seção
+
+O resultado por seção vem do Boletim de Urna, decodificado com o `bu.asn1`
+oficial de 2026 (`tse-bu-2026-inspecao.md`). Divisão de fontes, sem exceção:
+
+| Nível | Fonte |
+|---|---|
+| UF, Município, Zona | EA20 |
+| Seção | BU |
+
+Um nunca substitui o outro: a soma dos BUs de uma zona não vira o total da
+zona, e o total da zona não é dividido entre seções.
+
+**Modelo: domínio próprio (opção B), e não uma abrangência `SECAO` (opção A).**
+A opção A reaproveitaria `tse_abrangencias` / `tse_totalizacoes`, mas:
+
+- a abrangência é por **eleição**, e um BU cobre o pleito inteiro (duas
+  eleições no mesmo arquivo);
+- a totalização carrega semântica que o BU não tem (IDG, andamento, seções
+  totalizadas) — "1 de 1 seções" seria um dado enganoso;
+- a identidade e a idempotência do BU são o **arquivo** (SHA-256), não o
+  conteúdo material de um JSON;
+- a consulta "totalização corrente" (`max(id)` por abrangência) passaria a
+  varrer milhares de linhas de seção para responder UF, município e zona;
+- o BU traz votável por **número** e pode não ter cadastro; o EA20 exige
+  candidato.
+
+Tabelas (globais, sem `company_id`): `tse_boletins_urna` (uma linha por versão
+de arquivo, append-only), `tse_bu_cargos`, `tse_bu_votos`, `tse_bu_controle`
+(estado por seção principal e ponteiro do BU corrente). Migration
+`d2f4a9c17e36`, aditiva; nenhuma tabela existente é alterada.
+
+Regras:
+
+- **Idempotência** por (seção, SHA-256 do arquivo). Hash do EA18 já baixado não
+  é buscado de novo.
+- **A → B → A não regride**: o ponteiro do corrente só avança para um boletim
+  novo. Custo aceito: se o TSE de fato voltasse a publicar um arquivo
+  anterior, o sistema manteria o mais recente que gravou.
+- **Seção agregada**: o BU identifica só a principal; a relação vem do EA16. O
+  boletim é do grupo (`resultado_agregado`) e os votos não são repartidos nem
+  copiados entre as seções.
+- **Ausência não é zero**: seção sem BU responde sem resultado
+  (`AGUARDANDO_BU`); candidato ausente de um BU ingerido tem zero (dado).
+- **Válidos da seção** = nominais + legenda do boletim. A totalização do TSE
+  trata à parte o voto sub judice e soma aos nulos o voto em votável fora da
+  lista — por isso a conferência é candidato a candidato.
+- **Conferência BU × EA20** é somente leitura: `MATCH`, `PARTIAL`,
+  `DIVERGENT`, `NOT_COMPARABLE`. Nunca corrige valor.
+- **Ingestão** incremental, em lotes, com falha isolada por boletim, no mesmo
+  worker e sob a mesma trava. **Desligada por padrão**
+  (`TSE_INGESTION_BU_ENABLED`), inclusive com a ingestão do EA20 ligada.
+- **Dependência nova**: `asn1tools` (a biblioteca do código de referência do
+  TSE). O schema é compilado uma vez por processo, após conferir o SHA-256.
+- A assinatura digital do BU não é verificada nesta fase; a origem é garantida
+  por HTTPS com host fixo, pelo hash do EA18 e pela conferência com o EA20.
+
+## ADR-091 — Local de votação é derivado do BU corrente e agregado pelo Pesquisa360
+
+O nível Local fica entre Zona e Seção. O vínculo seção → local é o campo
+`identificacaoSecao.local` do Boletim de Urna (código do cadastro da Justiça
+Eleitoral, `NumeroLocal` no ASN.1 oficial). EA16 e EA18 não trazem local.
+
+- **Sem tabela e sem migration.** O local é lido do BU corrente de cada urna
+  (`tse_boletins_urna.local_votacao`). Identidade lógica: origem + pleito + UF
+  + município + zona + código. Um BU novo pode mudar o local sem apagar o
+  anterior. Seção sem BU não tem local.
+- **Agregadas** herdam o local da urna do grupo (relação do EA16); não têm
+  voto próprio e nunca entram duas vezes na soma.
+- **Semântica.** UF, município e zona: resultado oficial do TSE (EA20). Seção:
+  resultado oficial do BU. **Local: agregado pelo Pesquisa360 a partir dos BUs
+  oficiais** (`fonte: BU_AGREGADO_LOCAL`), com cobertura explícita. Nunca é
+  apresentado como EA20, e o total da zona nunca é substituído pela soma dos
+  locais.
+- **Sem nome, endereço ou coordenadas**: a fonte não os tem. A tela mostra
+  "Local 1234". Nenhuma outra base é usada para casar por aproximação.
+- Dados globais, sem `company_id`. Em painéis, o local é recorte de
+  visualização e não é gravado.
+
+## ADR-092 — Nome e endereço do local vêm de fonte oficial complementar, só como metadado
+
+O Boletim de Urna dá o código do local, não o nome. O nome, o endereço e o
+bairro vêm do CSV "Eleitorado por local de votação" do Portal de Dados Abertos
+do TSE, gravados em `tse_locais_votacao` (migration `a7c3e91b5d24`).
+
+- **Papéis.** BU: código do local, votos por seção e agregação por local —
+  inalterados. CSV: somente metadado. Nenhum voto passa pela tabela nova.
+- **Chave oficial, nunca o nome.** A conciliação é por município + zona +
+  código. Não há comparação de nomes, aproximação nem uso de endereço para
+  achar código. Se um local dos BUs ficar sem metadado ou ambíguo, a
+  importação é recusada inteira.
+- **O código do BU é o do local ORIGINAL.** O CSV traz o local "utilizado no
+  pleito" e o "original" (o cadastrado; quando ele está indisponível, o TRE
+  designa um temporário). Só a coluna `NR_LOCAL_VOTACAO_ORIGINAL` concilia
+  com os BUs (376/376 no AP; a coluna do local utilizado, 357/376). Nome e
+  endereço são os do original; o bairro só é aproveitado das seções que
+  votaram no próprio local, porque a coluna de bairro descreve o utilizado.
+  `secoes_realocadas` registra quantas seções votaram em outro endereço.
+- **Versionado por pleito.** Identidade: origem + pleito + UF + município +
+  zona + código. Outra eleição é outro registro; nada é sobrescrito.
+- **Global**, sem `company_id`.
+- **Fallback.** Local sem metadado continua valendo: "Local 2720".
+- **Fonte.** O pedido original era o arquivo do TRE-AP; o site bloqueia acesso
+  automatizado. O conjunto do TSE é a mesma base cadastral da Justiça
+  Eleitoral e foi validado contra os BUs. O importador lê só esse layout.

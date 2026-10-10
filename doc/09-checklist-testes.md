@@ -1049,3 +1049,187 @@ QA manual do worker (banco de QA no head, imagem do backend):
 - [x] pergunta não espontânea não é afetada
 - [x] relatório simples e crosstab: totais preservados
 - [ ] conferir equivalência com o patch local de PROD no preflight
+
+## Apuração TSE — filtros territoriais (Município → Zona)
+
+- [x] sem filtro: contrato e números da UF inalterados
+- [x] município e zona: candidatos, legenda, totais, percentuais e ordem do EA20 do recorte
+- [x] zonas somam o município (nominal, legenda e total da nominata)
+- [x] progresso com numerador e denominador do recorte, inclusive parcial
+- [x] Deputado Federal e Deputado Estadual
+- [x] município inexistente, zona de outro município, município de outra UF → 404
+- [x] `secao` → 422; nenhuma rota devolve outro recorte
+- [x] `/territorio`: municípios com resultado (por nome), zonas do município, seções da zona
+- [x] GET não altera dados do TSE
+- [x] Web: hierarquia, limpeza, chave do recorte, polling e "Atualizar agora"
+- [x] E2E real com a apuração oficial do AP (7 passos)
+- [x] regressão: EA20 antigo servido de novo (A → B → A) não quebra o ciclo nem regride
+- [x] EA18 oficial de 2026 (`f: "O"`, "Recebida"/"Recebido", `imgbu`)
+- [ ] filtro por seção com votos — pendente do BU (`bu.asn1`)
+
+QA manual: aba Proporcional → escolher um município e conferir que o progresso
+passa ao universo municipal; escolher uma zona; alternar Federal/Estadual;
+esperar um ciclo da atualização automática; "Atualizar agora"; "Limpar filtros".
+
+## Apuração TSE — fase 2 (recorte em todas as abas + Distribuição Territorial)
+
+- [x] `/resumo` por UF, município e zona: todos os cargos no mesmo recorte
+- [x] `/cargos/{cargo}` majoritário por município e zona
+- [x] `/candidatos/{sqcand}` com recorte
+- [x] `secao` → 422 em resumo, candidato e distribuição
+- [x] distribuição: UF → municípios, município → zonas, zona = nível mínimo
+- [x] distribuição: `percentual_item` × `percentual_parte`; total oficial × soma das partes
+- [x] distribuição: candidato, partido e federação; nominata = nominais válidos + legenda
+- [x] distribuição: 0, 21 e repetidos → 422; nominata em majoritário → 422; inexistente → 404
+- [x] distribuição: número de consultas não cresce com municípios nem itens
+- [x] painel `DISTRIBUICAO_TERRITORIAL`: validações de criação e edição
+- [x] painel: `company_id` no corpo → 422; outra empresa → 404
+- [x] migration `bcab956ae48e`: do zero, downgrade e upgrade (PostgreSQL descartável)
+- [x] Web: recorte na URL, preservado entre abas; limpar volta à UF
+- [x] Web: uma requisição de distribuição por recorte; polling mantém itens e recorte
+- [x] E2E real com a apuração oficial do AP (9 passos)
+- [ ] QA manual em DEV (roteiro abaixo)
+- [ ] seção com votos — pendente do BU (`bu.asn1`)
+
+QA manual:
+
+- **A — recorte.** Central → Macapá → uma zona: os cinco cartões mudam de
+  denominador. Ir a Majoritário, Proporcional e Meus painéis: o recorte
+  continua. Recarregar a página: continua. "Limpar filtros": volta à UF.
+- **B — distribuição majoritária.** Meus painéis → Novo painel → tipo
+  "Distribuição territorial" → Senador → dois candidatos → salvar. Conferir
+  barras e tabela por município; ordenar; escolher Macapá (zonas); escolher
+  uma zona (aviso do BU, sem tabela).
+- **C — distribuição proporcional.** Novo painel → Deputado Federal → um
+  candidato e uma nominata. Conferir que o total da nominata é o da aba
+  Proporcional no mesmo recorte.
+
+## Apuração TSE — fase 3 (Boletim de Urna e resultado por seção)
+
+Decoder
+- [x] schema oficial de 2026 conferido por SHA-256 e compilado uma única vez
+- [x] BU oficial real (Macapá, zona 0002, seção 0069): identificação, pleito e fase
+- [x] cargo majoritário (Senador: dois votos por eleitor) e proporcional
+- [x] votos de legenda, brancos, nulos, comparecimento e eleitores aptos
+- [x] datas como hora local da urna; metadados da urna; strings com acento
+- [x] BU de urna com seção agregada identifica só a principal
+- [x] truncado, vazio, bytes aleatórios, bytes excedentes, ASN.1 de outra estrutura, tamanho máximo
+- [x] envelope de RDV, envelope cifrado e envelope × boletim divergentes
+
+Persistência e ingestão
+- [x] primeira ingestão; repetição idêntica sem requisição nem duplicação
+- [x] A → B (nova versão), A → B → A (não regride) e A → B → A → B (sem duplicar)
+- [x] unique constraints; histórico preservado; ponteiro do corrente
+- [x] BU de outra seção, origem ou pleito recusado sem gravar
+- [x] falha isolada por boletim; novas tentativas limitadas; recuperação
+- [x] "Recebido" sem totalizar, EA18 404 e EA18 sem arquivo → aguardando; reconsulta após intervalo
+- [x] nome e hash remotos nunca viram caminho; EA18 de outro ambiente é erro
+- [x] lote limita as seções; restante fica para o ciclo seguinte
+- [x] fluxo completo com EA11/EA12/EA14/EA15/EA16/EA20 + EA18 + BU oficiais reais
+
+API por seção
+- [x] resumo, cargo, nominatas, candidato e distribuição com `secao`
+- [x] percentual sobre os válidos do boletim; ranking; legenda oficial
+- [x] seção sem BU → 200 `AGUARDANDO_BU`, sem zero; erro de processamento com status próprio
+- [x] seção inexistente → 404; seção sem zona → 422
+- [x] seção agregada devolve o boletim da principal, sem duplicar
+- [x] distribuição: zona → seções; seção = nível mínimo; consultas não crescem com itens nem seções
+- [x] leitura não grava nada
+
+Conferência BU × EA20
+- [x] 100 + 200 + 300 = 600 → MATCH; urna ausente → PARTIAL; 600 × 601 → DIVERGENT
+- [x] janelas diferentes → PARTIAL; sem EA20 ou sem BU → NOT_COMPARABLE
+- [x] fora da lista de candidatos entra nos nulos; sub judice fica no candidato
+- [x] a conferência não altera nenhum valor
+
+Worker, migration e Web
+- [x] BU desligado por padrão; configuração por ambiente validada
+- [x] ciclo em lotes com contadores no log (sem binário); BU inválido não derruba o ciclo
+- [x] migration `d2f4a9c17e36`: do zero, com dados, downgrade e upgrade; head único
+- [x] Web: hierarquia da seção, URL, mensagens, cartões do boletim, Zona → Seções
+- [x] E2E real com BUs oficiais do AP (10 passos) + E2E das fases anteriores (9 e 7 passos)
+- [x] QA real: 1.914 BUs do AP ingeridos; 67 MATCH, 23 PARTIAL, 0 DIVERGENT
+- [ ] QA manual em DEV (roteiro abaixo)
+- [ ] verificação da assinatura digital do BU
+
+QA manual (AP → MACAPÁ → Zona 0002 → Seção 0069):
+
+1. Central: sem zona, Seção desabilitada; com a zona, habilita e lista as seções.
+2. Selecionar 0069: os cinco cartões passam a "Boletim disponível" e
+   "Comparecimento 133 de 159 eleitores aptos"; breadcrumb com "Seção 0069".
+3. Majoritário → Senador: RAYSSA FURLAN 78, LUCAS BARRETO 69, RANDOLFE 41,
+   ACÁCIO FAVACHO 39 (conferem com o boletim).
+4. Governador: DR. FURLAN 81, CLÉCIO 45. Presidente: FLAVIO BOLSONARO 67, LULA 54.
+5. Proporcional → Deputado Federal: nominais 124, legenda 6, válidos 130.
+   Deputado Estadual: nominais 120, legenda 9.
+6. Recarregar a página, esperar um ciclo da atualização automática e usar
+   "Atualizar agora": a seção continua.
+7. Meus painéis → painel de Distribuição Territorial → Macapá → Zona 0002:
+   "Distribuição por seção", 451 urnas; escolher a seção: nível mínimo.
+8. Seção 0096 (agregada à 0095): "Resultado agregado pelo TSE para as seções
+   0095 e 0096."; os números são os mesmos da 0095.
+9. Seção sem BU (só existe com a ingestão de BU parada em outra UF/zona):
+   "Boletim de Urna ainda não disponível para esta seção." e nenhum zero.
+
+## Apuração TSE — fase 4 (Local de votação)
+
+- [x] código do local vem do BU corrente; agregada herda o local da urna do grupo
+- [x] seção sem BU não ganha local inventado; local sem BU → 404
+- [x] soma por local, ranking e percentual sobre os válidos do local
+- [x] nominata por local com a legenda oficial dos boletins
+- [x] agregadas não duplicam votos
+- [x] local inexistente, de outra zona ou seção fora do local → 404; sem zona → 422
+- [x] distribuição zona → locais e local → seções; múltiplos acompanhados
+- [x] número de consultas não cresce com itens nem locais
+- [x] nova versão de BU muda o local sem sobrescrever a anterior
+- [x] leitura não grava nada; zona sem `nivel` continua abrindo por seção
+- [x] Web: hierarquia, reset em cascata, URL, rótulos e mensagem própria do nível
+- [x] API real do DEV: 376 locais × 5 cargos iguais a uma soma SQL independente
+- [x] API real: 5 locais (4 com agregadas) conferidos candidato a candidato nos 5 cargos
+- [x] E2E real (11 passos) + E2E das fases anteriores (10, 9 e 7 passos)
+- [ ] QA manual em DEV
+
+QA manual (AP → MACAPÁ → Zona 0002 → Local 2313, 8 seções):
+
+1. Local desabilitado sem zona; com a zona, lista 49 locais.
+2. Local 2313 na Central: cinco cartões "Agregado pelo Pesquisa360…", 8/8 BUs.
+3. Majoritário → Senador: RAYSSA FURLAN 600, LUCAS BARRETO 495.
+4. Proporcional: Federal e Estadual, com legenda e total do local.
+5. Trocar para outro local: os votos mudam.
+6. Seção passa a listar só as 8 do local; escolher 0069 mostra o boletim.
+7. Meus painéis → painel de Distribuição → Zona 0002: "Distribuição por local
+   de votação"; escolher o local: 8 linhas e soma igual ao total.
+8. Um local com agregadas (ex.: o da seção 0095): grupo "Seções 0095 + 0096".
+9. Reload, um ciclo de polling, "Atualizar agora" e "Limpar filtros".
+
+## Apuração TSE — fase 5 (nome e endereço dos locais)
+
+- [x] trecho real do CSV oficial: colunas, Latin 1, `;`, chave = local original
+- [x] arquivo que não é a fonte, de outra UF, de outra eleição ou de pleito inexistente → recusado
+- [x] linhas inválidas contadas; mesmo código com dois nomes = ambíguo, não escolhido
+- [x] importação: nome, endereço, bairro; espaços normalizados; `#NULO` → nulo
+- [x] A → A sem alteração; A → B atualiza o mesmo registro
+- [x] metadado por pleito: outra eleição não é sobrescrita
+- [x] código repetido em outra zona ou município é outro local
+- [x] local do BU sem metadado ou ambíguo recusa a importação inteira
+- [x] nome nunca é chave; `local_votacao` só aceita código
+- [x] seções realocadas contadas; bairro do local temporário não é usado
+- [x] importação não toca votos, BU nem EA20
+- [x] API: território enriquecido, fallback "Local 0001", contagens inalteradas, uma consulta por zona
+- [x] tabela global, sem `company_id`
+- [x] migration `a7c3e91b5d24`: upgrade, downgrade e upgrade; head único
+- [x] Web: rótulos, fallback, busca (código, nome, parcial, sem caixa, endereço), URL pelo código
+- [x] DEV: 376/376 locais com nome e endereço; votos do local 2720 idênticos antes × depois
+- [x] E2E real (12 passos)
+- [ ] QA manual em DEV
+
+QA manual (AP → MACAPÁ → Zona 0002):
+
+1. O seletor de Local lista 49 locais com nome.
+2. Buscar "2720": sobra ESCOLA ESTADUAL DR.ALEXANDRE VAZ TAVARES — Local 2720 · 15 seções.
+3. Buscar "vaz tavares" e "feliciano": o mesmo local aparece.
+4. Selecionar: URL com `local_votacao=2720`; caminho "› ESCOLA ESTADUAL DR.ALEXANDRE VAZ TAVARES (2720)".
+5. Senador no local 2720: 7.625 votos nominais em 9 candidatos — iguais aos de antes da fase 5.
+6. Seção lista as 15 do local.
+7. Reload, um ciclo de polling, "Atualizar agora", "Limpar filtros".
+8. Local 2046 (ESCOLA ESTADUAL PROFª BENIGNA MOREIRA DE SOUZA): aviso de 12 seções que votaram em outro endereço.

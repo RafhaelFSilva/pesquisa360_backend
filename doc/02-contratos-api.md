@@ -1548,7 +1548,8 @@ Datas em ISO-8601 UTC (`...Z`).
 |---|---|---|
 | `GET /apuracao/tse/eleicoes` | `origem?` | eleições com resultado: `id, origem, pleito, codigo_eleicao, nome, turno, data_eleicao, ufs[], cargos[{codigo,nome}]` |
 | `GET /apuracao/tse/eleicoes/{eleicao_id}/resumo` | `uf`, `origem?` | `eleicao, origem, uf, cargos[{codigo,nome,vagas,totalizacao}], ultima_atualizacao, totalizacao` |
-| `GET /apuracao/tse/eleicoes/{eleicao_id}/cargos/{cargo_codigo}` | `uf`, `municipio?` (5 dígitos), `zona?` (4 dígitos, exige município), `origem?`, `limite?` | `eleicao, origem, cargo{codigo,nome,vagas}, abrangencia, totalizacao, total_candidatos, candidatos[]` |
+| `GET /apuracao/tse/eleicoes/{eleicao_id}/territorio` | `uf`, `municipio?`, `zona?`, `origem?` | opções do próximo nível: `nivel` (`municipios` \| `zonas` \| `secoes`), `itens[]`, `municipio`, `zona`, `votos_por_secao_disponiveis` |
+| `GET /apuracao/tse/eleicoes/{eleicao_id}/cargos/{cargo_codigo}` | `uf`, `municipio?` (5 dígitos), `zona?` (4 dígitos, exige município), `secao?` (recusada), `origem?`, `limite?` | `eleicao, origem, cargo{codigo,nome,vagas}, abrangencia, totalizacao, total_candidatos, candidatos[]` |
 | `GET /apuracao/tse/eleicoes/{eleicao_id}/cargos/{cargo_codigo}/nominatas` | `uf`, `municipio?`, `zona?`, `origem?` | idem, com `nominatas[]` no lugar de `candidatos[]` |
 | `GET /apuracao/tse/candidatos/{sqcand}` | `eleicao_id`, `origem?` | `eleicao, origem, candidato, abrangencia, consolidado, totalizacao` |
 | `GET /apuracao/tse/candidatos/{sqcand}/territorio` | `eleicao_id`, `group_by` (`municipio` \| `zona`), `municipio?`, `origem?` | `candidato, group_by, total_votos_uf, itens[], reconciliacao, secao_disponivel` |
@@ -1579,6 +1580,181 @@ Objetos:
 - `evolucao.pontos[]`: `timestamp, gerado_em, idg, votos, percentual, andamento,
   secoes_totalizadas, secoes_total, percentual_secoes`.
 
+**Recorte territorial (Município → Zona).** `municipio` e `zona` em `/cargos/{cargo}`
+e `/cargos/{cargo}/nominatas` não filtram linhas: a resposta inteira passa a ser
+o resultado oficial do TSE (EA20) daquela abrangência — candidatos, votos de
+legenda, totais, percentuais, ordem e `totalizacao` (seções do recorte, IDG e
+horário do arquivo do recorte). Sem os parâmetros, a resposta é a da UF, como
+antes. Município fora da UF, zona fora do município ou código inexistente
+respondem **404**; nunca os dados de outro recorte.
+
+**Seção (fase 3).** `secao` (4 dígitos) é aceita em `/resumo`, `/cargos/{cargo}`,
+`/cargos/{cargo}/nominatas`, `/cargos/{cargo}/distribuicao` e
+`/candidatos/{sqcand}`, sempre com `municipio` **e** `zona` (senão **422**
+"Seção exige zona."). A resposta mantém o formato do recorte e acrescenta:
+
+```json
+{
+  "fonte": "BU",
+  "abrangencia": {"tipo": "SECAO", "uf": "ap", "municipio_codigo": "06050", "municipio_nome": "MACAPÁ", "zona": "0002", "secao": "0069"},
+  "secao": {
+    "numero": "0069", "principal": true, "secao_principal": null,
+    "secoes_do_grupo": ["0069"], "resultado_agregado": false,
+    "section_exists": true, "result_available": true, "status": "BU_DISPONIVEL",
+    "bu": {"sha256": "7b88007c…0a35ce", "tipo": "SECAO", "local_votacao": 2313, "comparecimento": 133,
+           "emitido_em_local": "2026-10-04T17:10:35", "recebido_em": "2026-10-04T20:43:34Z",
+           "processado_em": "2026-10-05T02:01:07Z", "versao_votacao": "10.23.0.0 - Praia da Barra do Cahy"}
+  }
+}
+```
+
+- `status`: `BU_DISPONIVEL`, `AGUARDANDO_BU` ou `ERRO_PROCESSAMENTO`.
+- **Seção existente sem BU**: **200** com `result_available: false`,
+  `totalizacao: null`, `cargos`/`candidatos`/`nominatas` vazios e `consolidado:
+  null` — nunca zero voto, nunca os dados da zona. **Seção inexistente** (ou de
+  outra zona): **404**.
+- `totalizacao` no nível seção tem as mesmas chaves do EA20, com o que o BU
+  não possui em `null`: `idg`, `andamento`, `secoes_total`,
+  `secoes_totalizadas`, `percentual_secoes`. `eleitores` = aptos da urna,
+  `abstencoes` = aptos − comparecimento, `votos_validos` = nominais + legenda
+  **do boletim**.
+- `candidatos[]`: só os votáveis do boletim, em ordem de votos; `percentual`
+  sobre os válidos do boletim; `situacao`, `eleito` e `destinacao_voto` são
+  `null` (o BU não os informa). Votável fora da lista de candidatos vem com
+  `sqcand: null`.
+- `nominatas[]`: nominais + **legenda oficial do boletim** por partido.
+- **Seção agregada**: a resposta é a do boletim da principal, com
+  `resultado_agregado: true` e `secoes_do_grupo`. Os votos não são repartidos
+  nem copiados; pedir a agregada ou a principal devolve o mesmo `bu.sha256`.
+- `/candidatos/{sqcand}?…&secao=`: com BU e sem o candidato no boletim,
+  `consolidado.votos` é `0` (dado); sem BU, `consolidado` é `null`.
+
+**`/territorio`.** Sem `municipio`: municípios da UF **com resultado
+ingerido**, por nome — `itens[{codigo, nome}]`. Com `municipio`: suas zonas com
+resultado, em ordem — `itens[{zona}]`. Com `municipio` + `zona`: seções do
+cadastro do TSE (EA16), em ordem — `itens[{secao, zona, principal,
+secao_principal, recebida}]`; `recebida` indica que o TSE já recebeu a urna.
+Cada seção traz `agregadas[]`, `resultado_agregado`, `bu_status` e
+`resultado_disponivel`; a agregada herda a situação do boletim da principal.
+`votos_por_secao_disponiveis` é `true` (o voto de cada seção depende do seu BU).
+
+**Recorte em `/resumo` e `/candidatos/{sqcand}` (fase 2).** `GET
+/apuracao/tse/eleicoes/{id}/resumo` aceita `municipio` e `zona`: todos os
+cargos da eleição passam a vir do EA20 da abrangência pedida, e a resposta
+traz `abrangencia{tipo, uf, municipio_codigo, municipio_nome, zona}`. `GET
+/apuracao/tse/candidatos/{sqcand}` aceita os mesmos parâmetros (votos,
+percentual, posição e progresso do recorte). `secao` → 422 nos dois.
+
+**Distribuição territorial (fase 2).**
+
+`GET /apuracao/tse/eleicoes/{id}/cargos/{cargo}/distribuicao` —
+`INTELIGENCIA_VER`. Parâmetros repetíveis `candidato` (sqcand), `partido`
+(número) e `federacao` (número); opcionais `uf`, `origem`, `municipio`,
+`zona`. De 1 a 20 acompanhados, sem repetição. **Uma requisição** devolve
+todas as partes — o cliente não consulta município a município.
+
+| Recorte pedido | `nivel` | `partes` |
+|---|---|---|
+| UF | `municipios` | municípios da UF com resultado |
+| `municipio` | `zonas` | zonas do município |
+| `municipio` + `zona` | `secoes` | uma parte por **urna** da zona (principal + agregadas) |
+| `municipio` + `zona` + `secao` | `secao` | vazio — nível mínimo; totais do BU |
+
+```json
+{
+  "eleicao": {"id": 5, "...": "..."},
+  "origem": "OFICIAL",
+  "cargo": {"codigo": "0005", "nome": "Senador", "vagas": 2},
+  "abrangencia": {"tipo": "UF", "uf": "ap", "...": "..."},
+  "totalizacao": {"secoes_total": 1914, "secoes_totalizadas": 1771, "...": "..."},
+  "nivel": "municipios",
+  "partes": [{"codigo": "06050", "nome": "MACAPÁ", "municipio_codigo": "06050", "zona": null, "totalizacao": {"...": "..."}}],
+  "itens": [{
+    "tipo": "CANDIDATO", "id": "30002549909", "nome": "RANDOLFE", "numero": "130",
+    "partido": "PT", "federacao": "PT/PC do B/PV",
+    "total_votos": 150649, "percentual": 18.8, "posicao": 3, "soma_das_partes": 150543,
+    "partes": [{"codigo": "06050", "votos": 78655, "percentual_item": 52.21, "percentual_parte": 17.82}]
+  }],
+  "partes_podem_divergir": true,
+  "secao_disponivel": false
+}
+```
+
+Exemplo real (oficial, AP, 04/10/2026). Item de nominata: `tipo` `PARTIDO`
+ou `FEDERACAO`, com `sigla` e `partidos[]`, e `posicao` `null`.
+
+- `total_votos`, `percentual` e `posicao` vêm do EA20 **do recorte**; cada
+  parte vem do EA20 **da própria parte**. `soma_das_partes` é informativa:
+  a API não ajusta um número para fechar com o outro, e as partes podem
+  estar em totalizações diferentes (`partes_podem_divergir`).
+- `percentual_item`: quanto dos votos do acompanhado no recorte veio da
+  parte. `percentual_parte`: participação do acompanhado nos votos válidos
+  da parte. São bases diferentes e não se somam.
+- Nominata (`partido` ou `federacao`): só em cargo proporcional (0006,
+  0007, 0008). Total = nominais válidos dos candidatos + voto de legenda
+  oficial, o mesmo de `/nominatas`. Partido federado resolve para a
+  federação.
+- Nível `secoes` (fase 3): cada parte traz `secao`, `secoes_do_grupo`,
+  `resultado_agregado`, `bu_status` e a `totalizacao` do boletim (`null` sem
+  BU). O `total_votos` do item continua sendo o do **EA20 da zona**;
+  `soma_das_partes` é a soma dos boletins. Parte sem BU tem `votos: null`;
+  com BU e sem o candidato, `0`. `cobertura{partes, com_resultado}` diz quantas
+  urnas a zona tem e quantas já têm boletim. Zona sem seção cadastrada volta
+  ao nível `zona`, com `partes` vazio.
+- `secao_disponivel` é `true`.
+
+**Local de votação (fase 4).** `local_votacao` (4 dígitos, o código oficial do
+BU) é aceito em `/territorio`, `/resumo`, `/cargos/{cargo}`,
+`/cargos/{cargo}/nominatas`, `/cargos/{cargo}/distribuicao` e
+`/candidatos/{sqcand}`, sempre com `municipio` e `zona` (senão **422**). Local
+inexistente na zona, ou `secao` que não pertence ao local: **404**.
+
+- `/territorio` com zona devolve também `locais[]`: `codigo`, `secoes`,
+  `principais`, `agregadas`, `bus`, `vinculo` e `fonte`; `nome`, `endereco`,
+  `bairro`, `latitude` e `longitude` vêm sempre `null` (a fonte não os tem).
+  Cada seção traz `local_votacao`; a agregada herda o local da urna do grupo e
+  a seção sem BU vem com `null`. Com `local_votacao`, `itens[]` são só as
+  seções daquele local.
+- **Metadados do local (fase 5).** Cada item de `locais[]` e o bloco `local`
+  das respostas trazem `nome`, `endereco` e `bairro` oficiais quando
+  importados, além de `rotulo` ("NOME — Local 2720", ou "Local 2720" sem
+  metadado — nunca vazio), `quantidade_secoes`, `secoes_realocadas` (seções
+  do local que votaram em outro endereço neste pleito) e `metadados{fonte,
+  gerada_em}` (`null` sem metadado). `codigo` continua presente e continua
+  sendo o único valor aceito em `local_votacao`: nome não é filtro (422).
+  Na distribuição por local, `partes[].nome` é o nome oficial (ou "Local
+  2720") e o código segue em `partes[].codigo`.
+- Resumo, cargo e nominatas no local: `fonte: "BU_AGREGADO_LOCAL"`,
+  `abrangencia.tipo: "LOCAL_VOTACAO"`, bloco `local` e
+  `cobertura{partes, com_resultado, percentual, completa}`. A `totalizacao` é a
+  soma dos BUs correntes das urnas do local, com `bus` e sem `idg`, andamento
+  ou contagem de seções. Percentual sobre os válidos do local. Com `secao`
+  junto, a resposta é a da seção (`fonte: "BU"`).
+- Distribuição: `nivel=locais_votacao` na zona devolve uma parte por local
+  (`nome: "Local 1234"`, `local`, `cobertura`, `fonte`); o `total_votos` segue
+  sendo o do EA20 da zona. Com `local_votacao`, as partes são as urnas do local
+  e o total é a soma dos seus BUs. Sem `nivel`, a zona continua abrindo por
+  seção (compatibilidade); o Web pede `locais_votacao` por padrão.
+
+**Conferência BU × EA20 (fase 3).** `GET
+/apuracao/tse/eleicoes/{id}/cargos/{cargo}/conferencia-bu?uf=&municipio=&zona=`
+— `INTELIGENCIA_VER`; sem `zona`, uma linha por zona do município. Somente
+leitura (`somente_leitura: true`): nenhum valor é corrigido.
+
+| `status` | Significado |
+|---|---|
+| `MATCH` | zona 100% no EA20, BU de todas as urnas e todos os valores iguais |
+| `DIVERGENT` | mesma cobertura e algum valor diferente (`campos[]`, `divergencias[]`) |
+| `PARTIAL` | cobertura diferente: `BU_FALTANDO` ou `JANELAS_DIFERENTES` — não é erro |
+| `NOT_COMPARABLE` | `SEM_EA20_DA_ZONA` ou `SEM_BU` |
+
+`campos[]`: `comparecimento`, `votos_brancos`, `votos_nulos` (com `bu_nulos` e
+`bu_fora_da_lista`), `votos_legenda` e `votos_dos_candidatos`.
+`divergencias[]` lista candidato ou legenda com `ea20` e `bu`.
+- 422: nenhum acompanhado, mais de 20, repetido, nominata em cargo
+  majoritário, `zona` sem `municipio`, `secao`. 404: eleição, cargo,
+  abrangência, candidato ou agremiação inexistente.
+
 Erros: 401 sem token; 403 sem `INTELIGENCIA_VER`; 404 eleição, cargo,
 abrangência ou candidato inexistente na base (ou `origem` divergente); 422
 parâmetro inválido (`zona` sem `municipio`, `group_by` desconhecido, formato).
@@ -1595,6 +1771,13 @@ parâmetro inválido (`zona` sem `municipio`, `group_by` desconhecido, formato).
 | `GET /apuracao/paineis/{painel_id}` | `INTELIGENCIA_VER` | |
 | `PUT /apuracao/paineis/{painel_id}` | `RELATORIO_CONFIGURAR` | substitui o painel e seus itens |
 | `DELETE /apuracao/paineis/{painel_id}` | `RELATORIO_CONFIGURAR` | 204; exclusão física |
+
+**Tipo de painel (fase 2).** `tipo`: `GERAL` (padrão; cartões independentes)
+ou `DISTRIBUICAO_TERRITORIAL`. Neste último: de 1 a 20 itens, todos do mesmo
+`cargo_codigo`, só `CANDIDATO` e `NOMINATA` (nominata apenas em cargo
+proporcional e com partido ou federação), sem repetição; candidato e
+agremiação precisam existir no pleito e no cargo. Violação → 422. O recorte
+territorial **não** é gravado no painel: é parâmetro de visualização.
 
 Corpo de `POST`/`PUT`:
 

@@ -708,3 +708,137 @@ cargos de eleições diferentes do mesmo pleito (ex.: Presidente e Governador).
 `tests/apuracao.test.mjs` (lógica pura) e `tests/apuracaoPage.test.mjs`
 (verificação estática de service, rotas, polling, selo e estados) rodam em
 `npm test`. `tests/apuracao.e2e.cdp.mjs` é o E2E real, opt-in.
+
+### Filtros territoriais na aba Proporcional (2026-10-04)
+
+Barra `Município | Zona | Seção | Limpar filtros`, entre os botões de cargo e
+os cartões (`src/components/apuracao/FiltrosTerritoriais.tsx`).
+
+- **Município e Zona recortam a apuração inteira.** O filtro vai para o
+  Backend (`getSlates(..., filtroParaApi(uf, filtros))`), que devolve o
+  resultado oficial daquela abrangência: partidos e federações, nominata,
+  legenda, totais, percentuais, ordem e o progresso de seções do recorte
+  (ex.: "309 de 451 seções" na zona, não o denominador estadual). Nada é
+  filtrado no navegador.
+- **Opções por nível**, vindas de `getTerritoryOptions`: municípios da UF,
+  zonas do município, seções da zona. Zona fica desabilitada sem município.
+- **Seção fica desabilitada.** A tela mostra quantas seções com urna a zona tem
+  e quantas o TSE já recebeu, e o aviso "Votos por seção ainda não
+  disponíveis". Não há dado simulado.
+- **Hierarquia** (`src/lib/apuracao.ts`): trocar de município limpa a zona;
+  trocar origem, pleito ou UF invalida o recorte; trocar Federal ↔ Estadual o
+  mantém; "Limpar filtros" volta à UF preservando origem, UF e cargo.
+- **Polling e "Atualizar agora".** O recorte faz parte da chave da consulta
+  (`chaveFiltros`): a mesma consulta serve a carga, o polling e a atualização
+  manual, sempre com os filtros atuais. Há um único intervalo por consulta e a
+  resposta de um recorte anterior é descartada.
+- **Recorte** exibido abaixo dos filtros: `AP › MACAPÁ › Zona 0002`.
+
+Testes: `tests/apuracao.test.mjs` e `tests/apuracaoPage.test.mjs`; E2E real
+opt-in `tests/apuracaoTerritorio.e2e.cdp.mjs`.
+
+### Fase 2 — recorte compartilhado e Distribuição Territorial (2026-10-04)
+
+- **Um filtro, quatro abas.** `FiltrosTerritoriais` e o hook
+  `useRecorteTerritorial` (`src/hooks/useApuracao.ts`) são os únicos donos
+  do recorte. O estado vive na URL (`?municipio=06050&zona=0002`); as abas
+  de `ApuracaoLayout` e os links de painel carregam a query, então o
+  recorte sobrevive à navegação e ao recarregamento. Trocar origem, pleito
+  ou UF apaga `municipio` e `zona`.
+- **Central**: `getSummary(eleicaoId, filtro)` — os cinco cargos saem do
+  mesmo recorte. Eleição sem resultado naquela abrangência (404) não
+  derruba as demais.
+- **Majoritário**: Presidente, Governador e Senador com o recorte.
+- **Meus painéis**: o recorte é de visualização — nenhuma tela faz `PUT`
+  ao filtrar. Painel `GERAL` aplica o recorte a cada item.
+- **Painel de Distribuição Territorial**
+  (`DistribuicaoTerritorialView.tsx`): **uma** chamada a `getDistribution`
+  por recorte, com todos os acompanhados. Mostra resumo no recorte, barras
+  por parte (até 4 séries visíveis), tabela ordenável (votos, percentual,
+  nome) com as duas bases de percentual e tabela de comparação. No nível
+  zona, só o resumo e o aviso do BU.
+- **Formulário** (`ConfiguracaoDistribuicao.tsx`): tipo de painel, cargo e
+  busca por nome ou número; o que já foi adicionado não volta a ser
+  sugerido; campo de nominata só em cargo proporcional; limite de 20.
+- O Web não soma partes para produzir total: exibe `total_votos` oficial e,
+  quando difere, `soma_das_partes` como "não reconciliada".
+
+Testes: `tests/apuracao.test.mjs`, `tests/apuracaoPage.test.mjs`; E2E real
+opt-in `tests/apuracaoFase2.e2e.cdp.mjs` (9 passos).
+
+### Fase 3 — Seção habilitada e resultado do Boletim de Urna (2026-10-04)
+
+- **Seletor de Seção** (`FiltrosTerritoriais.tsx`, o mesmo de todas as telas):
+  desabilitado sem município e sem zona; habilita com a zona quando há seções
+  cadastradas. Lista todas as seções da zona em uma consulta, com a situação
+  de cada uma: `0069`, `0071 — aguardando BU`, `0096 — agregada à 0095`,
+  `0095 — com 0096`. É um `<select>` nativo: aceita busca por digitação mesmo
+  com centenas de opções.
+- **Recorte na URL**: `?municipio=06050&zona=0002&secao=0069`. Trocar de zona
+  limpa a seção; trocar de município limpa zona e seção; trocar origem, pleito
+  ou UF limpa tudo. Polling, "Atualizar agora" e reload preservam a seção.
+- **Mensagens dinâmicas** (substituem "Votos por seção ainda não
+  disponíveis"): "Resultado oficial da seção — Boletim de Urna TSE.",
+  "Boletim de Urna ainda não disponível para esta seção.", "Erro de
+  processamento do Boletim de Urna desta seção." e "Resultado agregado pelo
+  TSE para as seções X e Y.". Breadcrumb: `AP › MACAPÁ › Zona 0002 › Seção 0069`.
+- **Cartões** (`ProgressoTotalizacao` com `secao`): no recorte de seção o
+  cartão mostra "Boletim disponível" e "Comparecimento N de M eleitores aptos".
+  Não há "1 de 1 seções" nem barra de progresso. Sem boletim, o cartão diz
+  "Aguardando BU" e a lista de candidatos não é desenhada — nunca zero.
+- **Central, Majoritário, Proporcional e painel Geral** repassam `secao` ao
+  cartão; a Proporcional usa a legenda oficial do boletim.
+- **Distribuição Territorial**: a zona abre por seção (uma linha por urna, com
+  "Seções 0095 + 0096" para o grupo agregado e "Aguardando BU" para urna sem
+  boletim); o total do recorte segue sendo o da zona e os boletins aparecem
+  como "Boletins carregados somam…". Escolher a seção leva ao nível mínimo. A
+  mesma requisição única serve todos os níveis.
+- O Web não soma boletins e não faz requisição por seção.
+
+Testes: `tests/apuracao.test.mjs`, `tests/apuracaoPage.test.mjs`; E2E real
+opt-in `tests/apuracaoSecao.e2e.cdp.mjs` (10 passos).
+
+### Fase 4 — Local de votação (2026-10-06)
+
+- **Filtro** `Município | Zona | Local de votação | Seção`, no mesmo componente
+  de todas as telas. Local fica desabilitado sem zona; as opções vêm da mesma
+  consulta que já trazia as seções da zona. Rótulo: `Local 2313 · 8 seções` —
+  o código oficial, porque a fonte não tem nome nem endereço.
+- **Reset em cascata**: município limpa zona, local e seção; zona limpa local e
+  seção; local limpa seção; origem, pleito ou UF limpam tudo.
+- **URL**: `?municipio=06050&zona=0002&local_votacao=2313&secao=0069`
+  (e `nivel=secoes` para a visão direta por seção). Abas, polling, "Atualizar
+  agora" e reload preservam.
+- **Cartões**: no recorte de local o cartão diz "Agregado pelo Pesquisa360 a
+  partir dos Boletins de Urna oficiais." e "Local 2313 · 8 seções · 8/8 BUs.";
+  não mostra progresso de seções nem "Totalização TSE".
+- **Distribuição Territorial**: a zona abre por local (botões "Por local" e
+  "Direto por seção"); o local abre por seção, uma linha por urna, com o grupo
+  agregado identificado ("Seções 0095 + 0096"). Uma requisição por recorte.
+- Em Meus painéis o local é só recorte de visualização.
+
+Testes: `tests/apuracaoLocal.test.mjs`; E2E real opt-in
+`tests/apuracaoLocal.e2e.cdp.mjs` (11 passos).
+
+### Fase 5 — nome oficial e busca do local (2026-10-06)
+
+- **Controle pesquisável**: acima do seletor de Local há um campo de busca
+  ("Buscar por nome, código ou endereço"). A busca estreita as opções do
+  seletor e é feita no Web, sobre os locais que a consulta da zona já trouxe —
+  nenhuma requisição por tecla. Sem acento, sem caixa e por palavras ("escola
+  estadual", "av fab", "2720"). A busca é limpa ao trocar município ou zona.
+- **Rótulos** (`src/lib/apuracao.ts`): opção `ESCOLA X — Local 2720 · 15
+  seções`; caminho do recorte `AP › MACAPÁ › Zona 0002 › ESCOLA X (2720)`;
+  sem metadado, `Local 2720`. O endereço completo vai no tooltip e numa linha
+  "Endereço: …" abaixo do recorte; quando há seções realocadas, a linha avisa.
+- **A URL e a API continuam usando o código** (`local_votacao=2720`); o nome
+  nunca vai para a query string.
+- **Cartões** (Central, Majoritário, Proporcional, painéis): nome do local,
+  `Local 2720 · Zona 0002 · 15 seções · 15/15 BUs.`, endereço e a frase
+  "Agregado pelo Pesquisa360 a partir dos Boletins de Urna oficiais.".
+- **Distribuição por local**: colunas Local de votação | Código | Seções |
+  Votos | % da distribuição | % no local; endereço na linha secundária; busca
+  por nome ou código; ordenação por votos, percentual, nome ou código.
+
+Testes: `tests/apuracaoLocal.test.mjs`; E2E real
+`tests/apuracaoLocal.e2e.cdp.mjs` (12 passos).

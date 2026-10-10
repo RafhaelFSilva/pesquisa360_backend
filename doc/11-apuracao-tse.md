@@ -99,8 +99,11 @@ arquivo é `<diretório do aux>/<hash>/<nome>`.
 - Contrato com arquivos: comprovado apenas no pleito **452 (2024)**.
 - Simulado 2026: responde 200 com `hashes: [{"arq": []}]` — seção
   "Totalizada" sem arquivo publicado. O parser tolera hash ausente.
-- Oficial 2026: 404 antes da totalização. **PENDENTE** confirmar o contrato
-  com arquivos reais de 2026.
+- Oficial 2026, durante a apuração (04/10/2026): 200, com `f: "O"` (maiúscula),
+  seção `"Recebida"`, hash `"Recebido"` e os arquivos `bu`, `rdv`, `log`,
+  `vota` e `imgbu`. "Recebido" ainda não é "Totalizado": os metadados são
+  registrados, mas nenhum BU é tratado como corrente. Não foi observado ainda
+  um EA18 oficial de 2026 já "Totalizado".
 
 A ingestão grava o snapshot do EA18 e os metadados dos arquivos em
 `tse_arquivos_secao`; não baixa os arquivos.
@@ -126,15 +129,14 @@ não traz `dvt`, `esae` nem `mnae`; o simulado totalizado traz os três. Com a
 apuração oficial em andamento (04/10/2026), o oficial passou a trazer `dvt`,
 mas não `esae` nem `mnae`. O parser aceita todas as variações.
 
-## 10. BU — boletim de urna (PENDENTE)
+## 10. BU — boletim de urna (IMPLEMENTADO na fase 3)
 
-Formato comprovado: binário **ASN.1 BER** (não JSON). A decodificação exige a
-especificação oficial `bu.asn1` do TSE (ZIP "Formato dos arquivos de BU, RDV e
-assinatura digital"), que não foi obtida — a página do TSE bloqueia clientes
-automatizados. `bu.py` apenas identifica o formato; a função de decodificação
-com a especificação existe, mas **nunca foi executada**. Não há parser
-próprio, não há `tse_resultados_secao` e nenhum voto por seção é gravado.
-A confirmar com a especificação: se o BU identifica o candidato por número.
+Formato: binário **ASN.1 BER**. A especificação oficial de 2026 (`bu.asn1`, do
+ZIP "Formato dos arquivos de BU, RDV e assinatura digital") foi obtida e está
+registrada em `tse-bu-2026-inspecao.md`; o decoder, a persistência e as
+leituras por seção estão descritos no §29. O BU identifica o candidato pelo
+**número**. `bu.py` (identificação de formato da POC) permanece só como
+utilitário; o decoder é `bu_decoder.py`.
 
 ## 11. Modelo de dados
 
@@ -183,6 +185,12 @@ material** muda (hash de andamento, seções, totais e votos por
 candidato/partido — sem IDG nem data de geração). Arquivo regerado pelo TSE
 sem mudança material gera snapshot novo, mas não totalização nova. Nenhuma
 totalização ou resultado é atualizado depois de gravado.
+
+**Arquivo antigo servido de novo (A → B → A).** O TSE pode devolver uma versão
+anterior de um EA20 (CDN). Essa versão já tem snapshot e totalização: nada é
+criado e a totalização corrente continua sendo a mais recente gravada. Antes
+desta correção o caso violava `uq_tse_totalizacoes_snapshot` e derrubava o
+ciclo (observado no worker em QA, com rollback e recuperação no ciclo seguinte).
 
 Comprovado em teste automatizado com dois estados (1.500 → 3.115 votos). **Não
 foi comprovado contra o TSE**: o simulado é estático e a apuração oficial
@@ -519,3 +527,260 @@ texto → `NS/SR`) foi reimplementada no repositório com teste. O preflight dev
 comparar com o patch local de PROD antes do pull; se forem equivalentes, o
 arquivo local pode ser descartado em favor do versionado. O `AGENTS.md`
 alterado em PROD é instrução operacional local e fica fora do Git.
+
+## 27. Recorte territorial da apuração (Município → Zona)
+
+IMPLEMENTADO. O recorte por município e zona usa o **EA20 oficial da própria
+abrangência** — não há soma própria nem filtro de linhas. Por isso o progresso,
+o IDG e o horário exibidos são os do arquivo do recorte. Descoberta das opções:
+`GET /apuracao/tse/eleicoes/{id}/territorio` (municípios e zonas com resultado
+em `tse_abrangencias`; seções em `tse_secoes`). Nenhuma migration.
+
+Seção: PENDENTE. O TSE não publica EA20 por seção; votos por seção exigem o
+BU. A API recusa `secao` com 422 e a tela mostra o seletor desabilitado.
+
+Exemplo real (oficial, 04/10/2026, 19:36, Deputado Federal): UF AP com 1.914
+seções; Macapá com 1.027; zona 0002 de Macapá com 309 de 451 seções (68,51%).
+
+## 28. Fase 2 — recorte em todas as abas e Distribuição Territorial
+
+IMPLEMENTADO em 2026-10-04; validado em QA; **não commitado**.
+
+**O que cada arquivo do TSE permite.**
+
+| Arquivo | Alcance | Uso |
+|---|---|---|
+| EA20 | UF → Município → Zona | resultado oficial: candidatos, legenda, totais, progresso |
+| EA16 / EA18 | conhecem a **seção** | cadastro, situação da urna, hashes do BU — **sem votos** |
+| BU | seção | votos por seção; exige `bu.asn1` oficial — PENDENTE |
+
+Logo: todo recorte até a zona é oficial e direto; abaixo da zona não há
+voto no banco, e nenhuma tela ou rota o inventa.
+
+**Recorte.** `/resumo` e `/candidatos/{sqcand}` passaram a aceitar
+`municipio` e `zona` (seção 27 já cobria `/cargos` e `/nominatas`). No Web o
+recorte vive na URL e é compartilhado por Central, Majoritário, Proporcional
+e Meus painéis.
+
+**Distribuição.** `GET .../cargos/{cargo}/distribuicao` (contrato em
+`02-contratos-api.md`; decisão em ADR-089). Painel de tenant com
+`tipo = DISTRIBUICAO_TERRITORIAL`; migration `bcab956ae48e`.
+
+**Leitura dos números.** O total do acompanhado e a soma das partes vêm de
+arquivos diferentes e podem diferir durante a apuração. Exemplo real
+(oficial, 04/10/2026, 20:25, Senador, UF AP, 1.768 de 1.914 seções):
+RANDOLFE com 150.342 votos na UF e 150.072 na soma dos 16 municípios —
+diferença de 270, exibida como não reconciliada.
+
+**Desempenho medido** (API local, PostgreSQL de QA, dados oficiais do AP,
+15 chamadas por caso): distribuição na UF com 2 acompanhados, mediana
+83 ms (p95 97 ms, 12 KB); com 9 candidatos, 89 ms; 12 nominatas, 92 ms
+(26 KB); município → zonas, 68 ms; zona, 60 ms; `/resumo`, 42–72 ms. Os cargos também podem
+estar em janelas diferentes no mesmo recorte (zona 0002 de Macapá: 417 de
+451 seções para quatro cargos e 410 para Deputado Estadual, no mesmo
+instante).
+
+**Banco.** `bcab956ae48e` foi aplicada apenas no PostgreSQL descartável
+(`p360_tse_qa`). DEV antigo e PROD não foram tocados.
+
+## 29. Fase 3 — Boletim de Urna e resultado por seção
+
+IMPLEMENTADO em 2026-10-04; validado em QA; **não commitado, não deployado**.
+Decisão: ADR-090. Inspeção da especificação: `tse-bu-2026-inspecao.md`.
+
+**Fontes.** EA20 = UF, município e zona. BU = seção. Nunca um pelo outro.
+
+**Módulos** (`pesquisa360/services/tse/`):
+
+| Módulo | Papel |
+|---|---|
+| `asn1/bu-2026.asn1` | schema oficial, conferido por SHA-256 |
+| `bu_decoder.py` | `decode_bu(bytes) -> DecodedBU`; sem banco, sem HTTP |
+| `bu_store.py` | gravação idempotente, estado por seção, religação de votos ao cadastro |
+| `bu_ingestion.py` | lote incremental EA18 → BU → decoder → banco |
+| `bu_reconciliation.py` | conferência BU × EA20 por zona (leitura) |
+| `analytics_secao.py` | resumo, cargo, nominatas, candidato e distribuição por seção |
+
+**Fila.** Entram as seções principais com arquivo de urna no EA16
+(`auxiliar_em`) cujo carimbo ainda não foi verificado. Cada seção é uma
+transação. Volta à fila quando o EA16 muda; a que aguarda BU é reconsultada a
+cada 10 minutos; a que deu erro tem até 3 tentativas por carimbo.
+
+| Situação no EA18 | Resultado |
+|---|---|
+| hash "Totalizado" novo | baixa, decodifica, grava, vira o corrente |
+| hash já baixado | nada é baixado (`bu_already_known`) |
+| hash "Recebido", sem arquivo ou EA18 404 | `AGUARDANDO` |
+| BU inválido, de outra seção/pleito/origem, falha de rede | `ERRO` (lote segue) |
+
+**Habilitação** (desligado por padrão):
+
+```
+TSE_INGESTION_BU_ENABLED=true
+TSE_INGESTION_BU_BATCH_SIZE=50        # seções por UF a cada ciclo (1 a 500)
+TSE_INGESTION_BU_MUNICIPIOS=todos     # ou códigos TSE
+TSE_INGESTION_BU_ARCHIVE_DIR=         # opcional: guarda o arquivo original (nome = SHA-256)
+```
+
+Carga: até 2 requisições por seção (EA18 + BU), dentro do teto de
+`TSE_REQUESTS_PER_SECOND`. No QA, com 120 seções por ciclo e 2 req/s, um ciclo
+leva ~2 min; as 1.914 urnas do AP entraram em ~35 min. Depois disso o ciclo
+volta ao normal: nenhuma requisição de BU enquanto o EA16 não mudar.
+
+**Log do ciclo** (`tse_ingest_cycle`, campo `bu`): `bu_discovered`,
+`bu_downloaded`, `bu_already_known`, `bu_decoded`, `bu_persisted`,
+`bu_failed`, `bu_pending`, `restantes`, `bu_reconciled_match`,
+`bu_reconciled_partial`, `bu_reconciled_divergent`. Cada falha gera um
+`bu_failed` com a seção e o motivo. O binário nunca é logado.
+
+**Fallback manual** (mesma trava do worker; com ele ativo, sai com código 3):
+
+```
+python scripts/tse_apuracao.py bu --uf ap --pleito 3220 --lote 200 [--municipios 06050]
+```
+
+**Resultado no AP (oficial, 04/10/2026).** 1.914 de 1.914 urnas, 0 erros,
+250.034 linhas de voto, 38 MB. Conferência nas 18 zonas e 5 cargos: 67 MATCH,
+23 PARTIAL (EA20 da zona ainda abaixo de 100%), 0 DIVERGENT.
+
+**Desempenho medido** (API local, PostgreSQL de QA, 15 chamadas por caso):
+
+| Caso | Mediana | p95 | Resposta |
+|---|---|---|---|
+| Distribuição zona → 451 seções, 1 candidato | 163 ms | 227 ms | 310 KB |
+| idem, 5 candidatos | 199 ms | 303 ms | 442 KB |
+| idem, 10 candidatos | 265 ms | 352 ms | 609 KB |
+| idem, 1 nominata | 178 ms | 220 ms | 309 KB |
+| idem, 1 candidato + 1 nominata | 196 ms | 222 ms | 343 KB |
+| idem, 10 candidatos + 10 nominatas | 451 ms | 596 ms | 944 KB |
+| Opções: 456 seções da zona com situação do BU | 62 ms | 64 ms | 83 KB |
+| Resumo, cargo e nominatas de uma seção | 43–51 ms | até 62 ms | 3–25 KB |
+| Conferência BU × EA20 de uma zona (451 BUs) | 73 ms | 85 ms | 1 KB |
+
+Nenhum índice além dos criados pela migration: o `EXPLAIN ANALYZE` da
+consulta de votos por seção usa `uq_tse_bu_cargos` e `uq_tse_bu_votos` e
+executa em ~5 ms.
+
+**Limitações.** Assinatura digital do BU não verificada. BU de Sistema de
+Apuração e consulta popular não têm tratamento próprio. A tela do candidato
+ainda não tem aba de seções.
+
+## 30. Fase 4 — Local de votação
+
+IMPLEMENTADO em 2026-10-06; validado no DEV; **não commitado, não deployado**.
+Decisão: ADR-091. Sem migration.
+
+**Hierarquia.** UF → Município → Zona → Local → Seção.
+
+| Nível | Fonte | Como é apresentado |
+|---|---|---|
+| UF, Município, Zona | EA20 | Resultado oficial TSE |
+| Local | soma dos BUs correntes das urnas do local | Agregado pelo Pesquisa360 a partir dos BUs oficiais |
+| Seção | BU | Resultado oficial da seção |
+
+**Módulo.** `analytics_local.py`: opções (`locais_das_secoes`), resumo, cargo,
+nominatas e distribuição por local. As consultas agregam no SQL sobre as
+urnas independentes (seções principais com BU corrente); não há consulta por
+seção, por candidato nem por local.
+
+**Cobertura no AP (oficial).** 376 locais; 1.914 seções principais e 57
+agregadas vinculadas; nenhuma seção sem local; 40 locais com agregadas.
+
+**Conferência.** Para os 376 locais e os 5 cargos (1.880 comparações), o total
+da API é igual a uma soma SQL independente dos BUs. Em 5 locais (4 com
+agregadas), os 5 cargos fecham candidato a candidato com a soma das seções, e
+a soma dos 49 locais da zona 0002 de Macapá é igual ao EA20 da zona.
+
+**Desempenho medido** (API do DEV, 15 chamadas por caso):
+
+| Caso | Mediana | p95 | Resposta |
+|---|---|---|---|
+| Zona → 49 locais, 1 candidato | 105 ms | 118 ms | 46 KB |
+| idem, 5 candidatos | 131 ms | 295 ms | 61 KB |
+| idem, 10 candidatos | 148 ms | 314 ms | 80 KB |
+| idem, candidato + nominata | 130 ms | 145 ms | 50 KB |
+| Local → seções, 2 itens | 129 ms | 308 ms | 8 KB |
+| Resumo, cargo e nominatas de um local | 36–60 ms | até 82 ms | 3–25 KB |
+
+Sem índice novo e sem cache.
+
+**Limitações.** Nome, endereço e coordenadas do local dependem de fonte
+complementar futura. A tela do candidato não tem recorte por local.
+
+## 31. Fase 5 — nome e endereço dos locais de votação
+
+IMPLEMENTADO em 2026-10-06; validado no DEV; **não commitado, não deployado**.
+Decisão: ADR-092.
+
+**Fonte.**
+
+| Item | Valor |
+|---|---|
+| Conjunto | "Eleitorado por local de votação – 2026", Portal de Dados Abertos do TSE |
+| URL | `https://cdn.tse.jus.br/estatistica/sead/odsele/eleitorado_locais_votacao/eleitorado_local_votacao_2026.zip` |
+| ZIP | 88.211.881 bytes; `Last-Modified` 05/10/2026 09:33 GMT; SHA-256 `36f8d87f62b41fee5a1cea4dae6e8dcdb3187d48650ae4cacae727fae30875d3` |
+| Arquivo usado | `eleitorado_local_votacao_2026_AP.csv`, 822.384 bytes, SHA-256 `da5007393dd72a402a362c9b509dee8eb3fe46e0efd92102a33f251f94f36587` |
+| Gerado em | 05/10/2026 06:29:34 (colunas `DT_GERACAO`/`HH_GERACAO`) |
+| Formato | Latin 1, sem BOM; campos entre aspas, separados por `;`; 41 colunas; 1.971 linhas |
+| Granularidade | uma linha por **seção** (1.914 principais + 57 agregadas) |
+| Cópia | `docs/tse2026/eleitorado_local_votacao_2026_AP.csv` e o leia-me oficial |
+
+O arquivo do TRE-AP (`tre-ap.jus.br/servicos-eleitorais/zonas-eleitorais/locais-de-votacao`)
+não pôde ser baixado: o site responde 403 a clientes automatizados.
+
+**Colunas usadas.**
+
+| Coluna | Exemplo | Semântica | Uso |
+|---|---|---|---|
+| `SG_UF`, `CD_MUNICIPIO`, `NR_ZONA` | `AP`, `06050`, `2` | território | chave |
+| `NR_SECAO` | `69` | seção | contagem |
+| `NR_LOCAL_VOTACAO_ORIGINAL` | `2720` | código do local cadastrado | **chave** (= código do BU) |
+| `NM_LOCAL_VOTACAO_ORIGINAL` | `ESCOLA ESTADUAL DR.ALEXANDRE VAZ TAVARES` | nome do local cadastrado | `nome` |
+| `DS_ENDERECO_LOCVT_ORIGINAL` | `AV FELICIANO COELHO SN` | endereço do local cadastrado | `endereco` |
+| `NR_LOCAL_VOTACAO` | `1791` | local utilizado no pleito | detectar seção realocada |
+| `NM_BAIRRO` | `TREM` | bairro do local utilizado | `bairro`, só das seções não realocadas |
+| `DT_ELEICAO`, `NR_TURNO` | `04/10/2026`, `1` | eleição | conferir com o pleito |
+| `DT_GERACAO`, `HH_GERACAO` | `05/10/2026`, `06:29:34` | extração | `fonte_gerada_em` |
+
+Existem e não são usadas: CEP, telefone, latitude/longitude (do local
+utilizado), tipo e situação do local, eleitorado por seção.
+
+**Achados da inspeção (AP).** Códigos de 4 dígitos, sem zero à esquerda. O
+mesmo código aparece em vários municípios e zonas (63 códigos; o 1074, em 13)
+— por isso a chave inclui município e zona. Nenhum nome repetido entre
+locais; 2 endereços repetidos. 142 seções (de 24 locais) votaram em local
+diferente do cadastrado.
+
+**Conciliação BU × CSV.**
+
+| Coluna de código | MATCH | BU_ONLY | CSV_ONLY | AMBIGUOUS | Seções no mesmo local |
+|---|---|---|---|---|---|
+| `NR_LOCAL_VOTACAO` (utilizado) | 357 | 19 | 21 | 0 | 1.772 de 1.914 |
+| `NR_LOCAL_VOTACAO_ORIGINAL` | **376** | **0** | 8 | **0** | **1.914 de 1.914** |
+
+Os 8 locais só do CSV são cadastros de seções **agregadas** cuja urna fica em
+outro local (o da principal): não têm BU próprio, então não existem como
+local nos boletins.
+
+**Importação.**
+
+```
+python scripts/tse_locais.py conciliar --arquivo docs/tse2026/eleitorado_local_votacao_2026_AP.csv --uf ap --pleito 3220
+python scripts/tse_locais.py importar  --arquivo ... --uf ap --pleito 3220 --fonte-url <url> [--dry-run]
+python scripts/tse_locais.py cobertura --uf ap --pleito 3220
+```
+
+DEV: 1.971 linhas → 384 locais; 0 inválidos; 384 inseridos; repetição com 384
+inalterados. Cobertura: 376 locais dos BUs, 376 com nome e endereço, 19 sem
+bairro, 24 com seções realocadas.
+
+**Votos.** Inalterados: contagens e hash das linhas de `tse_bu_votos` iguais
+antes e depois; os 1.880 totais por local e os votos por candidato do local
+2720 (5 cargos) idênticos aos capturados antes da importação.
+
+**Desempenho.** O enriquecimento é uma consulta a mais por zona. A busca é
+feita no navegador. Sem índice novo além da chave única.
+
+**Limitações.** Outras UFs precisam do respectivo CSV. Coordenadas e CEP não
+são importados. Para seção realocada, o endereço efetivo do dia não é exibido
+(só a contagem).

@@ -45,12 +45,72 @@ Sobre a fundação de dados abaixo foram entregues a API e as telas. Migration
 | Estado "oficial zerado" | VALIDADO com a apuração oficial ainda não iniciada |
 | Telas com apuração oficial **parcial** e com votos reais | PENDENTE — o backend já foi validado com votos oficiais em QA; as telas ainda não foram vistas com eles |
 | Evolução com mais de uma totalização real | PENDENTE — só há uma totalização por abrangência na base |
-| Detalhamento por seção | PENDENTE — depende do BU oficial; a tela mostra a opção desabilitada |
+| Filtros territoriais Município → Zona na aba Proporcional (API + Web) | IMPLEMENTADO; VALIDADO por E2E real com a apuração oficial do AP |
+| Filtros territoriais Município → Zona na Central, no Majoritário e em Meus painéis (recorte único na URL) | IMPLEMENTADO; VALIDADO por E2E real com a apuração oficial do AP (fase 2, **não commitado**) |
+| Painel de Distribuição Territorial (candidatos e nominatas de um cargo por município e por zona) | IMPLEMENTADO; VALIDADO por E2E real; migration `bcab956ae48e` aplicada só no QA descartável (fase 2, **não commitado**) |
+| Detalhamento por seção (Boletim de Urna) | IMPLEMENTADO na fase 3; VALIDADO em QA com os 1.914 BUs oficiais do AP e E2E real (**não commitado**) — ver seção "Apuração TSE — fase 3" abaixo |
 | Entitlement comercial do módulo | PENDENTE — o acesso hoje é só por permissão (`INTELIGENCIA_VER`) |
 | Execução agendada da ingestão | entregue na rodada seguinte (worker `tse_ingestor`, seção acima) |
 
 Presidente aparece com o resultado **na UF** (EA20 de abrangência UF); o total
 nacional não é ingerido.
+
+## Apuração TSE — fase 5: nome e endereço dos locais (2026-10-06, ADR-092)
+
+IMPLEMENTADO e VALIDADO no DEV; **não commitado, não deployado**. Migration
+`a7c3e91b5d24` (tabela `tse_locais_votacao`) aplicada no DEV. Detalhes em
+`11-apuracao-tse.md` §31.
+
+| Item | Estado |
+|---|---|
+| Fonte: CSV "Eleitorado por local de votação – 2026" (Dados Abertos do TSE) | REGISTRADA (URL, SHA-256, schema); o site do TRE-AP bloqueia acesso automatizado |
+| Conciliação BU × CSV pela chave oficial (`NR_LOCAL_VOTACAO_ORIGINAL`) | 376/376 MATCH, 0 BU_ONLY, 0 ambíguos; 8 só no CSV (locais de seções agregadas) |
+| Importador idempotente (`scripts/tse_locais.py`) | IMPLEMENTADO; DEV: 384 locais do AP gravados, repetição sem alteração |
+| API territorial com nome, endereço e bairro | IMPLEMENTADO; 376/376 locais do BU com nome e endereço; 19 sem bairro |
+| Web: busca do local por nome, código ou endereço; nome no filtro, cartões, breadcrumb e distribuição | IMPLEMENTADO; VALIDADO por E2E real (12 passos) |
+| Votos | INALTERADOS — conferido antes × depois (hash das linhas de voto e 1.880 totais por local) |
+| Coordenadas do local | NÃO IMPORTADAS (existem na fonte para o local utilizado; fora do escopo) |
+
+O vínculo seção → local continua sendo o código do Boletim de Urna; o CSV só
+fornece metadado.
+
+## Apuração TSE — fase 4: Local de votação (2026-10-06, ADR-091)
+
+IMPLEMENTADO e VALIDADO no DEV; **não commitado, não deployado**. Sem migration:
+o head continua `d2f4a9c17e36`. Detalhes em `11-apuracao-tse.md` §30.
+
+| Item | Estado |
+|---|---|
+| Vínculo seção → local pelo código oficial do BU (`identificacaoSecao.local`) | IMPLEMENTADO; AP: 376 locais, 1.914 principais, 57 agregadas, 0 seção sem local |
+| API: `local_votacao` em território, resumo, cargo, nominatas, candidato e distribuição | IMPLEMENTADO; VALIDADO por HTTP real (376 locais × 5 cargos = soma SQL independente) |
+| Web: filtro Local entre Zona e Seção, reset em cascata, URL | IMPLEMENTADO; VALIDADO por E2E real (11 passos) |
+| Distribuição UF → Município → Zona → Local → Seção | IMPLEMENTADO; VALIDADO |
+| Nome, endereço e coordenadas do local | NÃO DISPONÍVEIS nesta fonte; a tela mostra "Local 1234" |
+
+O total por local é **agregado pelo Pesquisa360 a partir dos Boletins de Urna
+oficiais** — não é um resultado EA20 do TSE.
+
+## Apuração TSE — fase 3: Boletim de Urna e resultado por seção (2026-10-04, ADR-090)
+
+IMPLEMENTADO e VALIDADO em QA; **não commitado, não deployado**. Detalhes em
+`11-apuracao-tse.md` §29 e `tse-bu-2026-inspecao.md`.
+
+| Item | Estado |
+|---|---|
+| Especificação ASN.1 2026 (`bu.asn1`, SHA-256 `ef64bf72…04ab81`) | IDENTIFICADA e registrada; cópia verificada no pacote |
+| Decoder isolado (`bu_decoder.py`, `asn1tools`, BER) | IMPLEMENTADO; VALIDADO com 1.914 BUs oficiais (0 falhas) |
+| Persistência (`tse_boletins_urna`, `tse_bu_cargos`, `tse_bu_votos`, `tse_bu_controle`) | IMPLEMENTADO; migration `d2f4a9c17e36` aplicada só no QA descartável |
+| Ingestão incremental EA18 → BU, isolada por boletim | IMPLEMENTADO; VALIDADO (1.914/1.914 urnas do AP, 0 erros) |
+| Worker: lote por ciclo, desligado por padrão (`TSE_INGESTION_BU_ENABLED`) | IMPLEMENTADO; VALIDADO em QA (120 urnas por ciclo, ~2 min) |
+| Conferência BU × EA20 por zona (somente leitura) | IMPLEMENTADO; AP: 67 MATCH, 23 PARTIAL, 0 DIVERGENT |
+| API: `secao` em resumo, cargo, nominatas, candidato e distribuição | IMPLEMENTADO; VALIDADO por HTTP real |
+| Web: seletor de Seção habilitado, cartões do boletim, Zona → Seções | IMPLEMENTADO; VALIDADO por E2E real (10 passos) |
+| Seção agregada (resultado do grupo, sem repartir votos) | IMPLEMENTADO; VALIDADO com a seção 0096 (agregada à 0095) de Macapá |
+| Verificação da assinatura digital do BU | PENDENTE — exige certificados da urna e dependências extras |
+| Ingestão de BU em PRODUÇÃO | NÃO HABILITADA — flag desligada por padrão; exige a migration |
+
+O EA20 continua sendo a fonte de UF, município e zona. O BU é a fonte só da
+seção: nenhuma soma de BUs substitui um total do EA20.
 
 ## Apuração TSE — fundação de dados (2026-10-04, ADR-076 a ADR-084)
 
@@ -65,7 +125,7 @@ Detalhes em `11-apuracao-tse.md`.
 | Reconciliação zonas × município e municípios × UF | IMPLEMENTADO; VALIDADO (simulado) |
 | Separação `OFICIAL` × `SIMULADO` | IMPLEMENTADO |
 | EA18 | PARCIAL — contrato com arquivos visto só em 2024; simulado 2026 vem sem arquivos |
-| BU / votos por seção | PENDENTE — exige `bu.asn1` oficial; não há parser nem `tse_resultados_secao` |
+| BU / votos por seção | IMPLEMENTADO na fase 3 com o `bu.asn1` oficial de 2026 (decoder, tabelas `tse_bu_*`, ingestão incremental); **não commitado** |
 | Apuração **oficial** 2026 com votos reais | VALIDADO em QA na rodada do worker (seção acima); em produção, pendente |
 | API e dashboards | entregues na rodada seguinte (seção acima) |
 | Polling contínuo do TSE (ingestão agendada) | FUTURO |
@@ -75,7 +135,9 @@ Ingestão: somente manual, via `scripts/tse_apuracao.py`. Mobile não foi altera
 **Ambientes de banco.**
 
 - **QA descartável (`p360_tse_qa`, PostgreSQL 15.4 / PostGIS 3.3.4): REFERÊNCIA
-  PARA NOVAS MIGRATIONS TSE.** Sobe do zero até `0f1b3b6c572f`.
+  PARA NOVAS MIGRATIONS TSE.** Sobe do zero até `a7c3e91b5d24`
+  (`bcab956ae48e` = `apuracao_paineis.tipo`, fase 2; `d2f4a9c17e36` = tabelas do
+  Boletim de Urna, fase 3; ambas ainda não commitadas).
 - **DEV local (`pesquisa360_db`): NÃO CANÔNICO, PENDENTE DE RECONCILIAÇÃO.** `alembic_version`
   está em `e8f9a0b1c2d3`, revisão que não existe mais no repositório, e a
   migration sintética `c6d7e8f9a0b1` nunca foi aplicada nele (faltam em

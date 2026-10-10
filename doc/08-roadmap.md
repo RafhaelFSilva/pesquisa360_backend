@@ -397,13 +397,22 @@ Sequência aprovada:
 | D | Painel Majoritário | Entregue (validado com dados do simulado) |
 | E | Painel Proporcional / Nominatas | Entregue (sem previsão de cadeiras) |
 | F | Painel Personalizado (multitenant) | Entregue na versão básica |
-| G | Inteligência Territorial UF → Município → Zona → Seção | Entregue até Zona (API e tela do candidato); **Seção pendente de parser BU oficial** |
+| G | Inteligência Territorial UF → Município → Zona → Seção | Entregue até Zona (API e tela do candidato); Seção entregue na fase I |
+| H | Recorte Município → Zona em todas as abas + painel de Distribuição Territorial | Implementado e validado em QA (fase 2); **não commitado** |
+| I | Boletim de Urna: decoder ASN.1 2026, resultado por Seção, filtro de Seção e conferência BU × EA20 | Implementado e validado em QA com os 1.914 BUs do AP (fase 3); **não commitado** |
 
 Pendências antes de avançar:
 
 - Smoke test com a apuração **oficial** (EA20 com votos reais, mesmo contrato).
 - EA18 de 2026 com arquivos reais.
-- `bu.asn1` oficial do TSE para decodificar o BU.
+- Verificação da assinatura digital do BU (`assinatura.asn1`; exige os
+  certificados da urna, `asn1crypto`, `pyOpenSSL` e `ECPy`).
+- Habilitar a ingestão de BU fora do QA (flag desligada por padrão) e medir a
+  carga com mais de uma UF.
+- Tela do candidato: aba "Seções" (hoje a seção está em Central,
+  Majoritário, Proporcional e painéis).
+- BU de Sistema de Apuração (`dadosSA`) e consulta popular: decodificados,
+  mas sem tratamento próprio.
 - Reconciliação do banco DEV local (ver `00-status-atual.md`).
 - Smoke oficial em produção (em QA já foi feito com votos reais).
 - Ingestão de mais de uma UF em paralelo (hoje as UFs são percorridas em série).

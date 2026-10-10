@@ -48,9 +48,44 @@ def listar_eleicoes(origem: OrigemQuery = None, db: Session = Depends(get_db)):
 
 
 @router.get("/tse/eleicoes/{eleicao_id}/resumo", dependencies=LER)
-def resumo_da_eleicao(eleicao_id: int, uf: str = Query(min_length=2, max_length=2),
-                      origem: OrigemQuery = None, db: Session = Depends(get_db)):
-    return _consultar(TseAnalytics(db).resumo, eleicao_id, uf, origem)
+def resumo_da_eleicao(
+    eleicao_id: int, uf: str = Query(min_length=2, max_length=2),
+    municipio: Optional[str] = Query(default=None, pattern=r"^\d{5}$"),
+    zona: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    secao: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    local_votacao: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    origem: OrigemQuery = None, db: Session = Depends(get_db),
+):
+    """Totalizacao por cargo na UF, no municipio ou na zona (EA20) ou na secao (BU)."""
+    _hierarquia(municipio, zona, secao, local_votacao)
+    return _consultar(TseAnalytics(db).resumo, eleicao_id, uf, origem, municipio, zona, secao, local_votacao)
+
+
+def _hierarquia(municipio: Optional[str], zona: Optional[str], secao: Optional[str],
+                local_votacao: Optional[str] = None) -> None:
+    """Secao exige zona; zona exige municipio. Recusa explicita: nunca outro recorte."""
+    if local_votacao and not zona:
+        raise HTTPException(status_code=422, detail="Local de votação exige zona.")
+    if secao and not zona:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Seção exige zona.")
+    if zona and not municipio:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Zona exige município.")
+
+
+@router.get("/tse/eleicoes/{eleicao_id}/territorio", dependencies=LER)
+def opcoes_territoriais(
+    eleicao_id: int, uf: str = Query(min_length=2, max_length=2),
+    municipio: Optional[str] = Query(default=None, pattern=r"^\d{5}$"),
+    zona: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    local_votacao: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    origem: OrigemQuery = None, db: Session = Depends(get_db),
+):
+    """Municipios da UF; com `municipio`, suas zonas; com `zona`, suas secoes e a situacao do BU."""
+    _hierarquia(municipio, zona, None, local_votacao)
+    return _consultar(TseAnalytics(db).opcoes_territoriais, eleicao_id, uf, municipio, zona,
+                      origem, local_votacao)
 
 
 @router.get("/tse/eleicoes/{eleicao_id}/cargos/{cargo_codigo}", dependencies=LER)
@@ -58,12 +93,15 @@ def resultado_por_cargo(
     eleicao_id: int, cargo_codigo: str, uf: str = Query(min_length=2, max_length=2),
     municipio: Optional[str] = Query(default=None, pattern=r"^\d{5}$"),
     zona: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    secao: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    local_votacao: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
     origem: OrigemQuery = None, limite: Optional[int] = Query(default=None, ge=1, le=2000),
     db: Session = Depends(get_db),
 ):
     """Candidatos ordenados por votos. `situacao`/`eleito` vem do TSE, sem inferencia."""
+    _hierarquia(municipio, zona, secao, local_votacao)
     return _consultar(TseAnalytics(db).resultado_cargo, eleicao_id, cargo_codigo, uf,
-                      municipio, zona, origem, limite)
+                      municipio, zona, origem, limite, secao, local_votacao)
 
 
 @router.get("/tse/eleicoes/{eleicao_id}/cargos/{cargo_codigo}/nominatas", dependencies=LER)
@@ -71,17 +109,64 @@ def nominatas_do_cargo(
     eleicao_id: int, cargo_codigo: str, uf: str = Query(min_length=2, max_length=2),
     municipio: Optional[str] = Query(default=None, pattern=r"^\d{5}$"),
     zona: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    secao: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    local_votacao: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
     origem: OrigemQuery = None, db: Session = Depends(get_db),
 ):
     """Partido/federacao -> candidatos. A posicao e ordenacao factual por votos."""
+    _hierarquia(municipio, zona, secao, local_votacao)
     return _consultar(TseAnalytics(db).nominatas, eleicao_id, cargo_codigo, uf, municipio,
+                      zona, origem, secao, local_votacao)
+
+
+@router.get("/tse/eleicoes/{eleicao_id}/cargos/{cargo_codigo}/distribuicao", dependencies=LER)
+def distribuicao_territorial(
+    eleicao_id: int, cargo_codigo: str, uf: str = Query(min_length=2, max_length=2),
+    candidato: List[str] = Query(default=[]),
+    partido: List[str] = Query(default=[]),
+    federacao: List[str] = Query(default=[]),
+    municipio: Optional[str] = Query(default=None, pattern=r"^\d{5}$"),
+    zona: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    secao: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    local_votacao: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    nivel: Optional[Literal['locais_votacao', 'secoes']] = None,
+    origem: OrigemQuery = None, db: Session = Depends(get_db),
+):
+    """Distribuicao de candidatos/nominatas: por municipio (UF), zona (municipio) ou secao (zona).
+
+    Uma requisicao para todos os itens e todas as partes. `candidato`, `partido` e
+    `federacao` sao repetiveis. Com `secao`, o recorte e a propria urna (nivel minimo).
+    """
+    _hierarquia(municipio, zona, secao, local_votacao)
+    return _consultar(TseAnalytics(db).distribuicao, eleicao_id, cargo_codigo, uf, candidato,
+                      partido, federacao, municipio, zona, origem, secao, local_votacao, nivel)
+
+
+@router.get("/tse/eleicoes/{eleicao_id}/cargos/{cargo_codigo}/conferencia-bu", dependencies=LER)
+def conferencia_bu(
+    eleicao_id: int, cargo_codigo: str, uf: str = Query(min_length=2, max_length=2),
+    municipio: str = Query(pattern=r"^\d{5}$"),
+    zona: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    origem: OrigemQuery = None, db: Session = Depends(get_db),
+):
+    """Conferencia BU x EA20 por zona (somente leitura; nenhum valor e alterado)."""
+    return _consultar(TseAnalytics(db).conferencia_bu, eleicao_id, cargo_codigo, uf, municipio,
                       zona, origem)
 
 
 @router.get("/tse/candidatos/{sqcand}", dependencies=LER)
-def candidato(sqcand: str, eleicao_id: int, origem: OrigemQuery = None,
-              db: Session = Depends(get_db)):
-    return _consultar(TseAnalytics(db).candidato, sqcand, eleicao_id, origem)
+def candidato(
+    sqcand: str, eleicao_id: int,
+    municipio: Optional[str] = Query(default=None, pattern=r"^\d{5}$"),
+    zona: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    secao: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    local_votacao: Optional[str] = Query(default=None, pattern=r"^\d{4}$"),
+    origem: OrigemQuery = None, db: Session = Depends(get_db),
+):
+    """Candidato e seu resultado oficial na UF ou, com filtros, no municipio/zona/secao."""
+    _hierarquia(municipio, zona, secao, local_votacao)
+    return _consultar(TseAnalytics(db).candidato, sqcand, eleicao_id, origem, municipio, zona,
+                      secao, local_votacao)
 
 
 @router.get("/tse/candidatos/{sqcand}/territorio", dependencies=LER)

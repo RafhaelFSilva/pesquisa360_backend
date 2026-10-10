@@ -21,6 +21,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import httpx
 from sqlalchemy import event, func, select
@@ -1175,6 +1176,25 @@ class WorkerComBuTest(_BuFixture):
         self.assertEqual((registro["status"], registro["errors"]), ("ok", []))
         self.assertEqual((registro["bu"]["bu_failed"], registro["bu"]["bu_persisted"]), (1, 1))
         self.assertEqual(self.contar(TseTotalizacao), totalizacoes)
+
+    def test_falha_do_lote_de_bu_entra_no_ciclo_como_erro_classificado(self):
+        # A falha do lote usa o mesmo formato dos erros do EA20: o fim do ciclo
+        # le `error_kind` de cada erro para o heartbeat e o healthcheck.
+        totalizacoes = self.contar(TseTotalizacao)
+        w = self.worker(bu_enabled=True)
+        with mock.patch("pesquisa360.services.tse.worker.BuIngestion.run",
+                        side_effect=RuntimeError("lote indisponivel")),                 self.assertLogs("pesquisa360.tse.worker", level=logging.ERROR):
+            registro = self.ciclo(w)
+        self.assertEqual(registro["status"], "error")
+        (erro,) = registro["errors"]
+        self.assertEqual((erro["phase"], erro["exception_type"], erro["error_kind"],
+                          erro["cycle_id"]),
+                         ("bu_ingestion", "RuntimeError", "structural", registro["cycle_id"]))
+        batida = json.loads((self.tmp / "beat.json").read_text(encoding="utf-8"))
+        self.assertEqual((batida["consecutive_errors"], batida["last_error_kind"]),
+                         (1, "structural"))
+        self.assertEqual(self.contar(TseTotalizacao), totalizacoes)   # o EA20 nao se desfaz
+        self.assertEqual(self.contar(TseBoletimUrna), 0)
 
 
 if __name__ == "__main__":

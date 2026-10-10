@@ -54,6 +54,9 @@ def current_bu(auxiliar: AuxiliarSecao) -> tuple[HashSecao, ArquivoUrna] | None:
 
     Uma secao pode estar 'Totalizada' sem arquivo publicado: no ambiente de
     simulacao o EA18 traz `hashes: [{"arq": []}]`, sem hash nem situacao.
+    Durante a apuracao o EA18 oficial traz a secao como 'Recebida' e o hash
+    como 'Recebido': o arquivo existe, mas ainda nao foi totalizado, entao
+    nao ha BU corrente -- os metadados sao registrados mesmo assim.
     """
     for h in auxiliar.hashes:
         if h.hash and (h.situacao or "").casefold() == SITUACAO_HASH_TOTALIZADO:

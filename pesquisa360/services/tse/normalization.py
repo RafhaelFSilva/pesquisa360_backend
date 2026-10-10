@@ -42,12 +42,15 @@ _ORIGEM_POR_FASE = {"o": OFICIAL, "s": SIMULADO}
 def origem_from_fase(fase: str | None) -> str:
     """Todo arquivo EA traz `f`: "o" (oficial) ou "s" (simulado).
 
+    O EA18 oficial de 2026 traz a fase em maiuscula ("O"): a comparacao
+    ignora caixa.
+
     A origem vem do proprio payload, nunca do nome do host: e ela que impede
     que dado de simulacao seja gravado ou lido como resultado oficial.
     """
     try:
-        return _ORIGEM_POR_FASE[fase]
-    except KeyError:
+        return _ORIGEM_POR_FASE[fase.casefold()]
+    except (KeyError, AttributeError):
         raise ValueError(f"Fase TSE desconhecida: {fase!r}") from None
 
 

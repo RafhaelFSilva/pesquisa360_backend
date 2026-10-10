@@ -193,6 +193,18 @@ class TseRepository:
         latest = self.latest_totalizacao(abrangencia.id, cargo.id)
         if latest is not None and latest.conteudo_hash == digest:
             return latest, False
+        # Versao ja registrada: o TSE (CDN) pode servir de novo um arquivo
+        # ANTERIOR ao ultimo que gravamos (A -> B -> A). O snapshot e o mesmo de
+        # A, e A ja tem a sua totalizacao: nao se cria outra nem se regride --
+        # a totalizacao corrente continua sendo a mais recente gravada (B).
+        ja_registrada = self.session.scalars(
+            select(TseTotalizacao).where(
+                TseTotalizacao.cargo_id == cargo.id,
+                TseTotalizacao.abrangencia_id == abrangencia.id,
+                TseTotalizacao.snapshot_id == snapshot.id)
+        ).first()
+        if ja_registrada is not None:
+            return ja_registrada, False
 
         candidatos = self._upsert_candidatos(eleicao, cargo, resultado, uf)
         partidos = self._partidos(eleicao.id)

@@ -2,7 +2,8 @@
 
 Fonte: "Eleitorado por local de votacao" (Portal de Dados Abertos do TSE),
 arquivo `eleitorado_local_votacao_<ano>_<UF>.csv` -- Latin 1, campos entre
-aspas separados por ponto e virgula, uma linha por SECAO.
+aspas separados por ponto e virgula, uma linha por SECAO e por TURNO (o arquivo
+passa a trazer as linhas do 2o turno quando ele e convocado).
 
 O que este modulo faz e o que NAO faz:
 - traz nome, endereco e bairro; nunca voto;
@@ -14,7 +15,9 @@ O que este modulo faz e o que NAO faz:
   indisponivel e o TRE designou um temporario. A chave usa as colunas
   `*_ORIGINAL`; o bairro so e aproveitado das secoes que votaram no proprio
   local original (a coluna de bairro descreve o local utilizado);
-- se algum local do BU ficar sem correspondencia ou ambiguo, nada e gravado.
+- se algum local do BU ficar sem correspondencia ou ambiguo, nada e gravado;
+- o turno e sempre informado por quem chama e filtra as linhas ANTES de
+  qualquer agrupamento: turnos nunca se somam nem completam um ao outro.
 """
 
 from __future__ import annotations
@@ -68,10 +71,12 @@ class LocalFonte:
 class FonteLocais:
     uf: str
     data_eleicao: str
-    turno: str
+    turno: int
     gerada_em: datetime | None
-    sha256: str
-    linhas: int
+    sha256: str                      # do arquivo oficial inteiro (todos os turnos)
+    linhas: int                      # linhas do turno pedido
+    linhas_arquivo: int = 0          # linhas do arquivo, de todos os turnos
+    turnos: dict[str, int] = field(default_factory=dict)    # NR_TURNO -> linhas no arquivo
     locais: dict[tuple[str, str, str], LocalFonte] = field(default_factory=dict)
     # chave -> conjunto de (nome, endereco) distintos encontrados para o mesmo codigo
     ambiguos: dict[tuple[str, str, str], list] = field(default_factory=dict)
@@ -83,8 +88,10 @@ def _texto(valor: str | None) -> str | None:
     return None if limpo in _VAZIOS else limpo
 
 
-def ler_fonte(conteudo: bytes, uf: str) -> FonteLocais:
-    """Le o CSV oficial de UMA UF e agrupa as linhas (por secao) em locais ORIGINAIS."""
+def ler_fonte(conteudo: bytes, uf: str, turno: int) -> FonteLocais:
+    """Le o CSV oficial de UMA UF e agrupa as linhas (por secao) de UM turno em locais ORIGINAIS."""
+    if isinstance(turno, bool) or not isinstance(turno, int) or turno <= 0:
+        raise ValueError(f"turno deve ser um inteiro positivo (recebido: {turno!r}).")
     if len(conteudo) > MAX_CSV_BYTES:
         raise FonteInvalida(f"CSV com {len(conteudo)} bytes excede o limite.")
     texto = conteudo.decode("latin-1")          # codificacao documentada no leia-me do TSE
@@ -95,7 +102,13 @@ def ler_fonte(conteudo: bytes, uf: str) -> FonteLocais:
     uf = uf.lower()
     grupos: dict[tuple[str, str, str], dict] = {}
     cabecalho, linhas, invalidas = None, 0, 0
+    turnos: dict[str, int] = {}
     for linha in leitor:
+        # O turno e o primeiro filtro: linha de outro turno nao entra em contagem nenhuma.
+        turno_da_linha = (linha["NR_TURNO"] or "").strip()
+        turnos[turno_da_linha] = turnos.get(turno_da_linha, 0) + 1
+        if not turno_da_linha.isdigit() or int(turno_da_linha) != turno:
+            continue
         linhas += 1
         municipio, zona = linha["CD_MUNICIPIO"].strip(), linha["NR_ZONA"].strip()
         codigo, nome = linha["NR_LOCAL_VOTACAO_ORIGINAL"].strip(), _texto(linha["NM_LOCAL_VOTACAO_ORIGINAL"])
@@ -115,16 +128,22 @@ def ler_fonte(conteudo: bytes, uf: str) -> FonteLocais:
                 grupo["bairros"][bairro] = grupo["bairros"].get(bairro, 0) + 1
         else:
             grupo["realocadas"] += 1
+    if not linhas:
+        encontrados = ", ".join(sorted(t or "(vazio)" for t in turnos)) or "nenhum"
+        raise FonteInvalida(
+            f"CSV sem nenhuma linha do turno {turno} (turnos no arquivo: {encontrados}).")
     if cabecalho is None:
-        raise FonteInvalida(f"CSV sem nenhuma linha valida da UF {uf.upper()}.")
+        raise FonteInvalida(
+            f"CSV sem nenhuma linha valida da UF {uf.upper()} no turno {turno}.")
     try:
         gerada = datetime.strptime(f"{cabecalho['DT_GERACAO']} {cabecalho['HH_GERACAO']}",
                                    "%d/%m/%Y %H:%M:%S").replace(tzinfo=BRASILIA)
     except ValueError:
         gerada = None
     fonte = FonteLocais(uf=uf, data_eleicao=cabecalho["DT_ELEICAO"].strip(),
-                        turno=cabecalho["NR_TURNO"].strip(), gerada_em=gerada,
+                        turno=turno, gerada_em=gerada,
                         sha256=hashlib.sha256(conteudo).hexdigest(), linhas=linhas,
+                        linhas_arquivo=sum(turnos.values()), turnos=dict(sorted(turnos.items())),
                         invalidas=invalidas)
     for chave, grupo in grupos.items():
         if len(grupo["variantes"]) > 1:
@@ -179,21 +198,26 @@ def _validar_pleito(session: Session, fonte: FonteLocais, origem: str, pleito: s
 
 
 def importar(session: Session, conteudo: bytes, *, origem: str, pleito: str, uf: str,
-             fonte_url: str | None = None, dry_run: bool = False) -> dict:
-    """Importa (ou atualiza) os metadados dos locais de uma UF. Idempotente.
+             turno: int, fonte_url: str | None = None, dry_run: bool = False) -> dict:
+    """Importa (ou atualiza) os metadados dos locais de uma UF, de UM turno. Idempotente.
+
+    `turno` e o da eleicao que esta sendo enriquecida (o pleito). `source_hash`
+    continua sendo o do arquivo oficial inteiro, nao o de um recorte por turno.
 
     A -> A: nada muda. A -> B: os campos que mudaram sao atualizados no mesmo
     registro (a chave e o pleito: outra eleicao e outro registro). Recusa
     gravar se algum local dos BUs ficar sem metadado ou ambiguo.
     """
-    fonte = ler_fonte(conteudo, uf)
+    fonte = ler_fonte(conteudo, uf, turno)
     _validar_pleito(session, fonte, origem, pleito)
     conciliacao = conciliar(session, fonte, origem, pleito)
     relatorio = {
         "origem": origem, "pleito": str(pleito), "uf": fonte.uf, "fonte": FONTE,
         "fonte_url": fonte_url, "source_hash": fonte.sha256,
         "fonte_gerada_em": fonte.gerada_em.isoformat() if fonte.gerada_em else None,
-        "data_eleicao": fonte.data_eleicao, "linhas": fonte.linhas, "locais": len(fonte.locais),
+        "data_eleicao": fonte.data_eleicao, "turno": fonte.turno, "linhas": fonte.linhas,
+        "linhas_arquivo": fonte.linhas_arquivo, "turnos_no_arquivo": fonte.turnos,
+        "locais": len(fonte.locais),
         "invalidos": fonte.invalidas, "ambiguos_na_fonte": len(fonte.ambiguos),
         "conciliacao": {**conciliacao, "bu_only": conciliacao["bu_only"][:50],
                         "csv_only": conciliacao["csv_only"][:50]},

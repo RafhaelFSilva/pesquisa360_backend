@@ -3,9 +3,13 @@
 Fonte: CSV "Eleitorado por local de votacao" do Portal de Dados Abertos do TSE
 (um arquivo por UF, dentro do ZIP `eleitorado_local_votacao_<ano>.zip`).
 
-    python scripts/tse_locais.py conciliar --arquivo docs/tse2026/eleitorado_local_votacao_2026_AP.csv --uf ap --pleito 3220
-    python scripts/tse_locais.py importar  --arquivo ... --uf ap --pleito 3220 --fonte-url <url>
+    python scripts/tse_locais.py conciliar --arquivo docs/tse2026/eleitorado_local_votacao_2026_AP.csv --uf ap --pleito 3220 --turno 1
+    python scripts/tse_locais.py importar  --arquivo ... --uf ap --pleito 3220 --turno 1 --fonte-url <url>
     python scripts/tse_locais.py cobertura --uf ap --pleito 3220
+
+O arquivo traz uma linha por secao E por turno. `--turno` e obrigatorio e deve
+ser o da eleicao (pleito) que esta sendo enriquecida: as linhas dos outros
+turnos sao ignoradas antes de qualquer contagem.
 
 Importa SO metadado: nao toca votos, BU nem EA20. O vinculo secao -> local
 continua sendo o codigo do Boletim de Urna; a conciliacao e pela chave oficial
@@ -29,17 +33,25 @@ from pesquisa360.services.tse.normalization import OFICIAL, SIMULADO  # noqa: E4
 EXIT_DIVERGENTE = 4
 
 
+def _turno(valor: str) -> int:
+    if not valor.isdigit() or int(valor) <= 0:
+        raise argparse.ArgumentTypeError("turno deve ser um inteiro positivo")
+    return int(valor)
+
+
 def _origem(args) -> str:
     return SIMULADO if args.simulado else OFICIAL
 
 
 def cmd_conciliar(args) -> int:
     conteudo = Path(args.arquivo).read_bytes()
-    fonte = locais_import.ler_fonte(conteudo, args.uf)
+    fonte = locais_import.ler_fonte(conteudo, args.uf, args.turno)
     with SessionLocal() as session:
         resultado = locais_import.conciliar(session, fonte, _origem(args), args.pleito)
     print(json.dumps({
-        "arquivo": str(args.arquivo), "source_hash": fonte.sha256, "linhas": fonte.linhas,
+        "arquivo": str(args.arquivo), "source_hash": fonte.sha256, "turno": fonte.turno,
+        "linhas": fonte.linhas, "linhas_arquivo": fonte.linhas_arquivo,
+        "turnos_no_arquivo": fonte.turnos,
         "data_eleicao": fonte.data_eleicao, "gerada_em": str(fonte.gerada_em),
         "locais_na_fonte": len(fonte.locais), "ambiguos_na_fonte": len(fonte.ambiguos),
         "invalidos": fonte.invalidas, **resultado}, ensure_ascii=False, indent=1))
@@ -52,7 +64,7 @@ def cmd_importar(args) -> int:
         try:
             relatorio = locais_import.importar(
                 session, conteudo, origem=_origem(args), pleito=args.pleito, uf=args.uf,
-                fonte_url=args.fonte_url, dry_run=args.dry_run)
+                turno=args.turno, fonte_url=args.fonte_url, dry_run=args.dry_run)
         except locais_import.ConciliacaoDivergente as exc:
             session.rollback()
             print(str(exc), file=sys.stderr)
@@ -85,6 +97,8 @@ def main() -> int:
         p.add_argument("--simulado", action="store_true")
         if nome != "cobertura":
             p.add_argument("--arquivo", required=True, help="CSV oficial da UF (Latin 1, ';')")
+            p.add_argument("--turno", required=True, type=_turno,
+                           help="turno da eleicao (NR_TURNO); so as linhas dele sao lidas")
         if nome == "importar":
             p.add_argument("--fonte-url", default=None, help="URL de onde o arquivo foi baixado")
             p.add_argument("--dry-run", action="store_true", help="concilia e relata, sem gravar")

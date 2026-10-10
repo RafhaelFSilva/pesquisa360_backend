@@ -30,11 +30,11 @@ URL = "https://exemplo.invalid/eleitorado_local_votacao.zip"
 
 
 def linha(secao, local, nome, endereco="RUA A, 1", bairro="CENTRO", *, municipio="06050", zona="2",
-          utilizado=None, uf="AP", data="29/09/2026") -> dict:
+          utilizado=None, uf="AP", data="29/09/2026", turno="1") -> dict:
     """Uma linha (= uma secao) no formato do CSV do TSE. `utilizado` != `local` = secao realocada."""
     return {
         "DT_GERACAO": "30/09/2026", "HH_GERACAO": "06:00:00", "AA_ELEICAO": "2026",
-        "DT_ELEICAO": data, "NR_TURNO": "1", "SG_UF": uf, "CD_MUNICIPIO": municipio,
+        "DT_ELEICAO": data, "NR_TURNO": str(turno), "SG_UF": uf, "CD_MUNICIPIO": municipio,
         "NR_ZONA": zona, "NR_SECAO": str(secao), "NR_LOCAL_VOTACAO": str(utilizado or local),
         "NM_BAIRRO": bairro, "NR_LOCAL_VOTACAO_ORIGINAL": str(local),
         "NM_LOCAL_VOTACAO_ORIGINAL": nome, "DS_ENDERECO_LOCVT_ORIGINAL": endereco,
@@ -70,7 +70,7 @@ class _LocaisFixture(_SecaoApiFixture):
 
     def importar(self, conteudo=None, **extra):
         relatorio = importar(self.session, conteudo or self.csv(), origem=SIMULADO, pleito="17801",
-                             uf="AP", fonte_url=URL, **extra)
+                             uf="AP", fonte_url=URL, **{"turno": 1, **extra})
         self.session.commit()
         return relatorio
 
@@ -88,9 +88,9 @@ class LeituraDaFonteTest(_LocaisFixture):
     def test_trecho_real_do_csv_oficial(self):
         """Colunas, codificacao e separador do arquivo do TSE; chave = local ORIGINAL."""
         bruto = TRECHO_OFICIAL.read_bytes()
-        fonte = ler_fonte(bruto, "ap")
+        fonte = ler_fonte(bruto, "ap", 1)
         self.assertEqual((fonte.uf, fonte.data_eleicao, fonte.turno, fonte.linhas, fonte.invalidas),
-                         ("ap", "04/10/2026", "1", 11, 0))
+                         ("ap", "04/10/2026", 1, 11, 0))
         self.assertEqual(fonte.sha256, hashlib.sha256(bruto).hexdigest())
         self.assertEqual(fonte.gerada_em.isoformat(), "2026-10-05T06:29:34-03:00")
         vaz = fonte.locais[("06050", "0002", "2720")]
@@ -111,21 +111,21 @@ class LeituraDaFonteTest(_LocaisFixture):
         for caso in (b"", b"a,b,c\r\n1,2,3\r\n", b'"X";"Y"\r\n"1";"2"\r\n',
                      csv_tse([linha(55, 1, "X")], colunas=COLUNAS[:-1])):
             with self.assertRaises(FonteInvalida):
-                ler_fonte(caso, "ap")
+                ler_fonte(caso, "ap", 1)
         with self.assertRaises(FonteInvalida):            # so linhas de outra UF
-            ler_fonte(csv_tse([linha(55, 1, "X", uf="PA")]), "ap")
+            ler_fonte(csv_tse([linha(55, 1, "X", uf="PA")]), "ap", 1)
 
     def test_linhas_invalidas_sao_contadas_e_ignoradas(self):
         fonte = ler_fonte(csv_tse([
             linha(55, 1, "ESCOLA A"), linha(56, "-1", "SEM CODIGO"), linha(57, 2, "#NULO"),
             linha(58, "abc", "CODIGO NAO NUMERICO"), linha(59, 3, "DE OUTRA UF", uf="PA"),
-        ]), "ap")
+        ]), "ap", 1)
         self.assertEqual((fonte.linhas, fonte.invalidas, sorted(fonte.locais)),
                          (5, 4, [("06050", "0002", "0001")]))
 
     def test_mesmo_codigo_com_dois_nomes_e_ambiguo_e_nao_e_escolhido(self):
         fonte = ler_fonte(csv_tse([linha(55, 1, "ESCOLA A"), linha(56, 1, "ESCOLA B"),
-                                   linha(57, 2, "ESCOLA C")]), "ap")
+                                   linha(57, 2, "ESCOLA C")]), "ap", 1)
         self.assertEqual(sorted(fonte.locais), [("06050", "0002", "0002")])
         self.assertEqual([n for n, _e in fonte.ambiguos[("06050", "0002", "0001")]],
                          ["ESCOLA A", "ESCOLA B"])
@@ -210,11 +210,12 @@ class ImportacaoTest(_LocaisFixture):
         }
         for caso, conteudo in casos.items():
             with self.assertRaises(ConciliacaoDivergente, msg=caso):
-                importar(self.session, conteudo, origem=SIMULADO, pleito="17801", uf="ap")
+                importar(self.session, conteudo, origem=SIMULADO, pleito="17801", uf="ap",
+                         turno=1)
             self.session.rollback()
             self.assertEqual(self.contar(TseLocalVotacao), 0, caso)
         # A conciliacao nomeia o que divergiu, sem recorrer a nome nem a aproximacao.
-        fonte = ler_fonte(casos["BU_ONLY"], "ap")
+        fonte = ler_fonte(casos["BU_ONLY"], "ap", 1)
         c = locais_import.conciliar(self.session, fonte, SIMULADO, "17801")
         self.assertEqual((c["match"], c["bu_only"], c["ambiguous"]),
                          (1, [("06050", "0002", "0002")], []))
@@ -223,21 +224,24 @@ class ImportacaoTest(_LocaisFixture):
         """Nome identico ao de um local do BU, sob OUTRO codigo, nao casa com ele."""
         conteudo = csv_tse([linha(55, 1, "ESCOLA ESTADUAL TIRADENTES", data=self.data),
                             linha(57, 9, "CENTRO COMUNITÁRIO SÃO JOSÉ", data=self.data)])
-        fonte = ler_fonte(conteudo, "ap")
+        fonte = ler_fonte(conteudo, "ap", 1)
         c = locais_import.conciliar(self.session, fonte, SIMULADO, "17801")
         self.assertEqual((c["bu_only"], c["csv_only"]),
                          ([("06050", "0002", "0002")], [("06050", "0002", "0009")]))
 
     def test_csv_de_outra_eleicao_ou_pleito_inexistente_e_recusado(self):
         with self.assertRaises(FonteInvalida):
-            importar(self.session, self.csv(data="06/10/2024"), origem=SIMULADO, pleito="17801", uf="ap")
+            importar(self.session, self.csv(data="06/10/2024"), origem=SIMULADO, pleito="17801", uf="ap",
+                         turno=1)
         with self.assertRaises(FonteInvalida):
-            importar(self.session, self.csv(), origem=SIMULADO, pleito="424242", uf="ap")
+            importar(self.session, self.csv(), origem=SIMULADO, pleito="424242", uf="ap",
+                         turno=1)
         self.session.rollback()
         self.assertEqual(self.contar(TseLocalVotacao), 0)
 
     def test_dry_run_concilia_e_nao_grava(self):
-        r = importar(self.session, self.csv(), origem=SIMULADO, pleito="17801", uf="ap", dry_run=True)
+        r = importar(self.session, self.csv(), origem=SIMULADO, pleito="17801", uf="ap",
+                         turno=1, dry_run=True)
         self.assertEqual((r["dry_run"], r["inseridos"], r["conciliacao"]["match"]), (True, 0, 2))
         self.session.rollback()
         self.assertEqual(self.contar(TseLocalVotacao), 0)
@@ -274,6 +278,143 @@ class ImportacaoTest(_LocaisFixture):
         c = locais_import.cobertura(self.session, SIMULADO, "17801", "ap")
         self.assertEqual((c["locais_bu"], c["com_metadado"], c["sem_metadado"], c["sem_nome"],
                           c["sem_endereco"], c["sem_bairro"]), (2, 2, [], 0, 0, 1))
+
+
+class TurnoTest(_LocaisFixture):
+    """O arquivo oficial traz uma linha por secao E por turno: o turno e sempre
+    informado e filtra as linhas antes de qualquer agrupamento."""
+
+    DATA_2T = "25/10/2026"
+
+    def dois_turnos(self, *, nome2_t2="CENTRO COMUNITÁRIO SÃO JOSÉ", bairro1_t2="CENTRO",
+                    endereco1_t2="AV FAB 1200") -> bytes:
+        """As mesmas 4 secoes nos dois turnos; o 2o turno pode divergir do 1o."""
+        t1 = {"data": self.data, "turno": "1"}
+        t2 = {"data": self.DATA_2T, "turno": "2"}
+        nome1 = "ESCOLA ESTADUAL TIRADENTES"
+        return csv_tse([
+            linha(55, 1, nome1, "AV FAB 1200", "CENTRO", **t1),
+            linha(56, 1, nome1, "AV FAB 1200", "CENTRO", **t1),
+            linha(58, 1, nome1, "AV FAB 1200", "CENTRO", **t1),
+            linha(57, 2, "CENTRO COMUNITÁRIO SÃO JOSÉ", "RUA DAS FLORES, S/N", "#NULO", **t1),
+            linha(55, 1, nome1, endereco1_t2, bairro1_t2, **t2),
+            linha(56, 1, nome1, endereco1_t2, bairro1_t2, utilizado=7, **t2),
+            linha(58, 1, nome1, endereco1_t2, bairro1_t2, **t2),
+            linha(57, 2, nome2_t2, "RUA DAS FLORES, S/N", "BAIRRO DO 2T", **t2),
+        ])
+
+    def test_cada_turno_le_so_as_suas_linhas(self):
+        bruto = self.dois_turnos()
+        um, dois = ler_fonte(bruto, "ap", 1), ler_fonte(bruto, "ap", 2)
+        for fonte, turno, data in ((um, 1, self.data), (dois, 2, self.DATA_2T)):
+            self.assertEqual((fonte.turno, fonte.data_eleicao, fonte.linhas, fonte.linhas_arquivo,
+                              fonte.turnos, fonte.invalidas),
+                             (turno, data, 4, 8, {"1": 4, "2": 4}, 0))
+            # A chave natural e a mesma nos dois turnos.
+            self.assertEqual(sorted(fonte.locais), [("06050", "0002", "0001"), ("06050", "0002", "0002")])
+            self.assertEqual(fonte.ambiguos, {})
+
+    def test_secoes_cadastradas_nao_dobram_e_realocadas_sao_do_turno(self):
+        bruto = self.dois_turnos()
+        chave = ("06050", "0002", "0001")
+        um, dois = ler_fonte(bruto, "ap", 1).locais[chave], ler_fonte(bruto, "ap", 2).locais[chave]
+        self.assertEqual((um.secoes, um.realocadas), (3, 0))       # e nao 6
+        self.assertEqual((dois.secoes, dois.realocadas), (3, 1))   # a realocacao e so do 2o turno
+
+    def test_bairro_nao_mistura_turnos(self):
+        # O local 0002 nao tem bairro no 1o turno; o do 2o turno nao preenche a lacuna.
+        # O local 0001 tem bairros diferentes por turno: cada turno ve so o seu.
+        bruto = self.dois_turnos(bairro1_t2="SANTA RITA")
+        um, dois = ler_fonte(bruto, "ap", 1).locais, ler_fonte(bruto, "ap", 2).locais
+        self.assertEqual((um[("06050", "0002", "0002")].bairro, dois[("06050", "0002", "0002")].bairro),
+                         (None, "BAIRRO DO 2T"))
+        self.assertEqual((um[("06050", "0002", "0001")].bairro, dois[("06050", "0002", "0001")].bairro),
+                         ("CENTRO", "SANTA RITA"))
+
+    def test_nome_e_endereco_nao_misturam_turnos(self):
+        # Nome diferente no 2o turno NAO torna o local ambiguo no 1o (nem o contrario).
+        bruto = self.dois_turnos(nome2_t2="CENTRO COMUNITÁRIO RENOMEADO", endereco1_t2="AV FAB 1500")
+        um, dois = ler_fonte(bruto, "ap", 1), ler_fonte(bruto, "ap", 2)
+        self.assertEqual((um.ambiguos, dois.ambiguos), ({}, {}))
+        self.assertEqual((um.locais[("06050", "0002", "0002")].nome,
+                          dois.locais[("06050", "0002", "0002")].nome),
+                         ("CENTRO COMUNITÁRIO SÃO JOSÉ", "CENTRO COMUNITÁRIO RENOMEADO"))
+        self.assertEqual((um.locais[("06050", "0002", "0001")].endereco,
+                          dois.locais[("06050", "0002", "0001")].endereco),
+                         ("AV FAB 1200", "AV FAB 1500"))
+
+    def test_turno_inexistente_ou_invalido_e_erro_claro(self):
+        bruto = self.dois_turnos()
+        with self.assertRaisesRegex(FonteInvalida, r"turno 3 \(turnos no arquivo: 1, 2\)"):
+            ler_fonte(bruto, "ap", 3)
+        with self.assertRaisesRegex(FonteInvalida, "turno 2"):          # arquivo de turno unico
+            ler_fonte(self.csv(), "ap", 2)
+        for invalido in (0, -1, "1", None, True, 1.0):
+            with self.assertRaises(ValueError, msg=repr(invalido)):
+                ler_fonte(bruto, "ap", invalido)
+        with self.assertRaises(TypeError):                              # turno nunca e presumido
+            ler_fonte(bruto, "ap")
+        with self.assertRaises(TypeError):
+            importar(self.session, bruto, origem=SIMULADO, pleito="17801", uf="ap")
+        sem_coluna = tuple(c for c in COLUNAS if c != "NR_TURNO")
+        with self.assertRaisesRegex(FonteInvalida, "NR_TURNO"):
+            ler_fonte(csv_tse([linha(55, 1, "X")], colunas=sem_coluna), "ap", 1)
+
+    def test_importa_so_o_turno_pedido_e_o_hash_e_do_arquivo_oficial(self):
+        bruto = self.dois_turnos(nome2_t2="NOME SO DO 2T", bairro1_t2="SANTA RITA")
+        r = self.importar(bruto)
+        self.assertEqual((r["turno"], r["linhas"], r["linhas_arquivo"], r["turnos_no_arquivo"],
+                          r["locais"], r["inseridos"], r["ambiguos_na_fonte"]),
+                         (1, 4, 8, {"1": 4, "2": 4}, 2, 2, 0))
+        self.assertEqual({k: r["conciliacao"][k] for k in ("bu", "csv", "match", "bu_only", "ambiguous")},
+                         {"bu": 2, "csv": 2, "match": 2, "bu_only": [], "ambiguous": []})
+        um, dois = self.session.scalars(
+            select(TseLocalVotacao).order_by(TseLocalVotacao.codigo_local)).all()
+        self.assertEqual((um.nome, um.bairro, um.secoes_cadastradas, um.secoes_realocadas),
+                         ("ESCOLA ESTADUAL TIRADENTES", "CENTRO", 3, 0))
+        self.assertEqual((dois.nome, dois.bairro, dois.secoes_cadastradas),
+                         ("CENTRO COMUNITÁRIO SÃO JOSÉ", None, 1))
+        # A marca da fonte e a do arquivo inteiro (os dois turnos), nao a de um recorte.
+        oficial = hashlib.sha256(bruto).hexdigest()
+        self.assertEqual((r["source_hash"], um.source_hash, dois.source_hash), (oficial,) * 3)
+        so_turno_1 = hashlib.sha256(self.csv()).hexdigest()
+        self.assertNotEqual(oficial, so_turno_1)
+
+    def test_mesma_carga_multiturno_e_idempotente(self):
+        bruto = self.dois_turnos()
+        self.importar(bruto)
+        antes = {r.id: (r.nome, r.secoes_cadastradas, r.source_hash, r.atualizado_em)
+                 for r in self.session.scalars(select(TseLocalVotacao))}
+        r = self.importar(bruto)
+        self.assertEqual((r["inseridos"], r["atualizados"], r["inalterados"]), (0, 0, 2))
+        depois = {r.id: (r.nome, r.secoes_cadastradas, r.source_hash, r.atualizado_em)
+                  for r in self.session.scalars(select(TseLocalVotacao))}
+        self.assertEqual(antes, depois)
+
+    def test_arquivo_de_turno_unico_e_multiturno_dao_o_mesmo_resultado(self):
+        """O arquivo antigo (so 1o turno) e o atual (dois turnos), lidos no turno 1, sao iguais."""
+        antigo, atual = ler_fonte(self.csv(), "ap", 1), ler_fonte(self.dois_turnos(), "ap", 1)
+        self.assertEqual(antigo.locais, atual.locais)
+        self.importar(self.csv())
+        r = self.importar(self.dois_turnos())
+        self.assertEqual((r["inseridos"], r["atualizados"], r["inalterados"]), (0, 0, 2))
+
+    def test_turno_de_outra_data_nao_enriquece_o_pleito(self):
+        # O 2o turno e de outra data: nao serve para o pleito do 1o turno.
+        with self.assertRaisesRegex(FonteInvalida, self.DATA_2T):
+            importar(self.session, self.dois_turnos(), origem=SIMULADO, pleito="17801", uf="ap",
+                     turno=2)
+        self.session.rollback()
+        self.assertEqual(self.contar(TseLocalVotacao), 0)
+
+    def test_chave_do_bu_continua_sendo_o_local_original(self):
+        # No 2o turno a secao 56 votou no local 7, mas a chave segue sendo o ORIGINAL (1):
+        # os dois locais dos BUs casam em qualquer turno, sem local 0007.
+        for turno in (1, 2):
+            c = locais_import.conciliar(self.session, ler_fonte(self.dois_turnos(), "ap", turno),
+                                        SIMULADO, "17801")
+            self.assertEqual((c["bu"], c["match"], c["bu_only"], c["csv_only"], c["ambiguous"]),
+                             (2, 2, [], [], []), turno)
 
 
 class ApiComMetadadosTest(_LocaisFixture):

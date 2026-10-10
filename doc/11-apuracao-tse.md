@@ -757,7 +757,7 @@ não pôde ser baixado: o site responde 403 a clientes automatizados.
 | `DS_ENDERECO_LOCVT_ORIGINAL` | `AV FELICIANO COELHO SN` | endereço do local cadastrado | `endereco` |
 | `NR_LOCAL_VOTACAO` | `1791` | local utilizado no pleito | detectar seção realocada |
 | `NM_BAIRRO` | `TREM` | bairro do local utilizado | `bairro`, só das seções não realocadas |
-| `DT_ELEICAO`, `NR_TURNO` | `04/10/2026`, `1` | eleição | conferir com o pleito |
+| `DT_ELEICAO`, `NR_TURNO` | `04/10/2026`, `1` | eleição | `NR_TURNO` filtra as linhas (`--turno`); `DT_ELEICAO` é conferida com o pleito |
 | `DT_GERACAO`, `HH_GERACAO` | `05/10/2026`, `06:29:34` | extração | `fonte_gerada_em` |
 
 Existem e não são usadas: CEP, telefone, latitude/longitude (do local
@@ -783,10 +783,17 @@ local nos boletins.
 **Importação.**
 
 ```
-python scripts/tse_locais.py conciliar --arquivo docs/tse2026/eleitorado_local_votacao_2026_AP.csv --uf ap --pleito 3220
-python scripts/tse_locais.py importar  --arquivo ... --uf ap --pleito 3220 --fonte-url <url> [--dry-run]
+python scripts/tse_locais.py conciliar --arquivo docs/tse2026/eleitorado_local_votacao_2026_AP.csv --uf ap --pleito 3220 --turno 1
+python scripts/tse_locais.py importar  --arquivo ... --uf ap --pleito 3220 --turno 1 --fonte-url <url> [--dry-run]
 python scripts/tse_locais.py cobertura --uf ap --pleito 3220
 ```
+
+`--turno` é obrigatório. Desde a convocação do 2º turno o arquivo oficial traz
+uma linha por seção **e por turno** (AP em 10/10/2026: 3.942 linhas = 1.971 +
+1.971). O importador lê só as linhas do turno pedido, antes de agrupar: turnos
+nunca se somam (`secoes_cadastradas` não dobra) nem completam um ao outro
+(bairro, realocação). O turno é o da eleição enriquecida — `1` para o pleito
+3220 — e `source_hash` continua sendo o do arquivo oficial inteiro.
 
 DEV: 1.971 linhas → 384 locais; 0 inválidos; 384 inseridos; repetição com 384
 inalterados. Cobertura: 376 locais dos BUs, 376 com nome e endereço, 19 sem

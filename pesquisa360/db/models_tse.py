@@ -443,3 +443,45 @@ class TseBuControle(Base):
 
     secao = relationship("TseSecao")
     boletim = relationship("TseBoletimUrna")
+
+
+# ------------------------------------------------- Local de votacao (metadados)
+class TseLocalVotacao(Base):
+    """Nome e endereco oficiais de um local de votacao, por pleito (ADR-092).
+
+    SO metadado: o vinculo secao -> local continua sendo o codigo do Boletim
+    de Urna (`identificacaoSecao.local`), e os votos nao passam por aqui. A
+    chave e a oficial -- nunca o nome. O codigo se repete entre zonas e
+    municipios, e nome/endereco podem mudar de uma eleicao para outra: por
+    isso a identidade inclui pleito, UF, municipio e zona.
+    """
+
+    __tablename__ = "tse_locais_votacao"
+    __table_args__ = (
+        UniqueConstraint("origem", "pleito", "uf", "municipio_codigo", "zona", "codigo_local",
+                         name="uq_tse_locais_votacao_natural"),
+        CheckConstraint(_sql_in("origem", ORIGENS_TSE), name="ck_tse_locais_votacao_origem"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    origem = Column(String(10), nullable=False)
+    pleito = Column(String(10), nullable=False)
+    uf = Column(String(2), nullable=False)
+    municipio_codigo = Column(String(5), nullable=False)
+    zona = Column(String(4), nullable=False)
+    codigo_local = Column(String(4), nullable=False)
+    nome = Column(String(200), nullable=False)
+    endereco = Column(String(300), nullable=True)
+    bairro = Column(String(120), nullable=True)
+    # Secoes cadastradas no local e quantas votaram em outro endereco neste pleito
+    # (local original interditado: o TRE designa um local temporario).
+    secoes_cadastradas = Column(Integer, nullable=False)
+    secoes_realocadas = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    fonte = Column(String(60), nullable=False)
+    fonte_url = Column(Text, nullable=True)
+    fonte_gerada_em = Column(DateTime(timezone=True), nullable=True)
+    source_hash = Column(String(64), nullable=False)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    atualizado_em = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

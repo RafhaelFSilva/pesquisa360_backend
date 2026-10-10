@@ -108,6 +108,10 @@ static/uploads/
 # Local database backups
 /backups/
 
+# Artefatos e exportacoes gerados no host (operacao; nunca versionados)
+/artifacts/
+/exports/
+
 # Shapefiles operacionais de importacao (documentacao da pasta permanece rastreavel)
 /data/imports/setores/*
 !/data/imports/setores/.gitkeep

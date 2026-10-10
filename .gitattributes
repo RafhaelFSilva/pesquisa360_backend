@@ -1,0 +1,7 @@
+# Arquivos oficiais do TSE conferidos por SHA-256 (schema ASN.1, CSV de locais,
+# boletins de urna de teste): o conteudo precisa ser identico byte a byte em
+# qualquer sistema, entao o Git nunca converte o fim de linha deles.
+pesquisa360/services/tse/asn1/*.asn1 -text
+docs/tse2026/** -text
+tests/fixtures_tse/bu/** -text
+tests/fixtures_tse/locais/** -text

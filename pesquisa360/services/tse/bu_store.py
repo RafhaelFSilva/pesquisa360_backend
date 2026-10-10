@@ -272,4 +272,3 @@ class BuStore:
             ligados += antes != (voto.candidato_id, voto.partido_id)
         self.session.flush()
         return ligados
-

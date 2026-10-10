@@ -2043,6 +2043,81 @@ cai, o PostgreSQL solta a trava: não há trava órfã nem tabela de controle.
 - OFICIAL e SIMULADO têm chaves diferentes e podem rodar juntos.
 - Fora do PostgreSQL (SQLite dos testes) a exclusão vale só dentro do processo.
 
+## ADR-089 — Replay histórico é idempotente pela chave do snapshot
+
+O TSE pode reapresentar um EA20 histórico conhecido depois de outro mais novo
+(incidente PROD de 04/10/2026: cargo 5, abrangência 20, snapshot 174). Consultar
+`cargo_id + abrangencia_id + snapshot_id` antes de comparar o hash material
+com a última totalização. Se existe, retornar a linha histórica como NO-OP;
+nunca alterar o histórico nem criar outro snapshot para contornar a UNIQUE.
+`uq_tse_totalizacoes_snapshot` permanece como defesa final. Uma corrida nesse
+INSERT usa SAVEPOINT e recupera a linha vencedora somente quando o driver
+identifica exatamente essa constraint; outros IntegrityErrors são propagados.
+Snapshot novo, materialmente diferente, com timestamp anterior continua sendo
+persistido: não há regra de monotonicidade de IDG/horário. Sem migration.
+
+## ADR-090 — Heartbeat não substitui sucesso de ingestão
+
+Separar heartbeat, início/fim do ciclo, último sucesso/erro e falhas consecutivas.
+Timeout/rede/429/5xx e indisponibilidade de conexão são transitórios; falha de
+integridade, contrato/parse ou programação é estrutural. Erro estrutural deixa
+health unhealthy até um ciclo completo bem-sucedido, inclusive se um heartbeat
+ou erro transitório ocorrer depois. Falhas transitórias isoladas são toleradas;
+`TSE_INGESTION_MAX_CONSECUTIVE_ERRORS` (padrão 3) limita a sequência. Sucesso
+zera o contador; a API continua independente. Logs de erro conservam pilha,
+mensagem primária do driver e contexto do pipeline/ciclo, sem SQL/params/
+DETAIL de linha/payload/secrets. Reinício restaura a falha pendente do
+heartbeat existente da mesma origem, até um ciclo bem-sucedido.
+
+## ADR-091 — Local de votação é derivado do BU corrente e agregado pelo Pesquisa360
+
+O nível Local fica entre Zona e Seção. O vínculo seção → local é o campo
+`identificacaoSecao.local` do Boletim de Urna (código do cadastro da Justiça
+Eleitoral, `NumeroLocal` no ASN.1 oficial). EA16 e EA18 não trazem local.
+
+- **Sem tabela e sem migration.** O local é lido do BU corrente de cada urna
+  (`tse_boletins_urna.local_votacao`). Identidade lógica: origem + pleito + UF
+  + município + zona + código. Um BU novo pode mudar o local sem apagar o
+  anterior. Seção sem BU não tem local.
+- **Agregadas** herdam o local da urna do grupo (relação do EA16); não têm
+  voto próprio e nunca entram duas vezes na soma.
+- **Semântica.** UF, município e zona: resultado oficial do TSE (EA20). Seção:
+  resultado oficial do BU. **Local: agregado pelo Pesquisa360 a partir dos BUs
+  oficiais** (`fonte: BU_AGREGADO_LOCAL`), com cobertura explícita. Nunca é
+  apresentado como EA20, e o total da zona nunca é substituído pela soma dos
+  locais.
+- **Sem nome, endereço ou coordenadas**: a fonte não os tem. A tela mostra
+  "Local 1234". Nenhuma outra base é usada para casar por aproximação.
+- Dados globais, sem `company_id`. Em painéis, o local é recorte de
+  visualização e não é gravado.
+
+## ADR-092 — Nome e endereço do local vêm de fonte oficial complementar, só como metadado
+
+O Boletim de Urna dá o código do local, não o nome. O nome, o endereço e o
+bairro vêm do CSV "Eleitorado por local de votação" do Portal de Dados Abertos
+do TSE, gravados em `tse_locais_votacao` (migration `a7c3e91b5d24`).
+
+- **Papéis.** BU: código do local, votos por seção e agregação por local —
+  inalterados. CSV: somente metadado. Nenhum voto passa pela tabela nova.
+- **Chave oficial, nunca o nome.** A conciliação é por município + zona +
+  código. Não há comparação de nomes, aproximação nem uso de endereço para
+  achar código. Se um local dos BUs ficar sem metadado ou ambíguo, a
+  importação é recusada inteira.
+- **O código do BU é o do local ORIGINAL.** O CSV traz o local "utilizado no
+  pleito" e o "original" (o cadastrado; quando ele está indisponível, o TRE
+  designa um temporário). Só a coluna `NR_LOCAL_VOTACAO_ORIGINAL` concilia
+  com os BUs (376/376 no AP; a coluna do local utilizado, 357/376). Nome e
+  endereço são os do original; o bairro só é aproveitado das seções que
+  votaram no próprio local, porque a coluna de bairro descreve o utilizado.
+  `secoes_realocadas` registra quantas seções votaram em outro endereço.
+- **Versionado por pleito.** Identidade: origem + pleito + UF + município +
+  zona + código. Outra eleição é outro registro; nada é sobrescrito.
+- **Global**, sem `company_id`.
+- **Fallback.** Local sem metadado continua valendo: "Local 2720".
+- **Fonte.** O pedido original era o arquivo do TRE-AP; o site bloqueia acesso
+  automatizado. O conjunto do TSE é a mesma base cadastral da Justiça
+  Eleitoral e foi validado contra os BUs. O importador lê só esse layout.
+
 ## ADR-093 — Distribuição territorial lê o EA20 de cada parte, em uma requisição
 
 O painel de Distribuição Territorial mostra onde estão os votos de até 20
@@ -2120,52 +2195,3 @@ Regras:
   TSE). O schema é compilado uma vez por processo, após conferir o SHA-256.
 - A assinatura digital do BU não é verificada nesta fase; a origem é garantida
   por HTTPS com host fixo, pelo hash do EA18 e pela conferência com o EA20.
-
-## ADR-091 — Local de votação é derivado do BU corrente e agregado pelo Pesquisa360
-
-O nível Local fica entre Zona e Seção. O vínculo seção → local é o campo
-`identificacaoSecao.local` do Boletim de Urna (código do cadastro da Justiça
-Eleitoral, `NumeroLocal` no ASN.1 oficial). EA16 e EA18 não trazem local.
-
-- **Sem tabela e sem migration.** O local é lido do BU corrente de cada urna
-  (`tse_boletins_urna.local_votacao`). Identidade lógica: origem + pleito + UF
-  + município + zona + código. Um BU novo pode mudar o local sem apagar o
-  anterior. Seção sem BU não tem local.
-- **Agregadas** herdam o local da urna do grupo (relação do EA16); não têm
-  voto próprio e nunca entram duas vezes na soma.
-- **Semântica.** UF, município e zona: resultado oficial do TSE (EA20). Seção:
-  resultado oficial do BU. **Local: agregado pelo Pesquisa360 a partir dos BUs
-  oficiais** (`fonte: BU_AGREGADO_LOCAL`), com cobertura explícita. Nunca é
-  apresentado como EA20, e o total da zona nunca é substituído pela soma dos
-  locais.
-- **Sem nome, endereço ou coordenadas**: a fonte não os tem. A tela mostra
-  "Local 1234". Nenhuma outra base é usada para casar por aproximação.
-- Dados globais, sem `company_id`. Em painéis, o local é recorte de
-  visualização e não é gravado.
-
-## ADR-092 — Nome e endereço do local vêm de fonte oficial complementar, só como metadado
-
-O Boletim de Urna dá o código do local, não o nome. O nome, o endereço e o
-bairro vêm do CSV "Eleitorado por local de votação" do Portal de Dados Abertos
-do TSE, gravados em `tse_locais_votacao` (migration `a7c3e91b5d24`).
-
-- **Papéis.** BU: código do local, votos por seção e agregação por local —
-  inalterados. CSV: somente metadado. Nenhum voto passa pela tabela nova.
-- **Chave oficial, nunca o nome.** A conciliação é por município + zona +
-  código. Não há comparação de nomes, aproximação nem uso de endereço para
-  achar código. Se um local dos BUs ficar sem metadado ou ambíguo, a
-  importação é recusada inteira.
-- **O código do BU é o do local ORIGINAL.** O CSV traz o local "utilizado no
-  pleito" e o "original" (o cadastrado; quando ele está indisponível, o TRE
-  designa um temporário). Só a coluna `NR_LOCAL_VOTACAO_ORIGINAL` concilia
-  com os BUs (376/376 no AP; a coluna do local utilizado, 357/376). Nome e
-  endereço são os do original; o bairro só é aproveitado das seções que
-  votaram no próprio local, porque a coluna de bairro descreve o utilizado.
-  `secoes_realocadas` registra quantas seções votaram em outro endereço.
-- **Versionado por pleito.** Identidade: origem + pleito + UF + município +
-  zona + código. Outra eleição é outro registro; nada é sobrescrito.
-- **Global**, sem `company_id`.
-- **Fallback.** Local sem metadado continua valendo: "Local 2720".
-- **Fonte.** O pedido original era o arquivo do TRE-AP; o site bloqueia acesso
-  automatizado. O conjunto do TSE é a mesma base cadastral da Justiça
-  Eleitoral e foi validado contra os BUs. O importador lê só esse layout.

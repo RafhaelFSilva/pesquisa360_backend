@@ -1,5 +1,24 @@
 # Status atual
 
+## Hotfix TSE — replay histórico e health (2026-10-04)
+
+Incidente PROD: o TSE reapresentou o snapshot 174 após uma totalização posterior
+(cargo 5, abrangência 20), causando `uq_tse_totalizacoes_snapshot`. O worker foi
+interrompido; API e histórico permaneceram disponíveis. A idempotência agora
+consulta `(cargo_id, abrangencia_id, snapshot_id)` antes do hash da última
+totalização, com SAVEPOINT defensivo para corrida pela mesma UNIQUE (ADR-089).
+Snapshot novo com horário anterior mantém a regra histórica existente.
+Logs de erro trazem pilha e contexto sem parâmetros SQL/payload; heartbeat e
+resultado do ciclo são separados, com erro estrutural pendente deixando health
+unhealthy até sucesso posterior (ADR-090). Hotfix sem migration; head
+`0f1b3b6c572f`. Contratos da API, Web e Mobile offline-first não mudam.
+
+QA oficial isolado: 10 ciclos consecutivos OK e healthy, 147 snapshots e
+122 totalizações novas, zero duplicatas; replays reais retornaram NO-OP.
+Suíte TSE: 153 testes passaram, mais três regressões dos ajustes de revisão.
+Suíte completa em Python 3.13: 1956 testes e 344 subtestes passaram, 14 testes
+pulados, zero falhas. `compileall pesquisa360` e `git diff --check` passaram.
+
 ## Apuração TSE — ingestor automático (2026-10-04, ADR-087 e ADR-088)
 
 | Item | Estado |
@@ -10,7 +29,7 @@
 | Parada por SIGTERM/SIGINT com rollback, healthcheck por heartbeat | IMPLEMENTADO; VALIDADO (`docker stop` → código 0; `healthy`) |
 | Serviço `tse_ingestor` no compose de staging e de DEV (profile `tse`); override para PROD em `deploy/tse_ingestor/` | IMPLEMENTADO; o compose de PROD não é versionado — o override precisa ser conferido no deploy |
 | `httpx` declarado em `pyproject.toml` | IMPLEMENTADO; imagem construída do zero instala `httpx 0.28.1` |
-| Worker com apuração oficial **com votos** | VALIDADO em QA (04/10/2026, 17:22): AP com 32/1914 seções, votos reais em UF, Macapá e zonas, histórico real de 3 totalizações. Em PRODUÇÃO: PENDENTE |
+| Worker com apuração oficial **com votos** | VALIDADO em QA. A implantação anterior em PROD detectou replay histórico e interrompeu o ingestor; retomada usa o hotfix ADR-089/090 e seus gates de deploy |
 
 O worker nasce **desligado** (`TSE_INGESTION_ENABLED=false`): sobe ocioso e
 não consulta o TSE até ser habilitado. Operação em `11-apuracao-tse.md`,

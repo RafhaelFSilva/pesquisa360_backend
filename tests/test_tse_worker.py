@@ -203,7 +203,7 @@ class CicloDoWorkerTest(_WorkerFixture):
         w = self.worker()
         with self.assertLogs("pesquisa360.tse.worker", level="INFO") as logs:
             self.ciclo(w)
-        linha = next(l for l in logs.output if "tse_ingest_cycle" in l)
+        linha = next(l for l in logs.output if "tse_ingest_cycle " in l)
         registro = json.loads(linha.split("tse_ingest_cycle ", 1)[1])
         for campo in ("timestamp", "origem", "ufs", "cargos", "ea14_changed", "ea15_changed",
                       "requests", "200", "304", "404", "429", "ea20", "snapshots_new",

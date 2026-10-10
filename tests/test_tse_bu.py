@@ -1157,7 +1157,7 @@ class WorkerComBuTest(_BuFixture):
         for chave in ("bu_reconciled_match", "bu_reconciled_partial", "bu_reconciled_divergent"):
             self.assertIn(chave, primeiro["bu"])
         self.assertEqual(primeiro["bu"]["bu_reconciled_partial"], 1)       # zona incompleta
-        linha = next(l for l in logs.output if "tse_ingest_cycle" in l)
+        linha = next(l for l in logs.output if "tse_ingest_cycle " in l)
         self.assertIn('"bu_persisted": 2', linha)
         self.assertLess(len(linha), 1500)                                  # sem binario no log
         segundo = self.ciclo(w)

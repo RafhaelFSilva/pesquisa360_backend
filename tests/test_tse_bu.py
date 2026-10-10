@@ -1,5 +1,5 @@
 """Boletim de Urna (BU): decoder, persistencia, ingestao, API por secao,
-conferencia BU x EA20 e worker (ADR-090).
+conferencia BU x EA20 e worker (ADR-094).
 
 Duas bases, sem rede:
 

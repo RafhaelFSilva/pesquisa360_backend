@@ -1,4 +1,4 @@
-"""Conferencia BU x EA20 por zona (ADR-090). SOMENTE LEITURA.
+"""Conferencia BU x EA20 por zona (ADR-094). SOMENTE LEITURA.
 
 Soma os BUs correntes das secoes de uma zona e compara com o EA20 da zona.
 Nunca altera, corrige ou substitui valor algum: o EA20 continua sendo a fonte

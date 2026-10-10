@@ -1,4 +1,4 @@
-"""Leituras analiticas do nivel SECAO, a partir do Boletim de Urna (ADR-090).
+"""Leituras analiticas do nivel SECAO, a partir do Boletim de Urna (ADR-094).
 
 O BU e a fonte oficial somente da secao; UF, municipio e zona continuam vindo
 do EA20 (analytics.py). Nada aqui soma BUs para produzir zona, nem divide a

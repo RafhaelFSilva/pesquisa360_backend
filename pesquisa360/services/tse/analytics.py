@@ -89,7 +89,7 @@ class TseAnalytics:
     def __init__(self, session: Session):
         self.session = session
         self.repo = TseRepository(session)
-        # Nivel SECAO: fonte = Boletim de Urna (ADR-090). Acima dele, EA20.
+        # Nivel SECAO: fonte = Boletim de Urna (ADR-094). Acima dele, EA20.
         self.secoes = SecaoAnalytics(self)
         self.locais = LocalAnalytics(self)
 
@@ -192,7 +192,7 @@ class TseAnalytics:
         e zona) ou cadastro no EA16 (secao). Municipio fora da UF, zona fora do
         municipio ou qualquer codigo inexistente respondem 404 -- nunca os
         dados de outro recorte. Cada secao traz a situacao do seu Boletim de
-        Urna: o voto por secao so existe onde o BU ja foi ingerido (ADR-090).
+        Urna: o voto por secao so existe onde o BU ja foi ingerido (ADR-094).
         """
         eleicao = self.eleicao(eleicao_id, origem)
         if local_votacao and not zona:

@@ -2,7 +2,7 @@
 
 Registro da inspeção feita em 2026-10-04, antes de qualquer modelagem ou
 código. O decoder, as tabelas e os contratos da fase 3 derivam deste documento.
-Decisão arquitetural: ADR-090 (`10-decisoes-arquiteturais.md`).
+Decisão arquitetural: ADR-094 (`10-decisoes-arquiteturais.md`).
 
 ## 1. Arquivo oficial usado
 

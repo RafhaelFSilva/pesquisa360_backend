@@ -4,7 +4,7 @@ Revision ID: d2f4a9c17e36
 Revises: bcab956ae48e
 Create Date: 2026-10-04 23:30:00.000000
 
-Aditiva (ADR-090). Quatro tabelas globais `tse_*`, sem `company_id`:
+Aditiva (ADR-094). Quatro tabelas globais `tse_*`, sem `company_id`:
 
 - `tse_boletins_urna`: uma linha por versao de arquivo de BU (append-only);
 - `tse_bu_cargos`: totais do cargo no boletim (aptos, comparecimento,

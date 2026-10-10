@@ -445,12 +445,12 @@ CLI manual (fallback)─┴─> advisory lock ──> TseIngestion ──> TSE
   (`FiltrosTerritoriais`). Central, Majoritário, Proporcional e Meus painéis
   compartilham esse estado; cada consulta devolve o EA20 oficial da
   abrangência pedida.
-- **Distribuição territorial (ADR-089).** `TseAnalytics.distribuicao` monta
+- **Distribuição territorial (ADR-093).** `TseAnalytics.distribuicao` monta
   em uma requisição a distribuição de até 20 acompanhados de um cargo:
   UF → municípios, município → zonas, zona = nível mínimo. O número de
   consultas SQL não cresce com o número de municípios nem de acompanhados.
 
-- **Seção = Boletim de Urna (fase 3, ADR-090).** `bu_decoder.py` (função pura
+- **Seção = Boletim de Urna (fase 3, ADR-094).** `bu_decoder.py` (função pura
   sobre o `bu.asn1` oficial de 2026) → `bu_store.py` (tabelas `tse_bu_*`,
   append-only) ← `bu_ingestion.py` (EA18 → BU, um lote por ciclo do worker).
   `analytics_secao.py` responde o recorte de seção; `bu_reconciliation.py`

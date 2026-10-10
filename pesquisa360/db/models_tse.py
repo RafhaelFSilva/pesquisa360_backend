@@ -317,7 +317,7 @@ TIPOS_VOTO_BU = ("NOMINAL", "LEGENDA")
 
 
 class TseBoletimUrna(Base):
-    """Uma versao do BU de uma urna (ADR-090). Fonte oficial do nivel SECAO.
+    """Uma versao do BU de uma urna (ADR-094). Fonte oficial do nivel SECAO.
 
     Pertence a secao PRINCIPAL: o BU nao lista secoes agregadas, e os votos das
     agregadas estao neste mesmo boletim (relacao no EA16 / `tse_secoes`).

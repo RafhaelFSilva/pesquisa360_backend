@@ -1,4 +1,4 @@
-"""Persistencia do Boletim de Urna (ADR-090).
+"""Persistencia do Boletim de Urna (ADR-094).
 
 Mesmas regras do restante do dominio TSE: dados globais (sem tenant),
 boletins append-only e gravacao idempotente. O BU e a fonte oficial apenas do

@@ -563,7 +563,7 @@ recorte vive na URL e é compartilhado por Central, Majoritário, Proporcional
 e Meus painéis.
 
 **Distribuição.** `GET .../cargos/{cargo}/distribuicao` (contrato em
-`02-contratos-api.md`; decisão em ADR-089). Painel de tenant com
+`02-contratos-api.md`; decisão em ADR-093). Painel de tenant com
 `tipo = DISTRIBUICAO_TERRITORIAL`; migration `bcab956ae48e`.
 
 **Leitura dos números.** O total do acompanhado e a soma das partes vêm de
@@ -586,7 +586,7 @@ instante).
 ## 29. Fase 3 — Boletim de Urna e resultado por seção
 
 IMPLEMENTADO em 2026-10-04; validado em QA; **não commitado, não deployado**.
-Decisão: ADR-090. Inspeção da especificação: `tse-bu-2026-inspecao.md`.
+Decisão: ADR-094. Inspeção da especificação: `tse-bu-2026-inspecao.md`.
 
 **Fontes.** EA20 = UF, município e zona. BU = seção. Nunca um pelo outro.
 

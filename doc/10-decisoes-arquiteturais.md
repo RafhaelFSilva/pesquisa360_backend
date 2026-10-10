@@ -1935,7 +1935,7 @@ Parser especulativo é proibido. Enquanto a especificação não estiver
 disponível, não existe `tse_resultados_secao`.
 
 Atualização (2026-10-04): a especificação oficial de 2026 foi obtida e a
-camada foi implementada — ver ADR-090.
+camada foi implementada — ver ADR-094.
 
 ## ADR-079 — Histórico append-only
 
@@ -2043,7 +2043,7 @@ cai, o PostgreSQL solta a trava: não há trava órfã nem tabela de controle.
 - OFICIAL e SIMULADO têm chaves diferentes e podem rodar juntos.
 - Fora do PostgreSQL (SQLite dos testes) a exclusão vale só dentro do processo.
 
-## ADR-089 — Distribuição territorial lê o EA20 de cada parte, em uma requisição
+## ADR-093 — Distribuição territorial lê o EA20 de cada parte, em uma requisição
 
 O painel de Distribuição Territorial mostra onde estão os votos de até 20
 candidatos ou nominatas de um cargo. Cada parte (município ou zona) usa a
@@ -2064,7 +2064,7 @@ acompanhado usa a do recorte pai.
   os painéis; os itens reutilizam `apuracao_painel_itens`. Migration
   `bcab956ae48e`, aditiva, com default `GERAL`.
 
-## ADR-090 — BU como fonte oficial do nível Seção
+## ADR-094 — BU como fonte oficial do nível Seção
 
 O resultado por seção vem do Boletim de Urna, decodificado com o `bu.asn1`
 oficial de 2026 (`tse-bu-2026-inspecao.md`). Divisão de fontes, sem exceção:

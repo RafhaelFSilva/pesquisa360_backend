@@ -90,7 +90,7 @@ o head continua `d2f4a9c17e36`. Detalhes em `11-apuracao-tse.md` §30.
 O total por local é **agregado pelo Pesquisa360 a partir dos Boletins de Urna
 oficiais** — não é um resultado EA20 do TSE.
 
-## Apuração TSE — fase 3: Boletim de Urna e resultado por seção (2026-10-04, ADR-090)
+## Apuração TSE — fase 3: Boletim de Urna e resultado por seção (2026-10-04, ADR-094)
 
 IMPLEMENTADO e VALIDADO em QA; **não commitado, não deployado**. Detalhes em
 `11-apuracao-tse.md` §29 e `tse-bu-2026-inspecao.md`.
